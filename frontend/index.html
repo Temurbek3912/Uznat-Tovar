@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Узнать товар">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title data-i18n="home.page_title">Узнать товар — главная</title>
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="home.css">
+</head>
+<body data-page="home">
+<div class="app">
+  <div id="appNav"></div>
+  <main class="page">
+    <div class="lang-row" id="langSwitch"></div>
+
+    <section id="loginView" class="card login-card" hidden>
+      <h1 data-i18n="app.name">Узнать товар</h1>
+      <p class="mute" data-i18n="home.login_intro">Войдите, чтобы узнавать товары по фото и работать с каталогом.</p>
+      <form id="loginForm">
+        <label for="loginUser" data-i18n="login.user">Логин</label>
+        <input id="loginUser" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+        <label for="loginPass" data-i18n="login.pass">Пароль</label>
+        <input id="loginPass" type="password" autocomplete="current-password" required>
+        <div id="loginCodeField" hidden>
+          <label for="loginCode" data-i18n="login.code">Код из приложения</label>
+          <input id="loginCode" type="text" autocomplete="one-time-code" maxlength="13">
+        </div>
+        <button id="loginBtn" type="submit" data-i18n="login.submit">Войти</button>
+        <div id="loginError" class="msg err" role="alert"></div>
+      </form>
+    </section>
+
+    <section id="homeView" hidden>
+      <div class="page-head">
+        <h1 id="hello" data-i18n="home.hello">Здравствуйте!</h1>
+        <p data-i18n="home.what">Что хотите сделать?</p>
+      </div>
+
+      <div id="startCard" class="card" hidden>
+        <h2 data-i18n="home.start_title">С чего начать</h2>
+        <div class="hint hint--tight" data-i18n="home.start_hint">Пройдите шаги по порядку — отмеченное галочкой уже сделано.</div>
+        <ol class="checklist" id="checklist"></ol>
+      </div>
+
+      <div class="tiles" id="tiles">
+        <a class="tile main" id="tileIdentify" data-needs="catalog:read" href="identify.html">
+          <span class="ico" aria-hidden="true">🔎</span>
+          <span><b data-i18n="app.name">Узнать товар</b><span class="d" data-i18n="home.tile_identify">Покажите товар камере или загрузите фото — система назовёт товар и покажет его карточку.</span></span>
+        </a>
+        <a class="tile" id="tileProducts" data-needs="catalog:write" href="products.html">
+          <span class="ico" aria-hidden="true">🛒</span>
+          <span><b data-i18n="nav.products">Товары</b><span class="d" data-i18n="home.tile_products">Добавить товар: название и несколько фото. Исправить название или цену.</span></span>
+        </a>
+        <a class="tile" id="tileAdmin" data-needs="store:manage" href="admin.html">
+          <span class="ico" aria-hidden="true">⚙️</span>
+          <span><b data-i18n="nav.admin">Управление</b><span class="d" data-i18n="home.tile_admin">Сотрудники, каталог и состояние системы.</span></span>
+        </a>
+      </div>
+
+      <details class="card help">
+        <summary data-i18n="home.phone_title">Как открыть на телефоне</summary>
+        <div class="body">
+          <ol class="steps">
+            <li data-i18n="home.phone_1">Телефон и компьютер должны быть в одной Wi-Fi сети.</li>
+            <li id="phoneStep2">На компьютере откройте командную строку, введите <code>ipconfig</code> и найдите строку «IPv4-адрес», например <code>192.168.1.50</code>.</li>
+            <li id="phoneStep3">В браузере телефона откройте <code id="phoneUrl">http://IP-КОМПЬЮТЕРА:8000</code> (вместо IP-КОМПЬЮТЕРА — ваш адрес).</li>
+            <li data-i18n="home.phone_4">Не открывается? Разрешите программе доступ в сеть в брандмауэре Windows (он спросит при первом запуске).</li>
+            <li data-i18n="home.phone_5">Чтобы значок был на экране телефона: меню браузера → «Добавить на главный экран».</li>
+          </ol>
+        </div>
+      </details>
+    </section>
+
+  </main>
+</div>
+<script src="i18n.js"></script>
+<script src="i18n.ru.js"></script>
+<script src="i18n.uz.js"></script>
+<script src="i18n.uz-cyrl.js"></script>
+<script src="i18n.en.js"></script>
+<script src="auth.js"></script>
+<script src="nav.js"></script>
+<script src="home.js"></script>
+</body>
+</html>

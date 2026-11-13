@@ -1,0 +1,28 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+models/*.pt
+models/index/*.faiss
+data/
+.pytest_cache/
+*.egg-info/
+logs/
+
+# Резервные копии БД (scripts/backup_db.py) и отчёты
+backups/
+
+# Локальные конфигурации агента камер (содержат адреса вашей сети)
+configs/agent.yaml
+cameras.yaml
+tools/ui_screenshots/out/
+
+# Ключи HTTPS сети магазина (scripts/make_local_tls.py): закрытые ключи не хранятся в git и не входят в резервную копию
+secrets/
+
+# Локальные настройки и временные файлы (2026-11-13)
+models/embedder/
+models/detector/*.pt
+*.part
+.claude/settings.local.json

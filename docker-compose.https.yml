@@ -1,0 +1,21 @@
+# HTTPS для сотрудников в сети магазина (решение владельца 2026-11-08 21:53: пароли, коды и токены — только по HTTPS или VPN;
+# документ 18, §14; инструкция — docs/REMOTE_ACCESS_GUIDE.md, п. 7).
+#
+# Сначала создайте сертификат (ничего не покупается и не отправляется в сеть):
+#     docker compose exec api python -m scripts.make_local_tls --ip <адрес компьютера в Wi-Fi> --name <имя компьютера>
+# и впишите в .env: PUBLIC_HTTPS_URL=https://<адрес компьютера в Wi-Fi>:8000
+# Затем:
+#     docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+#
+# Порт сотрудников (8000) после этого работает ТОЛЬКО по HTTPS: http://… на нём не отвечает, а телефоны без установленного центра
+# магазина (secrets/tls/ca.crt) увидят предупреждение браузера — не продолжайте через него, установите центр (п. 7 инструкции).
+# Административный вход (8001) не меняется: он и так только на самом компьютере и в VPN.
+#
+# НЕ ПРОВЕРЕНО в Docker: сборка и запуск этого файла (Docker в облачной копии нет). uvicorn с этими же параметрами TLS проверен
+# на настоящем сокете — tests/test_real_http_server.py.
+services:
+  api:
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000",
+              "--ssl-certfile", "/srv/app/secrets/tls/server.crt", "--ssl-keyfile", "/srv/app/secrets/tls/server.key"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import ssl, urllib.request; urllib.request.urlopen('https://127.0.0.1:8000/health/ready', timeout=4, context=ssl._create_unverified_context())"]

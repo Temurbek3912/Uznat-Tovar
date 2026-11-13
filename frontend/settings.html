@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Узнать товар">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title data-i18n="nav.settings">Настройки</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="ui.css">
+<script src="theme.js"></script>
+<script src="theme-apply.js"></script>
+</head>
+<body data-page="settings">
+<div class="shell">
+  <nav class="rail" id="rail" aria-label="Разделы">
+    <a class="rail__item" href="identify.html"><span data-icon="viewfinder"></span><span data-i18n="nav.identify">Узнать товар</span></a>
+    <a class="rail__item" id="railProducts" href="products.html" hidden><span data-icon="list"></span><span data-i18n="nav.products">Товары</span></a>
+    <a class="rail__item" href="settings.html" aria-current="page"><span data-icon="sliders"></span><span data-i18n="nav.settings">Настройки</span></a>
+    <a class="rail__item" id="railAdmin" href="admin.html" hidden><span data-icon="monitor"></span><span data-i18n="nav.admin">Управление</span></a>
+  </nav>
+  <main class="main">
+    <header class="topbar">
+      <h1 class="topbar__title" data-i18n="nav.settings">Настройки</h1>
+      <div class="topbar__tools"><span id="langHost"></span><button type="button" class="icon-btn" id="themeBtn"></button></div>
+    </header>
+    <div class="area">
+      <p class="hint" data-i18n="settings.intro">Эти настройки сохраняются на этом устройстве и работают без входа.</p>
+      <section class="settings">
+        <div class="settings__group">
+          <h2 class="ticket__title" data-i18n="lang.title">Язык</h2>
+          <span id="langHost2"></span>
+          <p class="hint" data-i18n="settings.language_hint">Язык интерфейса.</p>
+        </div>
+        <div class="settings__group">
+          <h2 class="ticket__title" data-i18n="settings.theme">Тема оформления</h2>
+          <span class="lang-switch" id="themeHost"></span>
+        </div>
+        <div class="settings__group">
+          <h2 class="ticket__title" data-i18n="settings.identify">Страница «Узнать товар»</h2>
+          <label class="check"><input class="check__box" id="autoToggle" type="checkbox"><span data-i18n="identify.auto">Узнавать сама, когда я показываю новый товар</span></label>
+        </div>
+        <div class="settings__group" id="accountGroup">
+          <h2 class="ticket__title" data-i18n="settings.account">Учётная запись</h2>
+          <p class="hint" data-i18n="settings.account_hint">Для владельца и администратора. После входа в меню появятся разделы по вашим правам.</p>
+          <form id="loginPanel" class="settings__form" hidden>
+            <label class="field"><span class="field__label" data-i18n="login.user">Логин</span><input class="input" id="loginUser" type="text" autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+            <label class="field"><span class="field__label" data-i18n="login.pass">Пароль</span><input class="input" id="loginPass" type="password" autocomplete="current-password"></label>
+            <label class="field" id="loginCodeField" hidden><span class="field__label" data-i18n="login.code">Код из приложения</span><input class="input" id="loginCode" type="text" autocomplete="one-time-code" maxlength="13"></label>
+            <p class="notice notice--danger" id="loginError" role="alert" hidden></p>
+            <button class="btn btn--primary" id="loginBtn" type="submit" data-i18n="login.submit">Войти</button>
+          </form>
+          <form id="initialPanel" class="settings__form" hidden>
+            <p class="notice" id="initialPrompt" role="status"></p>
+            <label class="field"><span class="field__label" id="initialNewLabel">Новый пароль</span><input class="input" id="initialNew" type="password" autocomplete="new-password" minlength="8"></label>
+            <label class="field"><span class="field__label" data-i18n="security.password_repeat">Новый пароль ещё раз</span><input class="input" id="initialRepeat" type="password" autocomplete="new-password" minlength="8"></label>
+            <label class="field" id="initialCodeField" hidden><span class="field__label" data-i18n="login.code">Код из приложения</span><input class="input" id="initialCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="9"></label>
+            <p class="notice notice--danger" id="initialError" role="alert" hidden></p>
+            <button class="btn btn--primary" id="initialBtn" type="submit" data-i18n="login.set_password">Установить пароль</button>
+          </form>
+          <div id="accountInfo" class="settings__form" hidden>
+            <p id="accountName" role="status"></p>
+            <div><button class="btn btn--secondary" id="logoutBtn" type="button" data-i18n="settings.sign_out">Выйти</button></div>
+          </div>
+        </div>
+        <div class="settings__group" id="securityGroup" hidden>
+          <h2 class="ticket__title" data-i18n="security.title">Безопасность входа</h2>
+          <p class="hint" data-i18n="security.mfa_hint">Второй фактор: после пароля программа спросит код из приложения на телефоне (Google Authenticator, Microsoft Authenticator, Яндекс Ключ и др.). Даже узнав пароль, чужой без телефона не войдёт.</p>
+          <div id="enrollPanel" class="settings__form" hidden>
+            <p class="notice" data-i18n="security.enroll_hint">Вход администратора без второго фактора невозможен. Настройте его сейчас — это займёт минуту.</p>
+            <div><button class="btn btn--primary" id="enrollStartBtn" type="button" data-i18n="security.enroll_start">Показать ключ</button></div>
+          </div>
+          <p class="notice" id="recoveryWarning" role="alert" hidden></p>
+          <p id="mfaStatus" role="status"></p>
+          <p class="hint" id="mfaRequired" hidden data-i18n="security.mfa_required">Для администраторов второй фактор обязателен — выключить его нельзя.</p>
+          <p class="hint" id="recoveryLeft" hidden></p>
+          <p class="notice" id="mfaUnavailable" hidden data-i18n="security.mfa_unavailable">Второй фактор пока нельзя включить: на сервере не задан ключ AUTH_SECRET_KEY (инструкция — docs/REMOTE_ACCESS_GUIDE.md).</p>
+          <div class="row">
+            <button class="btn btn--secondary" id="mfaEnableBtn" type="button" hidden data-i18n="security.mfa_enable">Включить второй фактор</button>
+            <button class="btn btn--secondary" id="mfaDisableBtn" type="button" hidden data-i18n="security.mfa_disable">Выключить второй фактор</button>
+          </div>
+          <form id="mfaSetupForm" class="settings__form" hidden>
+            <label class="field"><span class="field__label" data-i18n="security.confirm_password">Ваш пароль (для подтверждения)</span><input class="input" id="mfaSetupPass" type="password" autocomplete="current-password"></label>
+            <button class="btn btn--primary" id="mfaSetupBtn" type="submit" data-i18n="security.continue">Продолжить</button>
+          </form>
+          <form id="mfaConfirmForm" class="settings__form" hidden>
+            <p class="lines" data-i18n="security.mfa_steps">1. Откройте приложение-аутентификатор и добавьте аккаунт «по ключу» (или нажмите ссылку ниже на этом телефоне).
+2. Введите ключ. 3. Введите сюда 6 цифр, которые покажет приложение.</p>
+            <p class="secret" id="mfaSecret"></p>
+            <a class="link" id="mfaLink" href="#" data-i18n="security.mfa_open_app">Открыть в приложении на этом телефоне</a>
+            <label class="field"><span class="field__label" data-i18n="login.code">Код из приложения</span><input class="input" id="mfaConfirmCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="9"></label>
+            <button class="btn btn--primary" id="mfaConfirmBtn" type="submit" data-i18n="security.mfa_confirm">Включить</button>
+          </form>
+          <form id="mfaDisableForm" class="settings__form" hidden>
+            <label class="field"><span class="field__label" data-i18n="security.confirm_password">Ваш пароль (для подтверждения)</span><input class="input" id="mfaDisablePass" type="password" autocomplete="current-password"></label>
+            <label class="field"><span class="field__label" data-i18n="login.code">Код из приложения</span><input class="input" id="mfaDisableCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="9"></label>
+            <button class="btn btn--primary" id="mfaDisableConfirmBtn" type="submit" data-i18n="security.mfa_disable">Выключить второй фактор</button>
+          </form>
+          <div id="recoveryBox" class="settings__form" hidden>
+            <h2 class="ticket__title" data-i18n="security.recovery_title">Коды восстановления</h2>
+            <p class="notice" data-i18n="security.recovery_hint">Если потеряете телефон, войдите одним из этих кодов вместо 6 цифр. Каждый код — один раз. Сохраните их сейчас (распечатайте или запишите) — больше они не покажутся.</p>
+            <ol class="recovery" id="recoveryList"></ol>
+            <div><button class="btn btn--secondary" id="recoveryHideBtn" type="button" data-i18n="security.recovery_saved">Я сохранил коды — скрыть</button></div>
+          </div>
+          <div class="row">
+            <button class="btn btn--secondary" id="recoveryNewBtn" type="button" hidden data-i18n="security.recovery_new">Создать новые коды восстановления</button>
+          </div>
+          <form id="recoveryForm" class="settings__form" hidden>
+            <label class="field"><span class="field__label" data-i18n="security.confirm_password">Ваш пароль (для подтверждения)</span><input class="input" id="recoveryPass" type="password" autocomplete="current-password"></label>
+            <label class="field"><span class="field__label" data-i18n="login.code">Код из приложения</span><input class="input" id="recoveryCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="9"></label>
+            <button class="btn btn--primary" id="recoveryConfirmBtn" type="submit" data-i18n="security.recovery_new">Создать новые коды восстановления</button>
+          </form>
+          <div class="row" id="passwordButtons" hidden>
+            <button class="btn btn--secondary" id="passwordChangeBtn" type="button" data-i18n="security.password_change">Сменить пароль</button>
+          </div>
+          <form id="passwordForm" class="settings__form" hidden>
+            <label class="field"><span class="field__label" data-i18n="security.password_current">Текущий пароль</span><input class="input" id="pwCurrent" type="password" autocomplete="current-password"></label>
+            <label class="field"><span class="field__label" id="pwNewLabel">Новый пароль</span><input class="input" id="pwNew" type="password" autocomplete="new-password" minlength="8"></label>
+            <label class="field"><span class="field__label" data-i18n="security.password_repeat">Новый пароль ещё раз</span><input class="input" id="pwRepeat" type="password" autocomplete="new-password" minlength="8"></label>
+            <label class="field" id="pwCodeField" hidden><span class="field__label" data-i18n="login.code">Код из приложения</span><input class="input" id="pwCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="9"></label>
+            <button class="btn btn--primary" id="passwordConfirmBtn" type="submit" data-i18n="security.password_change">Сменить пароль</button>
+          </form>
+          <p class="notice notice--danger" id="securityError" role="alert" hidden></p>
+          <p class="hint hint--good" id="securityDone" role="status" hidden></p>
+          <h2 class="ticket__title" id="sessionsTitle" data-i18n="security.sessions">Где выполнен вход</h2>
+          <ul class="sess-list" id="sessionList"></ul>
+          <div class="row" id="sessionButtons">
+            <button class="btn btn--secondary" id="endOthersBtn" type="button" data-i18n="security.end_others">Завершить все, кроме этого</button>
+            <button class="btn btn--secondary" id="logoutAllBtn" type="button" data-i18n="security.logout_all">Выйти на всех устройствах</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<script src="i18n.js"></script>
+<script src="i18n.ru.js"></script>
+<script src="i18n.uz.js"></script>
+<script src="i18n.uz-cyrl.js"></script>
+<script src="i18n.en.js"></script>
+<script src="icons.js"></script>
+<script src="auth.js"></script>
+<script src="settings.js"></script>
+<script src="boot.js" data-start="Settings"></script>
+</body>
+</html>

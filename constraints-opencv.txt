@@ -1,0 +1,8 @@
+# ОБЯЗАТЕЛЬНЫЙ «замок» OpenCV (Dockerfile подставляет его всегда, в отличие от необязательного constraints.txt).
+# Причина: OpenCV 5.x (5.0.0.93) НЕ содержит cv2.CascadeClassifier, на котором работает размытие лиц (app/pipeline/privacy.py).
+# Без верхней границы pip ставит 5.x, а ultralytics дополнительно тянет opencv-python (с GUI) — две сборки перезаписывают
+# одну папку cv2/, и `pip check` при этом молчит. Подробности и проверка: scripts/check_opencv.py, docs/DOCKER.md.
+opencv-python<5
+opencv-python-headless<5
+opencv-contrib-python<5
+opencv-contrib-python-headless<5

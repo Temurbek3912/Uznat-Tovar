@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Узнать товар">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title data-i18n="app.name">Узнать товар</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="ui.css">
+<script src="theme.js"></script>
+<script src="theme-apply.js"></script>
+</head>
+<body data-page="identify">
+<div class="shell">
+  <nav class="rail" id="rail" aria-label="Разделы">
+    <a class="rail__item" href="identify.html" aria-current="page"><span data-icon="viewfinder"></span><span data-i18n="nav.identify">Узнать товар</span></a>
+    <a class="rail__item" id="railProducts" href="products.html" hidden><span data-icon="list"></span><span data-i18n="nav.products">Товары</span></a>
+    <a class="rail__item" href="settings.html"><span data-icon="sliders"></span><span data-i18n="nav.settings">Настройки</span></a>
+    <a class="rail__item" id="railAdmin" href="admin.html" hidden><span data-icon="monitor"></span><span data-i18n="nav.admin">Управление</span></a>
+  </nav>
+  <main class="main">
+    <header class="topbar">
+      <h1 class="topbar__title" data-i18n="app.name">Узнать товар</h1>
+      <div class="topbar__tools"><span id="langHost"></span><button type="button" class="icon-btn" id="themeBtn"></button></div>
+    </header>
+
+    <form id="loginPanel" class="login" hidden>
+      <h2 class="ticket__title" data-i18n="login.title">Вход</h2>
+      <label class="field"><span class="field__label" data-i18n="login.user">Логин</span><input class="input" id="loginUser" type="text" autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+      <label class="field"><span class="field__label" data-i18n="login.pass">Пароль</span><input class="input" id="loginPass" type="password" autocomplete="current-password"></label>
+      <label class="field" id="loginCodeField" hidden><span class="field__label" data-i18n="login.code">Код из приложения</span><input class="input" id="loginCode" type="text" autocomplete="one-time-code" maxlength="13"></label>
+      <p class="notice notice--danger" id="loginError" role="alert" hidden></p>
+      <button class="btn btn--primary" id="loginBtn" type="submit" data-i18n="login.submit">Войти</button>
+    </form>
+
+    <div id="accessBanner" class="notice notice--danger" role="alert" hidden>
+      <span class="notice__title" data-i18n="access.title">Нет доступа</span>
+      <span data-i18n="access.text">У вашей учётной записи нет доступа к каталогу товаров.</span>
+    </div>
+
+    <div id="mainArea" class="area" hidden>
+      <div id="demoBanner" class="notice" role="status" hidden>
+        <span class="notice__title" data-i18n="identify.demo_title">Учебный режим</span>
+        <span data-i18n="identify.demo_text">Сейчас вместо настоящей модели распознавания работает заглушка — названия будут случайными. Попросите установщика убрать ALLOW_DEBUG_EMBEDDER в файле .env и перезапустить воркер (docs/RUNBOOK.md).</span>
+      </div>
+
+      <section class="identify identify--page">
+        <div class="identify__main">
+          <div class="stage" id="stage" data-state="idle" data-live="false" data-busy="false" role="group" aria-label="Окно камеры" data-i18n-attr="aria-label:identify.stage_label">
+            <div class="stage__feed stage__feed--ph" id="camPlaceholder">
+              <div class="silhouette"></div>
+              <p class="stage__hint" data-i18n="identify.camera_placeholder">Камера выключена. Включите её или нажмите «Сделать фото».</p>
+            </div>
+            <video class="stage__video" id="video" playsinline muted autoplay hidden></video>
+            <div class="stage__marks"><span class="mark mark--tl"></span><span class="mark mark--tr"></span><span class="mark mark--bl"></span><span class="mark mark--br"></span></div>
+          </div>
+          <canvas id="grab" hidden></canvas>
+          <div class="controls">
+            <button type="button" class="btn btn--primary" id="camBtn"></button>
+            <button type="button" class="btn btn--secondary" id="snapBtn" disabled></button>
+            <button type="button" class="btn btn--secondary" id="fileBtn"></button>
+          </div>
+          <input id="fileInput" type="file" accept="image/*" capture="environment" hidden>
+          <p class="hint" data-i18n="identify.barcode_hint">Штрих-код: поднесите его близко и держите ровно — он должен занимать хотя бы треть кадра. Подойдут коды EAN-13, EAN-8 и UPC-A.</p>
+          <div class="toggles">
+            <label class="check"><input class="check__box" id="autoToggle" type="checkbox" checked><span data-i18n="identify.auto">Узнавать сама, когда я показываю новый товар</span></label>
+          </div>
+        </div>
+
+        <div class="identify__side">
+          <div id="ticket" role="status" aria-live="polite"></div>
+          <div class="barcode">
+            <p class="hint" id="barcodeNote" hidden></p>
+            <button type="button" class="btn btn--secondary" id="linkBtn" hidden></button>
+          </div>
+          <p class="notice notice--danger" id="resError" role="alert" hidden></p>
+          <section class="history">
+            <h2 class="section-title" data-i18n="identify.history">Что уже показывали</h2>
+            <ul class="hist" id="histList"></ul>
+            <p class="hint" id="histEmpty" data-i18n="identify.history_empty">Здесь появятся узнанные товары — по одному на строку.</p>
+          </section>
+        </div>
+      </section>
+
+      <details class="tech">
+        <summary data-i18n="identify.tech">Для специалиста</summary>
+        <p><span data-i18n="identify.tech_connected">Подключено к</span> <code id="footerApiBase"></code>. <span data-i18n="identify.tech_camera">Камера в браузере работает на этом компьютере (адрес localhost) или по HTTPS; на телефоне по обычному адресу — кнопка «Сделать фото».</span></p>
+      </details>
+    </div>
+  </main>
+</div>
+<script src="i18n.js"></script>
+<script src="i18n.ru.js"></script>
+<script src="i18n.uz.js"></script>
+<script src="i18n.uz-cyrl.js"></script>
+<script src="i18n.en.js"></script>
+<script src="icons.js"></script>
+<script src="auth.js"></script>
+<script src="ticket.js"></script>
+<script src="identify.js"></script>
+<script src="boot.js" data-start="Identify"></script>
+</body>
+</html>

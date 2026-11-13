@@ -1,0 +1,57 @@
+# Конфигурация системы Retail Shelf Audit.
+# Значения ниже — дефолты для локальной разработки; в проде переопределяются через ENV.
+
+app:
+  name: "retail-shelf-audit"
+  environment: "development"   # development | staging | production
+
+storage:
+  images_bucket: "shelf-images"
+  raw_image_retention_days: 30      # хранение исходных фото (комплаенс/приватность)
+
+database:
+  url: "postgresql://postgres:postgres@localhost:5432/shelf_audit"
+
+queue:
+  broker_url: "redis://localhost:6379/0"
+
+auth:
+  token_ttl_minutes: 720            # срок жизни токена доступа (F13); 720 = 12 ч, одна смена
+  max_failed_logins_per_user: 5     # неудачных входов на ЛОГИН за окно, после чего 429 (защита от подбора пароля)
+  max_failed_logins_per_ip: 20      # неудачных входов с одного IP за окно (перебор многих логинов)
+  lockout_window_minutes: 15        # длина скользящего окна; блокировка снимается по мере выхода неудач из окна
+  mfa_challenge_minutes: 5          # второй шаг входа (код из приложения): сколько минут действует пропуск после пароля
+  mfa_max_attempts: 5               # неверных кодов на один пропуск, затем — вход заново с паролем
+  require_2fa_for_admins: true      # решения владельца В-2, В-3 (документ 18): второй фактор обязателен всем администраторам, везде
+  admin_session_max_hours: 8        # решение В-4: предел сеанса администратора и административного входа; продление его не сдвигает
+  reauth_minutes: 10                # важные операции — только если пароль и код подтверждены не раньше чем N минут назад
+  temp_password_hours: 24           # срок временного пароля (документ 05, §12.2; Q-19 открыт — рекомендация 24); 0 — без срока
+  require_secure_transport: true    # пароли, коды и токены — только по HTTPS или через VPN (решение владельца 2026-11-08, документ 18, §14)
+
+models:
+  detector:
+    name: "sku110k-yolo11n"
+    weights_path: "models/detector/sku110k_yolo11n.pt"   # обученная на SKU-110K YOLO11n: ищет РАМКИ товаров, не название/бренд/штрих-код
+    confidence_threshold: 0.35
+    iou_threshold: 0.5
+    max_detections: 1000        # плотная полка SKU-110K — до ~700 объектов; умолчание Ultralytics (300) обрезало бы результат
+  embedder:
+    name: "dinov2-base-retail-ft"
+    weights_path: "models/embedder/dinov2_base_retail_ft"
+    embedding_dim: 768
+  matcher:
+    index_path: "models/index/catalog.faiss"
+    top_k: 5
+    match_threshold: 0.72       # ниже порога -> "uncertain", в очередь на ручную проверку
+    unknown_threshold: 0.45     # ниже -> "unknown" (товар не из каталога)
+    margin_threshold: 0.0       # 0 = выключено; >0: при близком втором товаре -> "uncertain". Подбор: python -m ml.evaluate_matching
+
+pipeline:
+  max_image_side_px: 2048
+  blur_face_detection: true     # обязательное размытие лиц людей в кадре (privacy)
+
+osa:
+  empty_slot_confidence: 0.6
+
+alerts:
+  critical_oos_threshold_pct: 15   # алерт, если доля пустых слотов на полке выше X%

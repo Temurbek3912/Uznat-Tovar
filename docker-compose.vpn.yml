@@ -1,0 +1,56 @@
+# Административный вход через VPN (решение владельца В-1, документ 18, §4 и §12; инструкция — docs/REMOTE_ACCESS_GUIDE.md, п. 6).
+#
+# Подключается ТОЛЬКО после того, как VPN настроен и у компьютера магазина есть адрес в VPN-сети (например, 100.x.y.z у Tailscale
+# или 10.8.0.1 у WireGuard). Впишите его в .env:  VPN_BIND_IP=100.64.1.10   и запустите:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d
+#
+# Устройство:
+#  * ОТДЕЛЬНАЯ служба admin-api-vpn (тот же образ, та же база, тот же вход «admin»), а не второй порт у admin-api. Если VPN ещё не
+#    поднят (например, после перезагрузки Windows Docker запустился раньше VPN), Docker не сможет занять адрес VPN и не запустит
+#    ЭТУ службу — административный вход на самом компьютере (admin-api, 127.0.0.1:8001) продолжит работать. После подключения VPN
+#    повторите команду выше.
+#  * Порт публикуется ТОЛЬКО на адресе VPN — не на 0.0.0.0: из локальной сети магазина и из интернета он недоступен. Без VPN_BIND_IP
+#    запуск остановится с ошибкой, а не откроет порт всем.
+#  * VPN_BIND_IP передаётся и в программу: запросы по этому адресу (заголовок Host) получают права управления; по чужому имени —
+#    нет (защита от подмены DNS, app/core/mfa_policy.py, effective_listener). Другие имена — ADMIN_ALLOWED_HOSTS.
+#
+# НЕ ПРОВЕРЕНО: Docker Desktop для Windows — привязка порта к адресу VPN-адаптера и порядок запуска (проверить при подключении VPN,
+# документ 18, §12.2). Альтернатива без привязки к адресу VPN — «tailscale serve» к 127.0.0.1:8001 (там же).
+services:
+  admin-api-vpn:
+    image: retail-shelf-audit:latest
+    pull_policy: never
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
+    ports:
+      - "${VPN_BIND_IP:?Укажите VPN_BIND_IP в .env — адрес этого компьютера в VPN-сети}:${ADMIN_PORT:-8001}:8001"
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-shelf_audit}
+      QUEUE_BROKER_URL: redis://redis:6379/0
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-25}
+      ALLOW_DEBUG_EMBEDDER: ${ALLOW_DEBUG_EMBEDDER:-0}
+      ALLOW_HEURISTIC_DETECTOR: ${ALLOW_HEURISTIC_DETECTOR:-0}
+      APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Tashkent}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-}
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-}
+      APP_LISTENER: admin
+      VPN_BIND_IP: ${VPN_BIND_IP:-}
+      ADMIN_ALLOWED_HOSTS: ${ADMIN_ALLOWED_HOSTS:-}
+    volumes:
+      - .:/srv/app
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=4)"]
+      interval: 15s
+      timeout: 6s
+      retries: 5
+      start_period: 40s

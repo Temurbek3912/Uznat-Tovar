@@ -1,0 +1,27 @@
+# Контекст сборки Docker НЕ учитывает .gitignore. Без этого файла в образ (и в контекст, который передаётся демону —
+# на Windows это минуты) попадали бы виртуальное окружение с torch, снимки полок, веса моделей, логи и секреты.
+.git
+.gitignore
+.gitattributes
+.venv
+venv
+env
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.idea
+.vscode
+node_modules
+*.zip
+
+# Секреты и данные времени выполнения — приходят в контейнер через environment и bind-mount, не через образ.
+.env
+data
+logs
+models
+catalog
+
+# Резервные копии БД содержат настоящие данные магазинов — в git и в образ не попадают
+backups

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title data-i18n="app.name">Узнать товар</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="ui.css">
+<script src="theme.js"></script>
+<script src="theme-apply.js"></script>
+</head>
+<body>
+<div class="shell">
+  <nav class="rail" aria-label="Разделы" data-i18n-attr="aria-label:nav.menu">
+    <a class="rail__item" href="#identify" data-view="identify"><span data-icon="viewfinder"></span><span data-i18n="nav.identify">Узнать товар</span></a>
+    <a class="rail__item" href="#products" data-view="products"><span data-icon="list"></span><span data-i18n="nav.products">Товары</span></a>
+    <a class="rail__item" href="#settings" data-view="settings"><span data-icon="sliders"></span><span data-i18n="nav.settings">Настройки</span></a>
+  </nav>
+  <main class="main">
+    <header class="topbar">
+      <h1 class="topbar__title" id="screenTitle" data-i18n="app.name">Узнать товар</h1>
+      <div class="topbar__tools"><span id="langHost"></span><button type="button" class="icon-btn" id="themeBtn"></button></div>
+    </header>
+    <div class="demo" id="demo">
+      <span data-i18n="demo.title">Витрина: образцы, не настоящие данные</span>
+      <span class="demo__states" id="demoStates"></span>
+    </div>
+
+    <section class="identify" id="viewIdentify">
+      <div class="stage" id="stage" data-state="idle">
+        <div class="stage__feed"><div class="silhouette"></div></div>
+        <div class="stage__marks"><span class="mark mark--tl"></span><span class="mark mark--tr"></span><span class="mark mark--bl"></span><span class="mark mark--br"></span></div>
+        <div class="stage__controls">
+          <button type="button" class="btn btn--primary" id="photoBtn"></button>
+          <button type="button" class="icon-btn icon-btn--stage" id="flipBtn"></button>
+        </div>
+      </div>
+      <div class="identify__side">
+        <div id="ticket" role="status" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section id="viewProducts" hidden><div id="list"></div></section>
+
+    <section id="viewSettings" class="settings" hidden>
+      <div class="settings__group">
+        <h2 class="ticket__title" id="themeTitle"></h2>
+        <span class="lang-switch" id="themeHost"></span>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="i18n.js"></script>
+<script src="i18n.ru.js"></script>
+<script src="i18n.uz.js"></script>
+<script src="i18n.uz-cyrl.js"></script>
+<script src="i18n.en.js"></script>
+<script src="icons.js"></script>
+<script src="ticket.js"></script>
+<script src="catalog.js"></script>
+<script src="productlist.js"></script>
+<script src="preview.js"></script>
+<script src="boot.js" data-start="Preview"></script>
+</body>
+</html>

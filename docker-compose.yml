@@ -1,0 +1,179 @@
+# Retail Shelf Audit — вся система в Docker. С чистой машины:
+#
+#     docker compose build
+#     docker compose up -d                  # сам: ждёт БД -> создаёт таблицы и папки -> (админ из .env) -> api + worker
+#     docker compose run --rm bootstrap     # только если админ не создан через .env: спросит логин и пароль
+#
+# Откройте http://localhost:8000 . Подробности и разбор ошибок: docs/DOCKER.md.
+# ДАННЫЕ: база лежит в томе pgdata и переживает `docker compose down`/`up`. `docker compose down -v` УДАЛЯЕТ тома
+# (то есть всю базу и кэш моделей) — не используйте -v, если данные нужны. Снимки и индекс каталога — в папках data/ и
+# models/ проекта на вашем диске (bind-mount), они не зависят от томов.
+
+# Фиксированное имя проекта: имена томов (retail-shelf-audit_pgdata) не зависят от названия папки, в которую склонировали.
+name: retail-shelf-audit
+
+# Общие настройки для api / worker / bootstrap. Образ один: собирается сервисом api, остальные используют его же
+# (pull_policy: never — Compose не пытается скачать retail-shelf-audit:latest с Docker Hub).
+x-app-env: &app-env
+  # ${VAR:-по_умолчанию}: значения берутся из файла .env рядом с compose-файлом; без .env работают умолчания.
+  # Пароль БД не должен содержать символы @ : / ? # % — он подставляется прямо в URL.
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-shelf_audit}
+  QUEUE_BROKER_URL: redis://redis:6379/0
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-25}
+  ALLOW_DEBUG_EMBEDDER: ${ALLOW_DEBUG_EMBEDDER:-0}
+  ALLOW_HEURISTIC_DETECTOR: ${ALLOW_HEURISTIC_DETECTOR:-0}
+  APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Tashkent}     # «календарные сутки» отчётов (Узбекистан: UTC+5, без летнего времени)
+
+x-app-volumes: &app-volumes
+  - .:/srv/app                              # код, configs/, data/ (снимки), models/ (индекс, веса), logs/
+  - hf_cache:/root/.cache/huggingface       # веса DINOv2 (~350 МБ) скачиваются один раз, а не при каждом пересоздании контейнера
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-shelf_audit}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}   # применяется только при первом создании тома pgdata
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"   # только с этого компьютера: у БД слабый пароль по умолчанию, в сеть её не открываем
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]   # очередь переживает перезапуск: снимки не зависают в «queued»
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # Одноразовая подготовка: таблицы, папки, первый админ. Запускается автоматически перед api и worker;
+  # повторный запуск безопасен. Вручную (с вопросами): docker compose run --rm bootstrap
+  bootstrap:
+    image: retail-shelf-audit:latest
+    pull_policy: never
+    command: ["python", "-m", "scripts.bootstrap"]
+    restart: "no"
+    environment:
+      <<: *app-env
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}     # в переменные окружения пароль попадает только у bootstrap (файл .env при этом лежит в папке проекта)
+      API_PORT: ${API_PORT:-8000}
+    volumes: *app-volumes
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  api:
+    build: .
+    image: retail-shelf-audit:latest
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "${API_PORT:-8000}:8000"            # 0.0.0.0: телефон в той же Wi-Fi сети открывает http://<IP-компьютера>:8000
+    environment:
+      <<: *app-env
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-}  # кому можно ходить в API с другого адреса; пусто: development — всем, production — никому (app/core/cors.py)
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-}        # секрет входа: шифрует второй фактор (2FA); пусто — 2FA включить нельзя (документ 18)
+      APP_LISTENER: public                         # вход для сотрудников: права управления здесь НЕ действуют (решение В-1)
+      PUBLIC_HTTPS_URL: ${PUBLIC_HTTPS_URL:-}      # защищённый адрес для сотрудников — страница покажет его вместо входа по HTTP (документ 18, §14)
+    volumes: *app-volumes
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # /health/ready: БД отвечает, таблицы на месте, брокер доступен. В образе нет curl — проверяем питоном.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=4)"]
+      interval: 15s
+      timeout: 6s
+      retries: 5
+      start_period: 40s
+
+  # Административный вход (решение владельца В-1, документ 18): тот же образ и та же база, но права управления действуют ТОЛЬКО
+  # здесь. Порт опубликован лишь на 127.0.0.1 — с самого компьютера магазина: http://localhost:8001/ui/admin.html.
+  # Через VPN — добавьте адрес компьютера в VPN-сети: docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d
+  # (VPN_BIND_IP в .env; там это отдельная служба admin-api-vpn). В интернет и в локальную сеть магазина этот порт НЕ публикуется.
+  admin-api:
+    image: retail-shelf-audit:latest
+    pull_policy: never
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
+    ports:
+      - "127.0.0.1:${ADMIN_PORT:-8001}:8001"
+    environment:
+      <<: *app-env
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-}
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-}
+      APP_LISTENER: admin
+      VPN_BIND_IP: ${VPN_BIND_IP:-}                # имена, по которым административный вход даёт права управления (защита от
+      ADMIN_ALLOWED_HOSTS: ${ADMIN_ALLOWED_HOSTS:-}  # подмены DNS): localhost, адрес VPN и этот список (документ 18, §12)
+    volumes: *app-volumes
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=4)"]
+      interval: 15s
+      timeout: 6s
+      retries: 5
+      start_period: 40s
+
+  worker:
+    image: retail-shelf-audit:latest
+    pull_policy: never
+    # --concurrency=1 ОБЯЗАТЕЛЕН, пока индекс каталога — файл + копия в памяти каждого процесса: при нескольких
+    # процессах add()+save() одного затирает добавления другого (потерянные исправления ревью F12 / новые SKU F10),
+    # а остальные процессы вообще не видят новых векторов. Масштабировать — после перехода на общий индекс
+    # (pgvector/отдельный сервис), см. docs/HANDOFF.md.
+    command: ["celery", "-A", "app.worker.celery_app", "worker", "--loglevel=info", "--concurrency=1"]
+    restart: unless-stopped
+    stop_grace_period: 60s                  # дать дообработать текущий снимок при остановке
+    environment: *app-env
+    volumes: *app-volumes
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # ГОТОВ = (1) инициализация компонентов распознавания прошла (scripts.worker_health читает файл статуса воркера) И
+      # (2) воркер отвечает на ping брокера. Один ping врал: «pong» приходил и при сломанном OpenCV/детекторе/эмбеддере.
+      # Первый старт долгий: скачивание и загрузка DINOv2 — отсюда большой start_period.
+      test: ["CMD-SHELL", "python -m scripts.worker_health && celery -A app.worker.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10 | grep -q pong"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 180s
+    # TODO: отдельный образ с CUDA для GPU-инференса в проде (см. Dockerfile)
+
+volumes:
+  pgdata:
+  redisdata:
+  hf_cache:

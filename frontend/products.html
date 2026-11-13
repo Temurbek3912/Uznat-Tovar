@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Узнать товар">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title data-i18n="nav.products">Товары</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="ui.css">
+<script src="theme.js"></script>
+<script src="theme-apply.js"></script>
+</head>
+<body data-page="products">
+<div class="shell">
+  <nav class="rail" id="rail" aria-label="Разделы">
+    <a class="rail__item" href="identify.html"><span data-icon="viewfinder"></span><span data-i18n="nav.identify">Узнать товар</span></a>
+    <a class="rail__item" href="products.html" aria-current="page"><span data-icon="list"></span><span data-i18n="nav.products">Товары</span></a>
+    <a class="rail__item" href="settings.html"><span data-icon="sliders"></span><span data-i18n="nav.settings">Настройки</span></a>
+    <a class="rail__item" id="railAdmin" href="admin.html" hidden><span data-icon="monitor"></span><span data-i18n="nav.admin">Управление</span></a>
+  </nav>
+  <main class="main">
+    <header class="topbar">
+      <h1 class="topbar__title" data-i18n="nav.products">Товары</h1>
+      <div class="topbar__tools"><span id="langHost"></span><button type="button" class="icon-btn" id="themeBtn"></button></div>
+    </header>
+
+    <form id="loginPanel" class="login" hidden>
+      <h2 class="ticket__title" data-i18n="login.title">Вход</h2>
+      <p class="hint" data-i18n="products.login_note">Добавлять товары может администратор.</p>
+      <label class="field"><span class="field__label" data-i18n="login.user">Логин</span><input class="input" id="loginUser" type="text" autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+      <label class="field"><span class="field__label" data-i18n="login.pass">Пароль</span><input class="input" id="loginPass" type="password" autocomplete="current-password"></label>
+      <label class="field" id="loginCodeField" hidden><span class="field__label" data-i18n="login.code">Код из приложения</span><input class="input" id="loginCode" type="text" autocomplete="one-time-code" maxlength="13"></label>
+      <p class="notice notice--danger" id="loginError" role="alert" hidden></p>
+      <button class="btn btn--primary" id="loginBtn" type="submit" data-i18n="login.submit">Войти</button>
+    </form>
+
+    <div id="accessBanner" class="notice notice--danger" role="alert" hidden>
+      <span class="notice__title" data-i18n="access.title">Нет доступа</span>
+      <span id="accessText" data-i18n="products.noaccess_text">Добавлять и менять товары может только администратор. Если это неожиданно — обратитесь к нему.</span>
+      <span id="accessListener" data-i18n="products.admin_listener_only" hidden>Добавлять и менять товары можно только на компьютере магазина (http://localhost:8001) или через VPN — так решил владелец, чтобы пароль администратора не передавался по Wi-Fi.</span>
+    </div>
+
+    <div id="mainArea" class="area" hidden>
+      <p class="hint" data-i18n="products.intro">Здесь товары, которые система умеет узнавать. Добавьте товар: напишите название и снимите 3–5 фото с разных сторон.</p>
+      <div class="row"><button type="button" class="btn btn--primary" id="openAdd"></button></div>
+
+      <section class="panel" id="addCard" hidden>
+        <h2 class="panel__title" data-i18n="products.add">Добавить товар</h2>
+        <label class="field"><span class="field__label" data-i18n="products.name_label">Как называется товар?</span><input class="input" id="nameInput" type="text" maxlength="120" autocomplete="off" data-i18n-attr="placeholder:products.name_placeholder" placeholder="Например: Мышь беспроводная M200"></label>
+        <div class="field">
+          <span class="field__label" data-i18n="products.photos_label">Фото товара</span>
+          <div class="row"><button type="button" class="btn btn--secondary" id="pickBtn"></button></div>
+        </div>
+        <input id="photoInput" type="file" accept="image/*" multiple hidden>
+        <div class="strip" id="photoStrip"></div>
+        <p class="hint" id="photosHint"></p>
+
+        <details class="more" id="moreDetails">
+          <summary data-i18n="products.more">Дополнительно (необязательно)</summary>
+          <div class="form-grid">
+            <label class="field"><span class="field__label" data-i18n="products.price_label">Цена на ценнике, сум</span><input class="input" id="priceInput" type="text" inputmode="decimal" placeholder="249000" autocomplete="off"></label>
+            <label class="field"><span class="field__label" data-i18n="products.brand_label">Бренд</span><input class="input" id="brandInput" type="text" maxlength="60" autocomplete="off"></label>
+            <label class="field"><span class="field__label" data-i18n="products.category_label">Категория</span><input class="input" id="categoryInput" type="text" maxlength="60" autocomplete="off"></label>
+          </div>
+          <p class="hint" data-i18n="products.price_hint">Цена показывается на ценнике ответа. Если не знаете — пропустите.</p>
+          <label class="field"><span class="field__label" data-i18n="products.barcode_label">Штрих-код (необязательно)</span><input class="input" id="barcodeInput" type="text" inputmode="numeric" placeholder="4780001234562" autocomplete="off"></label>
+          <p class="hint" data-i18n="products.barcode_hint">Можно не вводить: если среди фото есть снимок штрих-кода на упаковке, система прочтёт его сама. По штрих-коду товар узнаётся сразу.</p>
+        </details>
+
+        <p class="notice notice--danger" id="formError" role="alert" hidden></p>
+
+        <div id="dupNotice" class="notice" role="status" hidden>
+          <span class="notice__title" id="dupTitle"></span>
+          <span data-i18n="products.dup_text">Если это тот же товар — добавьте ваши фото к нему: система будет узнавать его увереннее.</span>
+          <div class="row">
+            <button id="dupYes" type="button" class="btn btn--primary" data-i18n="products.dup_yes">Добавить фото к этому товару</button>
+            <button id="dupNo" type="button" class="btn btn--secondary" data-i18n="products.dup_no">Это другой товар</button>
+          </div>
+        </div>
+
+        <div class="row">
+          <button type="button" class="btn btn--primary" id="submitBtn" disabled></button>
+          <button type="button" class="btn btn--secondary" id="addCancel" data-i18n="common.cancel">Отмена</button>
+        </div>
+        <p class="hint" id="submitHint"></p>
+      </section>
+
+      <section class="panel" id="progressCard" hidden>
+        <div class="progress" id="progressRow"><div class="skeleton progress__bar" id="spinner" aria-hidden="true"></div><div id="progressText" role="status"></div></div>
+        <div id="doneBlock" hidden>
+          <p class="done__text" id="doneText"></p>
+          <p class="hint lines" id="warnList"></p>
+          <div class="row">
+            <a class="btn btn--primary" id="tryLink" href="identify.html" data-i18n="products.check_it">Проверить: показать товар камере</a>
+            <button id="againBtn" type="button" class="btn btn--secondary" data-i18n="products.add_another">Добавить ещё один товар</button>
+          </div>
+        </div>
+        <div id="failBlock" hidden>
+          <p class="notice notice--danger" id="failText" role="alert"></p>
+          <details class="tech"><summary data-i18n="identify.tech">Для специалиста</summary><p id="failDetail"></p></details>
+          <div class="row"><button id="failBack" type="button" class="btn btn--secondary" data-i18n="products.fail_back">Вернуться и попробовать снова</button></div>
+        </div>
+        <div id="slowBlock" hidden>
+          <p class="hint" id="slowText"></p>
+          <div class="row"><button id="slowCheck" type="button" class="btn btn--secondary" data-i18n="products.check_again">Проверить ещё раз</button></div>
+        </div>
+      </section>
+
+      <section class="panel" id="editCard" hidden>
+        <h2 class="panel__title" id="editTitle"></h2>
+        <label class="field"><span class="field__label" data-i18n="products.edit_name">Название</span><input class="input" id="editName" type="text" maxlength="120" autocomplete="off"></label>
+        <label class="field"><span class="field__label" data-i18n="products.price_label">Цена на ценнике, сум</span><input class="input" id="editPrice" type="text" inputmode="decimal" autocomplete="off"></label>
+        <p class="hint" data-i18n="products.edit_price_hint">Оставьте цену пустой, если она не нужна. Фото и распознавание от этого не меняются.</p>
+        <div class="field">
+          <span class="field__label" data-i18n="products.codes">Штрих-коды товара</span>
+          <div class="tags" id="editCodes"></div>
+        </div>
+        <input class="input" id="editBarcode" type="text" inputmode="numeric" autocomplete="off" data-i18n-attr="placeholder:products.code_add;aria-label:products.codes" placeholder="Добавить штрих-код: 4780001234562" aria-label="Штрих-коды товара">
+        <p class="notice notice--danger" id="editError" role="alert" hidden></p>
+        <div class="row">
+          <button id="editSave" type="button" class="btn btn--primary" data-i18n="common.save">Сохранить</button>
+          <button id="editCancel" type="button" class="btn btn--secondary" data-i18n="common.cancel">Отмена</button>
+          <button id="editAddPhotos" type="button" class="btn btn--secondary"></button>
+        </div>
+      </section>
+
+      <section class="area" id="listCard">
+        <h2 class="section-title" data-i18n="products.list_title">Товары в каталоге</h2>
+        <p class="notice notice--danger" id="listError" role="alert" hidden></p>
+        <div id="productList" hidden></div>
+        <p class="blank" id="listEmpty" hidden data-i18n="products.list_empty">Пока нет ни одного товара. Добавьте первый.</p>
+        <p class="hint" id="listNote" role="status" hidden></p>
+        <input id="addPhotoInput" type="file" accept="image/*" multiple hidden>
+      </section>
+
+      <details class="tech">
+        <summary data-i18n="identify.tech">Для специалиста</summary>
+        <p><span data-i18n="identify.tech_connected">Подключено к</span> <code id="footerApiBase"></code>. <span data-i18n="products.tech_storage">Фото хранятся в папке</span> <code>data/catalog-uploads</code>.</p>
+        <p data-i18n="products.tech_bulk">Много товаров сразу (десятки): папка catalog и команда python -m scripts.import_catalog --dir catalog — инструкция в docs/catalog_guide.md.</p>
+      </details>
+    </div>
+  </main>
+</div>
+<script src="i18n.js"></script>
+<script src="i18n.ru.js"></script>
+<script src="i18n.uz.js"></script>
+<script src="i18n.uz-cyrl.js"></script>
+<script src="i18n.en.js"></script>
+<script src="icons.js"></script>
+<script src="auth.js"></script>
+<script src="ticket.js"></script>
+<script src="catalog.js"></script>
+<script src="productlist.js"></script>
+<script src="products.js"></script>
+<script src="boot.js" data-start="Products"></script>
+</body>
+</html>

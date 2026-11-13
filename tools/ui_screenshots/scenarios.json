@@ -1,0 +1,74 @@
+[
+  {
+    "name": "home-login",
+    "page": "index.html",
+    "sizes": [
+      "laptop",
+      "phone"
+    ]
+  },
+  {
+    "name": "home-admin",
+    "page": "index.html",
+    "auth": true,
+    "sizes": [
+      "laptop",
+      "phone"
+    ]
+  },
+  {
+    "name": "home-admin-new",
+    "page": "index.html",
+    "auth": true,
+    "nostores": true,
+    "sizes": [
+      "laptop"
+    ]
+  },
+  {
+    "name": "home-merch",
+    "page": "index.html",
+    "auth": true,
+    "role": "merchandiser",
+    "sizes": [
+      "laptop",
+      "phone"
+    ]
+  },
+  {
+    "name": "f-home-admin",
+    "page": "index.html",
+    "auth": true,
+    "sizes": [
+      "laptop",
+      "phone"
+    ]
+  },
+  {
+    "name": "f-home-new",
+    "page": "index.html",
+    "auth": true,
+    "nostores": true,
+    "sizes": [
+      "laptop",
+      "phone"
+    ]
+  },
+  {
+    "name": "f-login",
+    "page": "index.html",
+    "sizes": [
+      "laptop",
+      "phone"
+    ]
+  },
+  {
+    "name": "d-home",
+    "page": "index.html",
+    "auth": true,
+    "dark": true,
+    "sizes": [
+      "laptop"
+    ]
+  }
+]

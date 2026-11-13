@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Узнать товар">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title data-i18n="admin.page_title">Админ-панель — Узнать товар</title>
+<link rel="stylesheet" href="admin.css">
+</head>
+<body>
+<div id="loginView" class="loginbox card boot-hidden">
+  <div class="lang-row" id="langSwitchLogin"></div>
+  <h2 data-i18n="admin.panel">Админ-панель</h2>
+  <form id="loginForm">
+    <label class="f"><span data-i18n="login.user">Логин</span><input id="loginUser" type="text" autocomplete="username" autocapitalize="none" required></label>
+    <label class="f"><span data-i18n="login.pass">Пароль</span><input id="loginPass" type="password" autocomplete="current-password" required></label>
+    <label class="f" id="loginCodeField" hidden><span data-i18n="login.code">Код из приложения</span><input id="loginCode" type="text" autocomplete="one-time-code" maxlength="13"></label>
+    <button id="loginBtn" class="btn" type="submit" data-i18n="login.submit">Войти</button>
+    <div id="loginError" class="err mt-8"></div>
+  </form>
+  <div class="hint"><span data-i18n="admin.forgot">Забыли пароль? На сервере:</span> <code>docker compose exec api python -m scripts.user_admin reset-password --username <span data-i18n="admin.login_placeholder">ЛОГИН</span></code></div>
+</div>
+
+<div id="appView" class="app boot-hidden">
+  <nav id="side" class="side">
+    <h1 data-i18n="app.name">Узнать товар</h1>
+    <a href="index.html" data-i18n="admin.back_home">← На главную</a>
+    <a href="#/products" data-page="products" data-i18n="nav.products">Товары</a>
+    <a href="#/users" data-page="users" data-i18n="admin.page_users">Пользователи</a>
+    <a href="#/system" data-page="system" data-i18n="admin.page_system">Система</a>
+    <div class="sep" data-i18n="admin.other_pages">Другие страницы</div>
+    <a href="identify.html" data-i18n="app.name">Узнать товар</a>
+    <a href="products.html" data-i18n="admin.link_products">Добавить товары и фото</a>
+    <a href="/docs" target="_blank" rel="noopener" data-i18n="admin.link_api">Для программистов: API</a>
+  </nav>
+  <div class="main-col">
+    <div class="top">
+      <button id="menuBtn" class="btn sec sm" type="button">☰</button>
+      <div id="pageTitle" class="grow"><b data-i18n="admin.panel">Админ-панель</b></div>
+      <div id="who" class="who"></div>
+      <div id="langSwitch"></div>
+      <button id="logoutBtn" class="btn sec sm" type="button" data-i18n="settings.sign_out">Выйти</button>
+    </div>
+    <main id="main"></main>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<div id="toasts" class="toasts"></div>
+
+<script src="i18n.js"></script>
+<script src="i18n.ru.js"></script>
+<script src="i18n.uz.js"></script>
+<script src="i18n.uz-cyrl.js"></script>
+<script src="i18n.en.js"></script>
+<script src="auth.js"></script>
+<script src="admin.js"></script>
+</body>
+</html>

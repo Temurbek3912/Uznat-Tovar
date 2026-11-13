@@ -1,0 +1,40 @@
+/* Стили главной страницы (index.html). Вынесены из встроенного <style> 2026-11-08: CSP style-src 'self'. */
+.login-card { max-width:420px; margin:6vh auto 0; }
+.login-card h1 { font-size:24px; }
+.tiles { display:grid; gap:14px; grid-template-columns:1fr; }
+@media (min-width: 640px)  { .tiles { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1180px) { .tiles { grid-template-columns:repeat(3, minmax(0, 1fr)); } }
+.tile { display:flex; gap:16px; align-items:flex-start; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+        padding:20px; color:var(--ink); text-decoration:none; box-shadow:var(--shadow); transition:border-color .15s, transform .15s; }
+.tile:hover { border-color:var(--brand); transform:translateY(-1px); }
+.tile .ico { font-size:34px; line-height:1; flex:none; }
+.tile b { display:block; font-size:18px; margin-bottom:4px; }
+.tile span.d { color:var(--ink-muted); font-size:15px; }
+.tile.main { background:var(--brand); border-color:var(--brand); color:var(--brand-ink); }
+.tile.main span.d { color:var(--brand-ink); opacity:.9; }
+.steps { margin:8px 0 0; padding-left:22px; } .steps li { margin:6px 0; }
+.checklist { list-style:none; margin:0; padding:0; }
+.step { display:flex; gap:14px; align-items:flex-start; padding:12px 0; border-top:1px solid var(--line); }
+.step:first-child { border-top:0; }
+.step .mark { flex:none; width:32px; height:32px; border-radius:50%; border:2px solid var(--line); display:flex; align-items:center;
+              justify-content:center; font-weight:800; color:var(--ink-muted); }
+.step.done .mark { background:var(--ok); border-color:var(--ok); color:var(--brand-ink); }
+.step.done b { color:var(--ink-muted); }
+.step.next .mark { border-color:var(--brand); color:var(--brand); }
+.step .body b { display:block; font-size:17px; }
+.step .body .btn { margin-top:8px; min-height:44px; padding:10px 18px; font-size:16px; }
+details.help { margin-top:20px; } details.help summary { cursor:pointer; font-weight:700; }
+details.help .body { margin-top:10px; color:var(--ink-muted); }
+.lang-row { display:flex; justify-content:flex-end; margin:0 0 12px; }
+.lang-switch { display:inline-flex; background:var(--surface); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+/* общий стиль button из app.css (на всю ширину, крупный, с отступом) переключателю не подходит */
+.lang-switch .lang-btn { display:inline-block; width:auto; min-width:0; min-height:44px; margin:0; padding:0 12px; border:0; border-radius:0;
+                         background:none; color:var(--ink); font:inherit; font-size:15px; font-weight:500; cursor:pointer; filter:none; }
+.lang-switch .lang-btn + .lang-btn { border-left:1px solid var(--line); }
+.lang-switch .lang-btn[aria-pressed="true"] { background:var(--ink); color:var(--surface); }
+@media (max-width: 479px) {
+  .lang-switch .lang-btn[data-short] { min-width:44px; padding:0; font-size:0; }
+  .lang-switch .lang-btn[data-short]::after { content:attr(data-short); font-size:15px; font-weight:600; }
+}
+
+.hint--tight { margin: 0 0 6px; }

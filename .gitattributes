@@ -1,0 +1,16 @@
+# Файлы, которые читают Linux-контейнеры, должны оставаться с переводом строки LF, даже если git на Windows
+# настроен на CRLF (core.autocrlf=true): Dockerfile и YAML с CRLF ломают сборку, shebang с CRLF — запуск скриптов.
+Dockerfile        text eol=lf
+.dockerignore     text eol=lf
+*.yml             text eol=lf
+*.yaml            text eol=lf
+*.py              text eol=lf
+*.sh              text eol=lf
+*.example         text eol=lf
+requirements*.txt text eol=lf
+constraints*.txt  text eol=lf
+# Двойной щелчок на Windows: .bat обязан быть CRLF.
+*.bat             text eol=crlf
+*.png             binary
+*.ico             binary
+*.ttf             binary

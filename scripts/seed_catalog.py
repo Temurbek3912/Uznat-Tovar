@@ -29,10 +29,11 @@ def main(argv: list[str] | None = None) -> int:
               f"Чтобы подтвердить: python -m scripts.seed_catalog {DEMO_FLAG}")
         return 1
     # Импорты БД — здесь, а не наверху: seed_blockers и проверка флага тестируются без SQLAlchemy.
-    from app.db.models import Base, PlanogramSlotORM, Product, ShelfORM, Store
+    from app.db.models import PlanogramSlotORM, Product, ShelfORM, Store
     from app.db.session import SessionLocal, engine
 
-    Base.metadata.create_all(engine)
+    from app.db.migrate import ensure_current
+    ensure_current(engine)          # миграции Alembic вместо create_all (шаг Р-2)
     db = SessionLocal()
     try:
         from sqlalchemy import func, select

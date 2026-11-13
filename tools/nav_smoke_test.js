@@ -270,6 +270,28 @@ const ids = (list) => Array.from(list, (i) => i.id);
     assert.strictEqual(timers, 1);
   });
 
+  await test("язык в профиле: после входа применяется язык из профиля (без обратной отправки); свой выбор вошедшего сохраняется; без входа — ничего", async () => {
+    function fakeI18n(lang) {
+      const listeners = [];
+      return { current: lang, getLang() { return this.current; }, onChange(fn) { listeners.push(fn); },
+               setLang(code) { if (code === this.current) return true; this.current = code; listeners.forEach((fn) => fn(code)); return true; } };
+    }
+    const puts = (calls) => calls.filter((c) => c.opts.method === "PUT");
+    const a = makeWin({storage: {shelf_audit_token: "t"}, fetchImpl: () => json(200, {role: "merchandiser", permissions: MERCH, language: "uz-Cyrl"})});
+    a.win.I18N = fakeI18n("ru");
+    Nav.start(a.win, {pollMs: 0}); await sleep();
+    assert.strictEqual(a.win.I18N.current, "uz-Cyrl", "язык из профиля применён");
+    assert.strictEqual(puts(a.calls).length, 0, "язык из профиля обратно не отправляется");
+    a.win.I18N.setLang("en"); await sleep();
+    assert.strictEqual(puts(a.calls).length, 1);
+    assert.ok(puts(a.calls)[0].url.endsWith("/api/v1/auth/me/language") && JSON.parse(puts(a.calls)[0].opts.body).language === "en");
+    assert.strictEqual(puts(a.calls)[0].opts.headers.Authorization, "Bearer t");
+    const b = makeWin({});                                  // не вошли
+    b.win.I18N = fakeI18n("ru");
+    Nav.start(b.win, {pollMs: 0}); b.win.I18N.setLang("uz"); await sleep();
+    assert.strictEqual(puts(b.calls).length, 0);
+  });
+
   await test("в nav.js нет innerHTML/outerHTML/insertAdjacentHTML/eval — меню строится только через DOM-методы", async () => {
     for (const bad of ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function"]) {
       assert.ok(!navSource.includes(bad), `в nav.js найдено ${bad}`);

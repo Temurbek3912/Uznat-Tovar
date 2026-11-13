@@ -518,3 +518,26 @@ def test_duplicate_username_race_is_409_not_500(env, monkeypatch):
     users = env.client.get("/api/v1/users", headers=admin)
     assert users.status_code == 200
     assert [u["username"] for u in users.json()].count("racer") == 1
+
+
+# ------------------------------------------------- язык интерфейса в профиле (миграция 0002)
+
+
+def test_language_is_kept_in_the_profile_and_follows_the_user_to_a_new_session(env):
+    merch = headers_for(env, "merch_a")
+    assert env.client.get("/api/v1/auth/me", headers=merch).json()["language"] is None       # не выбран — страница берёт язык браузера
+    saved = env.client.put("/api/v1/auth/me/language", headers=merch, json={"language": "uz-Cyrl"})
+    assert saved.status_code == 200 and saved.json() == {"language": "uz-Cyrl"}
+    other_device = headers_for(env, "merch_a")
+    assert env.client.get("/api/v1/auth/me", headers=other_device).json()["language"] == "uz-Cyrl"
+    assert env.client.get("/api/v1/auth/me", headers=headers_for(env, "analyst")).json()["language"] is None   # у каждого свой
+    cleared = env.client.put("/api/v1/auth/me/language", headers=merch, json={"language": None})
+    assert cleared.status_code == 200 and cleared.json() == {"language": None}
+
+
+def test_unknown_language_is_refused_with_a_code_and_without_token_nothing_is_saved(env):
+    merch = headers_for(env, "merch_a")
+    bad = env.client.put("/api/v1/auth/me/language", headers=merch, json={"language": "de"})
+    assert bad.status_code == 422 and bad.json()["code"] == "language_unknown" and "uz-Cyrl" in bad.json()["params"]["allowed"]
+    assert env.client.put("/api/v1/auth/me/language", json={"language": "ru"}).status_code == 401
+    assert env.client.get("/api/v1/auth/me", headers=merch).json()["language"] is None

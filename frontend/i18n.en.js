@@ -489,6 +489,7 @@
     "server.owner_exists": "An owner is already set — ownership can be transferred only explicitly from the server console.",
     "server.owner_must_be_admin": "Only an active administrator can be the owner.",
     "server.mfa_required_for_admins": "Two-step sign-in is mandatory for administrators — it cannot be turned off.",
+    "server.language_unknown": "This language is not available in the program.",
     "server.mfa_reset_self": "You cannot reset your own two-step sign-in this way: sign in with a recovery code or ask the owner.",
     "server.session_max_age": "The session has reached its maximum length — sign in again.",
     "login.enroll_prompt": "Administrators need two-step sign-in. Set it up now.",

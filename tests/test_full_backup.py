@@ -133,6 +133,9 @@ class FakePg(fb.PgTools):
     def listing(self, dump):
         return ";\n; Archive created at now\n215; 1259 1 TABLE public products u\n"
 
+    def schema_revision(self):
+        return "0002"
+
 
 def _project(tmp_path):
     project = tmp_path / "proj"
@@ -166,6 +169,7 @@ def test_full_backup_layout_manifest_and_exclusions(tmp_path):
     assert manifest["verification"]["ok"] is True and manifest["database"]["tables"] == ["public.products"]
     assert manifest["photos"]["count"] == 2 and manifest["photos"]["new_in_store"] == 1
     assert manifest["index"]["status"] == "consistent"
+    assert manifest["schema_revision"] == "0002"                 # ревизия Alembic рабочей базы (шаг Р-2)
     assert sorted(manifest["config"]) == ["configs/config.yaml", "docker-compose.yml"]
     every_file = b"".join(p.read_bytes() for p in layout.dest.rglob("*") if p.is_file())
     assert b"customer-frame" not in every_file and b"secret" not in every_file          # ни кадров, ни секретов

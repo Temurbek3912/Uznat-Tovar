@@ -11,7 +11,7 @@ sqlalchemy>=2.0
 # postgresql:// к postgresql+psycopg://). Ставим ОБА, чтобы любое написание URL работало без ручной правки:
 psycopg[binary]>=3.2    # основной драйвер (psycopg 3), postgresql+psycopg://
 psycopg2-binary>=2.9    # запасной: явный postgresql+psycopg2:// и scripts/preflight.py
-alembic>=1.13           # ВНИМАНИЕ: пока не используется — миграций в проекте нет, схему создаёт scripts/bootstrap.py (create_all)
+alembic>=1.13           # миграции схемы (migrations/, app/db/migrate.py; применяет scripts/bootstrap.py)
 
 # --- Безопасность ---
 cryptography>=42       # шифрование адресов камер с паролями (app/core/crypto.py, Fernet); ключ — CAMERA_SECRET_KEY

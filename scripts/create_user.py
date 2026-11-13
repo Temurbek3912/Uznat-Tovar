@@ -25,7 +25,6 @@ import sys
 
 from app.core.config import get_settings
 from app.core.security import PolicyViolation, Role
-from app.db.models import Base
 from app.db.session import SessionLocal, engine
 from app.services.auth_service import AuthService, UnknownStoreError, UserAlreadyExistsError
 
@@ -57,7 +56,8 @@ def main(argv: list[str] | None = None) -> int:
 
     password = _read_password()
 
-    Base.metadata.create_all(engine)
+    from app.db.migrate import ensure_current
+    ensure_current(engine)          # миграции Alembic вместо create_all (шаг Р-2)
     db = SessionLocal()
     try:
         service = AuthService(db)

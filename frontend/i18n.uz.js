@@ -489,6 +489,7 @@
     "server.owner_exists": "Ega allaqachon tayinlangan — huquqlarni faqat server konsolidan aniq topshirish mumkin.",
     "server.owner_must_be_admin": "Faqat faol administrator ega boʻlishi mumkin.",
     "server.mfa_required_for_admins": "Administrator uchun ikki bosqichli kirish majburiy — uni oʻchirib boʻlmaydi.",
+    "server.language_unknown": "Dasturda bunday til yoʻq.",
     "server.mfa_reset_self": "Oʻz ikki bosqichli kirishingizni bunday tiklab boʻlmaydi: tiklash kodi bilan kiring yoki egaga murojaat qiling.",
     "server.session_max_age": "Seans eng uzoq muddatga yetdi — qaytadan kiring.",
     "login.enroll_prompt": "Administratorga ikki bosqichli kirish kerak. Uni hozir sozlang.",

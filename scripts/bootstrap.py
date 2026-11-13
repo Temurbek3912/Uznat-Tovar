@@ -7,10 +7,10 @@
 
 Что делает, по шагам:
   1. ждёт, пока Postgres начнёт принимать подключения;
-  2. создаёт недостающие таблицы (Base.metadata.create_all) под advisory-замком Postgres — параллельный запуск
-     не ломает схему. Существующие таблицы и данные не трогает. ВАЖНО: create_all НЕ меняет уже существующие таблицы,
-     поэтому, если в БД устаревшая схема (в таблице нет колонки, которая есть в моделях), скрипт останавливается с
-     понятным сообщением, а не оставляет приложение, падающее на каждом запросе. Alembic-миграций в проекте нет;
+  2. применяет миграции схемы Alembic (app/db/migrate.py) под блокировкой Postgres — параллельный запуск не ломает схему.
+     Пустая база — создаются все таблицы; база с миграциями — применяются недостающие. Старая база, созданная до миграций
+     (create_all), принимается: сначала проверка, что в её таблицах есть все колонки базовой ревизии; если нет — скрипт
+     останавливается с понятным сообщением и НИЧЕГО не меняет; если да — создаются только недостающие таблицы. Данные не трогаются;
   3. создаёт папки data/, models/index, models/detector, models/embedder, logs/;
   4. создаёт первого администратора — только если в БД нет ни одного активного admin И владелец ещё не назначен; созданный
      администратор становится ВЛАДЕЛЬЦЕМ системы (документ 05, §8; документ 18, §4.2). Если владелец есть, но все администраторы
@@ -162,7 +162,7 @@ def drift_report_lines(drift: Mapping[str, list[str]]) -> list[str]:
     lines = ["ОШИБКА: схема БД устарела — в существующих таблицах нет колонок, которые ожидает код:"]
     lines += [f"      {table}: {', '.join(cols)}" for table, cols in sorted(drift.items())]
     lines += [
-        "      create_all не меняет существующие таблицы, а Alembic-миграций в проекте нет. Ваши данные НЕ тронуты.",
+        "      Это база, созданная до миграций, и её таблицы старее базовой ревизии. Ничего не изменено, ваши данные НЕ тронуты.",
         "      1) Сначала резервная копия (на хосте): python scripts\\backup_db.py — и убедитесь, что она создана и проверена.",
         "      2) Затем добавьте недостающие колонки вручную: ALTER TABLE <таблица> ADD COLUMN <колонка> <тип>;",
         "         (или пришлите этот вывод разработчику — он подготовит команды).",
@@ -200,30 +200,10 @@ def _connect_once(engine) -> None:
 
 
 def ensure_schema(engine) -> tuple[list[str], dict[str, list[str]]]:
-    """create_all под advisory-замком. -> (созданные таблицы, расхождения существующих таблиц с моделями)."""
-    from sqlalchemy import inspect, text
-    from app.db.models import Base
-
-    before = set(inspect(engine).get_table_names())
-    lock_conn = None
-    if engine.dialect.name == "postgresql":
-        lock_conn = engine.connect()
-        lock_conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": ADVISORY_LOCK_KEY})
-    try:
-        Base.metadata.create_all(engine)
-    finally:
-        if lock_conn is not None:
-            try:
-                lock_conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": ADVISORY_LOCK_KEY})
-                lock_conn.commit()
-            finally:
-                lock_conn.close()
-
-    inspector = inspect(engine)
-    after = set(inspector.get_table_names())
-    expected = {name: {c.name for c in table.columns} for name, table in Base.metadata.tables.items()}
-    actual = {name: {c["name"] for c in inspector.get_columns(name)} for name in expected if name in after}
-    return sorted(after - before), find_schema_drift(expected, actual)
+    """Миграции до последней ревизии (app/db/migrate.py). -> (созданные таблицы, расхождения старой базы — тогда ничего не менялось)."""
+    from app.db.migrate import upgrade_to_head
+    result = upgrade_to_head(engine)
+    return result.created_tables, result.drift
 
 
 def count_active_admins(db) -> int:

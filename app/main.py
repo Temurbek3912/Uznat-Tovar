@@ -154,6 +154,13 @@ def _check_schema() -> None:
     missing = sorted(set(Base.metadata.tables) - set(inspect(engine).get_table_names()))
     if missing:
         raise CheckFailed(f"нет таблиц: {', '.join(missing)} — выполните: docker compose run --rm bootstrap")
+    # Таблицы на месте, но миграции не применены (код новее базы: нет колонок) — тоже «не готов», а не 500 на каждом запросе.
+    from app.db.migrate import current_revision, head_revision
+    with engine.connect() as conn:
+        current = current_revision(conn)
+    if current != head_revision():
+        raise CheckFailed(f"схема базы не обновлена (ревизия {current or 'нет'}, нужна {head_revision()}) — выполните: "
+                          "docker compose run --rm bootstrap")
 
 
 def _check_queue() -> None:

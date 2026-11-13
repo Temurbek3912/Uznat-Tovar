@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from app.db.models import Base, ShelfORM, Store
+from app.db.models import ShelfORM, Store
 from app.db.session import SessionLocal, engine
 
 
@@ -107,7 +107,8 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_list)
 
     args = parser.parse_args(argv)
-    Base.metadata.create_all(engine)
+    from app.db.migrate import ensure_current
+    ensure_current(engine)          # миграции Alembic вместо create_all (шаг Р-2)
     return args.func(args)
 
 

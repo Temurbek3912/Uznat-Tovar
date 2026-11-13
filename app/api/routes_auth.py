@@ -194,6 +194,15 @@ class MeResponse(BaseModel):
     mfa_enabled: bool = False  # включён ли второй фактор (новое поле; прежние клиенты его не читают)
     is_owner: bool = False     # владелец системы (назначается только с консоли сервера)
     admin_listener: bool = True  # действуют ли здесь права управления (решение В-1: только административный вход)
+    language: str | None = None  # язык интерфейса из профиля (миграция 0002); None — не выбран, страница берёт язык браузера
+
+
+# Коды языков интерфейса — те же, что во frontend/i18n.js (LANGS). Четыре языковых варианта (решение владельца 2026-11-06).
+LANGUAGES = ("ru", "uz", "uz-Cyrl", "en")
+
+
+class LanguageIn(BaseModel):
+    language: str | None = Field(default=None, max_length=8)
 
 
 class SessionOut(BaseModel):
@@ -514,7 +523,17 @@ def me(request: Request, user: CurrentUser = Depends(get_current_user), db: Sess
         mfa_enabled=AuthService(db).totp_enabled(user.id),
         is_owner=user.is_owner,
         admin_listener=admin_here,
+        language=AuthService(db).get_user(user.id).language,
     )
+
+
+@router.put("/auth/me/language")
+def set_my_language(body: LanguageIn, user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    """Запомнить язык интерфейса в профиле: при входе с другого устройства страница откроется на нём. null — забыть выбор."""
+    if body.language is not None and body.language not in LANGUAGES:
+        raise ApiError(422, "language_unknown", "Такого языка в программе нет",
+                       {"allowed": list(LANGUAGES)})
+    return {"language": AuthService(db).set_language(user.id, body.language)}
 
 
 # ------------------------------------------------------------------- мои сеансы

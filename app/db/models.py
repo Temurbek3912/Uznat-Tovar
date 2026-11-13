@@ -2,6 +2,10 @@
 ORM-модели персистентного слоя. Эмбеддинги каталога НЕ хранятся здесь как
 BLOB в Postgres в проде — они живут в векторном индексе (FAISS/pgvector),
 здесь хранится только путь/ссылка на них плюс метаданные для трассируемости.
+
+СХЕМА МЕНЯЕТСЯ ТОЛЬКО МИГРАЦИЕЙ (с 2026-11-13): изменили модель — добавьте ревизию в migrations/versions/ (alembic revision -m …).
+tests/test_migrations.py сверяет итог всех миграций с этими моделями. Пометки «create_all создаёт новую таблицу» ниже — история
+до миграций: такие таблицы входят в базовую ревизию 0001.
 """
 from __future__ import annotations
 
@@ -156,6 +160,8 @@ class User(Base):
     role: Mapped[str] = mapped_column(String)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # Язык интерфейса, выбранный сотрудником (ru | uz | uz-Cyrl | en; NULL — не выбран). Миграция 0002.
+    language: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
     store_access: Mapped[list["UserStoreAccess"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

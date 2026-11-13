@@ -280,6 +280,25 @@ class PgTools:
             raise BackupError(f"psql: {self._err(proc)}")
         return (proc.stdout or b"").decode("utf-8", "replace")
 
+    def schema_revision(self) -> str | None:
+        """Ревизия схемы (Alembic) рабочей базы — в манифест копии. None — база создана до миграций (нет alembic_version)."""
+        sql_has = "SELECT to_regclass('public.alembic_version') IS NOT NULL"
+        sql_rev = "SELECT version_num FROM alembic_version LIMIT 1"
+        if self.use_compose:
+            cmd = self._exec('psql -v ON_ERROR_STOP=1 -At -U "$POSTGRES_USER" -d "$POSTGRES_DB"')
+        else:
+            cmd = ["psql", "-v", "ON_ERROR_STOP=1", "-At", "-d", self.database_url]
+
+        def run(sql: str) -> str:
+            proc = self._run(cmd, input=sql.encode("utf-8"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if proc.returncode != 0:
+                raise BackupError(f"psql: {self._err(proc)}")
+            return (proc.stdout or b"").decode("utf-8", "replace").strip()
+
+        if run(sql_has) != "t":
+            return None
+        return run(sql_rev) or None
+
     def db_exists(self, name: str) -> bool:
         _check_target_db_name(name)
         return self._psql("postgres", f"SELECT 1 FROM pg_database WHERE datname = '{name}'").strip() == "1"
@@ -468,6 +487,7 @@ def _create_backup(layout: Layout, pg: PgTools, *, now: Callable[[], datetime], 
         tables = listing_tables(pg.listing(work / "db.dump"))
         if not tables:
             raise BackupError("в дампе нет ни одной таблицы")
+        schema_revision = pg.schema_revision()
         out(f"  база: таблиц {len(tables)}")
 
         # 2. фото — после дампа (фото, добавленные позже, просто окажутся лишними)
@@ -504,7 +524,7 @@ def _create_backup(layout: Layout, pg: PgTools, *, now: Callable[[], datetime], 
             "kind": "full",
             "created_at": stamp.isoformat(timespec="seconds"),
             "tool": "scripts/full_backup.py",
-            "schema_revision": None,     # Alembic ещё не внедрён (этап 2Б)
+            "schema_revision": schema_revision,     # ревизия Alembic рабочей базы; None — база создана до миграций
             "database": {"file": "db.dump", "tables": tables, "size": (work / "db.dump").stat().st_size},
             "photos": {"list": "photos.list", "count": len(rows), "new_in_store": new, "new_bytes": new_bytes,
                        "store": f"../{STORE_DIR}"},

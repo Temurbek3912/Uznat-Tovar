@@ -721,6 +721,13 @@ class AuthService:
         self.db.refresh(user)
         return user
 
+    def set_language(self, user_id: str, language: str | None) -> str | None:
+        """Язык интерфейса в профиле (миграция 0002). language — уже проверенный код из LANGUAGES или None («не выбран»)."""
+        user = self.get_user(user_id)
+        user.language = language
+        self.db.commit()
+        return user.language
+
     def get_user(self, user_id: str) -> User:
         user = self.db.get(User, user_id)
         if user is None:

@@ -143,6 +143,23 @@
     function signature(st) { return [st.loggedIn, st.role, st.perms === null ? "?" : st.perms.join(",")].join("|"); }
     function clear() { store.set(TOKEN_KEY, null); store.set(ROLE_KEY, null); store.set(PERMS_KEY, null); asked = false; }
 
+    // Язык в профиле (миграция 0002): после входа язык из профиля применяется и на этом устройстве; выбор языка вошедшим
+    // сотрудником сохраняется в профиль. Без входа ничего не отправляется.
+    var I18 = win.I18N || root.I18N, languageFromServer = false;
+    function applyProfileLanguage(lang) {
+      if (!lang || !I18 || typeof I18.setLang !== "function" || I18.getLang() === lang) return;
+      languageFromServer = true;
+      try { I18.setLang(lang); } finally { languageFromServer = false; }
+    }
+    function saveLanguage(lang) {
+      var token = store.get(TOKEN_KEY);
+      if (languageFromServer || !token || !lang) return;
+      win.fetch(base + "/api/v1/auth/me/language", {
+        method: "PUT", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+        body: JSON.stringify({ language: lang })
+      }).catch(function () { /* нет связи: язык остаётся выбранным на этом устройстве */ });
+    }
+
     function logout() {
       var token = store.get(TOKEN_KEY);
       clear();
@@ -164,6 +181,7 @@
           if (!me) return;
           store.set(ROLE_KEY, me.role || null);
           store.set(PERMS_KEY, JSON.stringify(Array.isArray(me.permissions) ? me.permissions : []));
+          applyProfileLanguage(me.language);
           sync();
         })
         .catch(function () { /* нет связи: остаются общие разделы, страница сама покажет ошибку */ });
@@ -184,7 +202,7 @@
     sync();
     if (pollMs > 0 && win.setInterval) win.setInterval(sync, pollMs);
     // Смена языка: меню перерисовывается с новыми подписями.
-    if (root.I18N && typeof root.I18N.onChange === "function") root.I18N.onChange(function () { drawn = null; sync(); });
+    if (I18 && typeof I18.onChange === "function") I18.onChange(function (lang) { saveLanguage(lang); drawn = null; sync(); });
     return { sync: sync, logout: logout };
   }
 

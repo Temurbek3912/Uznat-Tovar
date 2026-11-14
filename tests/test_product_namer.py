@@ -97,8 +97,10 @@ def test_unsure_or_not_a_product_is_an_honest_could_not_determine(answer):
 
 def test_thinking_text_around_json_is_tolerated_and_medium_is_a_guess_but_not_sure():
     text = '<think>хм</think>```json\n{"is_product": true, "name": "Шоколад", "brand": "", "confidence": "medium"}\n```'
-    guess = pn.name_product(_jpeg(), [], "ru", SETTINGS, http_get=_off({}), http_post=_vision(text))
+    settings = types.SimpleNamespace(**vars(SETTINGS), naming_min_confidence="medium")       # порог ниже обычного «high»
+    guess = pn.name_product(_jpeg(), [], "ru", settings, http_get=_off({}), http_post=_vision(text))
     assert guess.name == "Шоколад" and guess.sure is False
+    assert pn.name_product(_jpeg(), [], "ru", SETTINGS, http_get=_off({}), http_post=_vision(text)) is None   # по умолчанию — «high»
 
 
 def test_model_unavailable_or_naming_switched_off_gives_none():
@@ -160,3 +162,27 @@ def test_public_answer_shows_only_name_and_brand_of_the_outside_product():
                                   "barcode": {"code": "5000159461122"}, "score": 0.3})
     assert answer == {"status": "not_in_catalog", "by": None, "product": None, "candidates": [],
                       "guess": {"name": "Snickers", "brand": "Mars"}}
+
+
+@pytest.mark.parametrize("floor,confidence,named", [
+    ("medium", "high", True), ("medium", "medium", True), ("medium", "low", False),
+    ("high", "high", True), ("high", "medium", False), ("high", "low", False),
+    ("low", "low", False),           # «low» — всегда «не удалось определить», даже если порог задан ошибочно
+    ("чепуха", "medium", True),      # неизвестный порог — как по умолчанию (medium)
+])
+def test_min_confidence_threshold_from_config(floor, confidence, named):
+    answer = {"is_product": True, "name": "Шоколад Alpen Gold", "brand": "Alpen Gold", "confidence": confidence}
+    settings = types.SimpleNamespace(**vars(SETTINGS), naming_min_confidence=floor)
+    guess = pn.name_product(_jpeg(), [], "ru", settings, http_get=_off({}), http_post=_vision(answer))
+    assert (guess is not None) is named
+
+
+def test_ask_vision_returns_the_raw_answer_even_when_it_would_be_rejected():
+    answer = {"is_product": True, "name": "Что-то", "brand": "", "confidence": "low"}
+    raw = pn.ask_vision(_jpeg(), "ru", "http://127.0.0.1:1234/v1", "m", 5.0, http_post=_vision(answer))
+    assert raw == answer and pn.accept_answer(raw) is None
+
+
+def test_names_overlap_ignores_accents_on_latin_letters():
+    assert pn.names_overlap(pn.Guess(name="Nescafe Gold", brand="Nescafe"), {"name": "Кофе", "brand": "Nescafé"})
+    assert pn._tokens("Nestlé") == pn._tokens("Nestle")

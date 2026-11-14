@@ -21,6 +21,7 @@ import json
 import logging
 import re
 import threading
+import unicodedata
 import urllib.error
 import urllib.request
 from collections import OrderedDict
@@ -134,6 +135,8 @@ _STOP = {"the", "and", "with", "for", "original", "classic", "ml", "gr", "kg", "
 
 def _tokens(text: str) -> set[str]:
     text = (text or "").lower().translate(_TRANSLIT)
+    # «Nescafé» и «Nescafe», «Nestlé» и «Nestle» — одно слово: знаки над латинскими буквами снимаются (кириллица уже переведена)
+    text = "".join(ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch))
     return {t for t in re.findall(r"[a-z]{3,}", text) if t not in _STOP}
 
 
@@ -226,9 +229,13 @@ def _parse_answer(text: str) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
-def name_by_vision(jpeg: bytes, lang: str, url: str, model: str, timeout: float,
-                   http_post: HttpPost | None = None) -> Guess | None:
-    """Кадр -> название от локальной модели «зрение + текст» или None (не уверена, не товар, модель недоступна)."""
+CONFIDENCE_LEVELS = ("low", "medium", "high")
+
+
+def ask_vision(jpeg: bytes, lang: str, url: str, model: str, timeout: float,
+               http_post: HttpPost | None = None) -> dict | None:
+    """Кадр -> сырой ответ модели {is_product, name, brand, confidence} или None (модель недоступна, ответ не разобран).
+    Отдельно от решения «принять или нет» — чтобы замер (ml/benchmark_naming.py) видел и отвергнутые ответы."""
     if not url:
         return None
     post = http_post or _http_post_json
@@ -255,16 +262,28 @@ def name_by_vision(jpeg: bytes, lang: str, url: str, model: str, timeout: float,
         content = reply["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):
         return None
-    answer = _parse_answer(content if isinstance(content, str) else "")
+    return _parse_answer(content if isinstance(content, str) else "")
+
+
+def accept_answer(answer: dict | None, min_confidence: str = "medium") -> Guess | None:
+    """Сырой ответ модели -> догадка или None («не удалось определить»). Ниже порога уверенности, «не товар», пустое название — None.
+    Порог — naming.min_confidence в config.yaml; выбран по замеру (документ 07, §10.6)."""
     if not answer or answer.get("is_product") is False:
         return None
-    if str(answer.get("confidence", "")).lower() not in ("high", "medium"):
+    confidence = str(answer.get("confidence", "")).lower()
+    floor = min_confidence if min_confidence in CONFIDENCE_LEVELS else "medium"
+    if confidence not in CONFIDENCE_LEVELS or CONFIDENCE_LEVELS.index(confidence) < CONFIDENCE_LEVELS.index(floor)             or confidence == "low":
         return None
     name = _clean(answer.get("name"))
     if not name:
         return None
-    sure = str(answer.get("confidence", "")).lower() == "high"
-    return Guess(name=name, brand=_clean(answer.get("brand")), source="vision", sure=sure)
+    return Guess(name=name, brand=_clean(answer.get("brand")), source="vision", sure=confidence == "high")
+
+
+def name_by_vision(jpeg: bytes, lang: str, url: str, model: str, timeout: float,
+                   http_post: HttpPost | None = None, min_confidence: str = "medium") -> Guess | None:
+    """Кадр -> название от локальной модели «зрение + текст» или None (не уверена, не товар, модель недоступна)."""
+    return accept_answer(ask_vision(jpeg, lang, url, model, timeout, http_post=http_post), min_confidence)
 
 
 def name_product(jpeg: bytes | None, codes: list[str], lang: str, settings,
@@ -280,7 +299,8 @@ def name_product(jpeg: bytes | None, codes: list[str], lang: str, settings,
     if jpeg:
         return name_by_vision(jpeg, lang, getattr(settings, "naming_vision_url", "") or "",
                               getattr(settings, "naming_vision_model", "") or "",
-                              float(getattr(settings, "naming_vision_timeout_seconds", 40.0)), http_post=http_post)
+                              float(getattr(settings, "naming_vision_timeout_seconds", 40.0)), http_post=http_post,
+                              min_confidence=str(getattr(settings, "naming_min_confidence", "high") or "high"))
     return None
 
 

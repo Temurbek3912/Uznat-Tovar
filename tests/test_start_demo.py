@@ -64,6 +64,7 @@ class Env:
             sleep=self._sleep, clock=self._clock, load_settings=lambda: settings, preflight=lambda: 0,
             lan_ip=lambda: "192.168.1.57", render_qr=lambda url: f"[QR {url}]", open_browser=self.opened.append,
             out=self.lines.append, platform="win32", python="PY", root=tmp_path, worker_status=lambda p: {"ready": True},
+            migrate=lambda: "",
         )
         kw.update(over)
         self.deps = Deps(**kw)
@@ -122,6 +123,22 @@ def test_happy_path_starts_in_order_prints_addresses_and_stops_everything_on_ctr
     assert "Ctrl+C" in env.text and "Остановка" in env.text
     assert env.procs["api"].events == ["terminate"] and env.procs["worker"].events == ["terminate"]
     assert (tmp_path / "logs" / "api.log").exists() and (tmp_path / "logs" / "worker.log").exists()
+
+
+def test_database_schema_is_upgraded_before_the_services_start(tmp_path):
+    """После обновления программы (новая миграция) владелец просто запускает start_demo: схема обновляется сама."""
+    order = []
+    code, env = go(tmp_path, migrate=lambda: order.append("migrate") or "Схема базы обновлена: ревизия 0005 -> 0006.")
+    assert code == 0 and order == ["migrate"]
+    assert "Схема базы обновлена: ревизия 0005 -> 0006." in env.text and [n for n, _, _ in env.started] == ["api", "worker"]
+
+
+def test_schema_that_cannot_be_upgraded_stops_with_a_plain_message(tmp_path):
+    def fail():
+        raise RuntimeError("схема базы старее базовой ревизии")
+    code, env = go(tmp_path, migrate=fail)
+    assert code == 1 and env.started == []
+    assert "Не удалось обновить схему базы: схема базы старее базовой ревизии" in env.text
 
 
 def test_services_are_stopped_in_reverse_order(tmp_path):
@@ -338,7 +355,7 @@ def _real_env(tmp_path, port, **over):
         time.sleep(0.05)
     kw = dict(popen=popen, http_ready=sd._http_ready, worker_status=lambda p: {"ready": True}, which=lambda n: None, load_settings=lambda: None,
               port_busy=lambda p: False, sleep=sleep, out=lines.append, lan_ip=lambda: "10.0.0.2", render_qr=lambda u: None,
-              open_browser=lambda u: None, platform="linux", python=sys.executable, root=tmp_path)
+              open_browser=lambda u: None, platform="linux", python=sys.executable, root=tmp_path, migrate=lambda: "")
     kw.update(over)
     return Deps(**kw), popen_log, lines
 

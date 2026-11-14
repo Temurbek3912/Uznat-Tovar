@@ -20,7 +20,7 @@ from celery.signals import worker_init, worker_process_init, worker_ready
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings, resolve_project_path
-from app.db.models import Product, ProductBarcodeORM
+from app.db.models import PRODUCT_ARCHIVED, Product, ProductBarcodeORM
 from app.db.session import SessionLocal
 from app.pipeline.detector import ProductDetector
 from app.pipeline.embedder import ImageEmbedder
@@ -144,9 +144,11 @@ def _refresh_exclusions(db: Session) -> None:
     from app.services.product_images import PhotoRegistry
     try:
         _matcher.excluded = frozenset(PhotoRegistry(db).excluded_sources())
+        _matcher.excluded_products = frozenset(
+            pid for (pid,) in db.query(Product.id).filter(Product.status == PRODUCT_ARCHIVED).all())
     except Exception as exc:  # noqa: BLE001
         db.rollback()
-        logger.error("Не удалось прочитать выведенные из эталонов фото: %s", type(exc).__name__)
+        logger.error("Не удалось прочитать выведенные из эталонов фото и товары в архиве: %s", type(exc).__name__)
 
 
 def _resync_index_after_failure(size_before: int, exc: BaseException) -> None:
@@ -505,7 +507,7 @@ def identify_product_task(self, ref: str) -> dict:
         del source
 
         def lookup(ids: list[str]) -> dict:
-            rows = db.query(Product).filter(Product.id.in_(ids)).all()
+            rows = db.query(Product).filter(Product.id.in_(ids), Product.status != PRODUCT_ARCHIVED).all()
             return {r.id: ProductInfo(id=r.id, name=r.name, brand=r.brand, expected_price=r.expected_price) for r in rows}
 
         _refresh_index()

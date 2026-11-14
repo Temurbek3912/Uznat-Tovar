@@ -24,6 +24,10 @@ CSP не запрещает. Чего здесь сознательно НЕТ: 
 Cache-Control: no-store (аудит 2026-11-08) — на ответах входа и управления пользователями (/api/v1/auth/*, /api/v1/users*):
 там токены, секрет второго фактора и коды восстановления; на общем компьютере магазина они не должны оставаться в кеше браузера
 или прокси (RFC 6749, §5.1 требует того же для ответов с токеном).
+
+Cache-Control: no-cache (2026-11-14) — на страницах и скриптах /ui: браузер каждый раз сверяется с сервером (ETag, ответ 304 без
+тела — дёшево). Без него браузер по своей эвристике держал старые страницы после обновления программы: найдено вживую — после
+обновления «Настроек» браузер показал прежнюю страницу без QR-кода второго фактора.
 """
 from __future__ import annotations
 
@@ -37,13 +41,18 @@ SECURITY_HEADERS: tuple[tuple[bytes, bytes], ...] = (
 HSTS_HEADER: tuple[bytes, bytes] = (b"strict-transport-security", b"max-age=15552000")
 NO_STORE_HEADERS: tuple[tuple[bytes, bytes], ...] = ((b"cache-control", b"no-store"), (b"pragma", b"no-cache"))
 NO_STORE_PREFIXES = ("/api/v1/auth", "/api/v1/users")
+REVALIDATE_HEADERS: tuple[tuple[bytes, bytes], ...] = ((b"cache-control", b"no-cache"),)
+REVALIDATE_PREFIXES = ("/ui/", "/ui")
 
 
 def _extra_for(scope) -> tuple[tuple[bytes, bytes], ...]:
     scope = scope or {}
     extra = SECURITY_HEADERS + ((HSTS_HEADER,) if scope.get("scheme") == "https" else ())
-    if str(scope.get("path") or "").startswith(NO_STORE_PREFIXES):
+    path = str(scope.get("path") or "")
+    if path.startswith(NO_STORE_PREFIXES):
         extra += NO_STORE_HEADERS
+    elif path.startswith(REVALIDATE_PREFIXES):
+        extra += REVALIDATE_HEADERS
     return extra
 
 

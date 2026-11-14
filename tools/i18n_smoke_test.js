@@ -270,7 +270,7 @@ function make(opts) {
   });
 
   await test("узбекская кириллица: в словаре нет латиницы, кроме подстановок и технических слов (коды, адреса, команды)", async () => {
-    const allowed = /^(?:\{\w+\}|https?|HTTPS?|Wi-Fi|Windows|IPv4-?|Address|KOMPYUTER-IP|IP|LOGIN|API|VPN|FA|ui\/admin\.html|Redis|worker|AUTH_SECRET_KEY|Google|Microsoft|Authenticator|docker|compose|up|-d|configs\/config\.yaml|localhost|python|Zoom|iPhone|JPG|PNG|WEBP|HEIC|catalog|product_images|workerni|EAN-\d+|UPC-A|M200|ALLOW_DEBUG_EMBEDDER|docs\/[\w./]+|scripts\.\w+|\.env|env|-m|--dir|dir)$/;
+    const allowed = /^(?:\{\w+\}|https?|HTTPS?|Wi-Fi|Windows|IPv4-?|Address|KOMPYUTER-IP|IP|QR-?|LOGIN|API|VPN|FA|ui\/admin\.html|Redis|worker|AUTH_SECRET_KEY|Google|Microsoft|Authenticator|docker|compose|up|-d|configs\/config\.yaml|localhost|python|Zoom|iPhone|JPG|PNG|WEBP|HEIC|catalog|product_images|workerni|EAN-\d+|UPC-A|M200|ALLOW_DEBUG_EMBEDDER|docs\/[\w./]+|scripts\.\w+|\.env|env|-m|--dir|dir)$/;
     for (const [k, v] of Object.entries(CYRL)) {
       const text = typeof v === "string" ? v : Object.values(v).join(" ");
       const stripped = text.replace(/\{\w+\}/g, " ");

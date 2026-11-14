@@ -164,6 +164,8 @@ a.btn { text-decoration: none; text-align: center; }                      /* к�
 .settings__form { display: flex; flex-direction: column; gap: var(--sp-3); width: 100%; max-width: 26rem; }
 .settings__form .btn--primary { width: 100%; }
 /* «Безопасность входа»: ключ второго фактора и список сеансов (документ 18) */
+.mfa-qr { display: block; width: 200px; height: 200px; padding: 8px; background: var(--qr-paper); border-radius: var(--r-m); }
+.mfa-qr[hidden] { display: none; }
 .secret { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--fs-l); letter-spacing: 0.06em; word-break: break-all; user-select: all; }
 .recovery { margin: 0; padding-left: 1.6em; columns: 2; column-gap: var(--sp-5); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--fs-l); user-select: all; }
 .recovery li { padding: 2px 0; break-inside: avoid; }

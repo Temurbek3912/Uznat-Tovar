@@ -153,6 +153,9 @@ class Settings(BaseSettings):
     naming_vision_url: str = "http://127.0.0.1:1234/v1"
     naming_vision_model: str = "qwen/qwen3-vl-4b"
     naming_vision_timeout_seconds: float = 40.0
+    # Ниже какой уверенности модели ответ считается «не удалось определить»: "high" или "medium". Замер 2026-11-14 (документ 07,
+    # §10.6, docs/benchmark/naming_report_2026-11-14.md): ответы «medium» были неверны в 4 случаях из 4 — принимаем только «high».
+    naming_min_confidence: str = "high"
 
     # ML-конфиги подтягиваются из YAML (см. load_yaml_config), но могут быть
     # переопределены через ENV вида MODELS__DETECTOR__CONFIDENCE_THRESHOLD=0.4
@@ -232,6 +235,7 @@ def get_settings() -> Settings:
         naming_vision_timeout_seconds: float = naming.get(
             "vision_timeout_seconds", Settings.model_fields["naming_vision_timeout_seconds"].default
         )
+        naming_min_confidence: str = naming.get("min_confidence", Settings.model_fields["naming_min_confidence"].default)
 
     return _SettingsWithYamlDefaults(
         detector=DetectorConfig(**models["detector"]) if "detector" in models else None,

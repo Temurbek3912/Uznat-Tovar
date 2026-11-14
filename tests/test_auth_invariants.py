@@ -208,7 +208,15 @@ def test_auth_responses_are_never_cached():
     from app.core.security_headers import headers_for
     for path in ("/api/v1/auth/login", "/api/v1/auth/2fa/confirm", "/api/v1/users", "/api/v1/users/1/sessions"):
         assert headers_for({"path": path, "scheme": "http"}).get("cache-control") == "no-store", path
-    assert "cache-control" not in headers_for({"path": "/ui/index.html", "scheme": "http"})
+    assert "cache-control" not in headers_for({"path": "/api/v1/catalog/products", "scheme": "http"})
+
+
+def test_pages_are_revalidated_so_an_update_is_seen_at_once():
+    """Страницы и скрипты /ui — no-cache: после обновления программы браузер не показывает старую страницу (найдено вживую
+    2026-11-14: «Настройки» без QR-кода второго фактора из кэша браузера). Это не no-store: в них нет секретов."""
+    from app.core.security_headers import headers_for
+    for path in ("/ui/index.html", "/ui/settings.js", "/ui/shop.html", "/ui"):
+        assert headers_for({"path": path, "scheme": "http"}).get("cache-control") == "no-cache", path
 
 
 def test_admin_only_rights_include_catalog_editing_and_are_derived_from_the_role_table():
@@ -240,7 +248,7 @@ def test_every_route_with_an_admin_only_right_goes_through_the_listener_check():
     assert set(found) == names - {"CAMERA_MANAGE"}, found               # маршрутов камер в этой версии ещё нет (право зарезервировано)
     assert "routes_catalog.py" in found["CATALOG_WRITE"]
     catalog = (API / "routes_catalog.py").read_text(encoding="utf-8")
-    assert catalog.count("require_permission(Permission.CATALOG_WRITE)") == 6          # + PATCH …/images/{фото} (шаг Р-7)
+    assert catalog.count("require_permission(Permission.CATALOG_WRITE)") == 7          # + PATCH …/images/{фото}, POST …/status (Р-7)
 
 
 def test_password_change_pass_is_accepted_only_by_the_initial_password_route():

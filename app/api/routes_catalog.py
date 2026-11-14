@@ -21,6 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from starlette.concurrency import run_in_threadpool
@@ -38,7 +39,7 @@ from app.core.frame_store import FrameStoreError, frame_ref, get_frame_store
 from app.core.memory_upload import read_frame
 from app.core.schemas import ProductIn
 from app.core.security import CurrentUser, Permission
-from app.db.models import Product, ProductBarcodeORM, ProductImage
+from app.db.models import PRODUCT_ACTIVE, PRODUCT_ARCHIVED, Product, ProductBarcodeORM, ProductImage
 from app.db.session import get_db
 from app.pipeline.imageio import load_rgb
 from app.services.barcode import (
@@ -106,6 +107,8 @@ class ProductSummary(BaseModel):
     barcodes: list[str] = []       # привязанные штрих-коды (нормализованные)
     reference_count: int | None = None   # фото, по которым товар узнаётся (активные эталоны); None — фото ещё не в базе
     cover_image_id: str | None = None    # фото для миниатюры (витринное, иначе первый эталон); None — нет файла в программе
+    status: str = PRODUCT_ACTIVE         # active — в каталоге; archived — в архиве (не распознаётся, покупатель не видит)
+    version: int = 1                     # номер правки: прислать в expected_version, чтобы не перезаписать чужую правку
 
 
 class ImageUpdate(BaseModel):
@@ -126,6 +129,15 @@ class ProductUpdate(BaseModel):
     clear_price: bool = False
     add_barcode: str | None = None                # привязать ещё один штрих-код (проверяется контрольная цифра и занятость)
     remove_barcode: str | None = None             # отвязать штрих-код (ошибочно привязанный)
+    expected_version: int | None = None           # версия, которую видел человек; товар успели изменить — 409, а не перезапись
+
+
+class StatusUpdate(BaseModel):
+    """Убрать товар в архив (archived) или вернуть в каталог (active). Товар не удаляется: фото, штрихкоды и история остаются."""
+
+    status: str
+    reason: str | None = None                     # причина — для журнала действий
+    expected_version: int | None = None
 
 
 def _media_root() -> Path:
@@ -146,7 +158,7 @@ def _summary(product: Product, barcodes: list[str] | None = None, photos: PhotoS
     return ProductSummary(
         id=product.id, sku=product.sku, name=product.name, brand=product.brand, category=product.category,
         expected_price=product.expected_price, photo_count=count, barcodes=sorted(barcodes or []),
-        reference_count=refs, cover_image_id=cover,
+        reference_count=refs, cover_image_id=cover, status=product.status or PRODUCT_ACTIVE, version=product.version or 1,
     )
 
 
@@ -268,6 +280,7 @@ async def search_products(
     limit: int = 20,
     offset: int = 0,
     sort: str = "sku",
+    status: str = PRODUCT_ACTIVE,
     db: Session = Depends(get_db),
     _user: CurrentUser = Depends(require_permission(Permission.CATALOG_READ)),
 ) -> list[ProductSummary]:
@@ -279,10 +292,16 @@ async def search_products(
 
     Цифры в запросе ищутся и по штрихкодам: полный код в любом написании (пробелы, UPC-A, GTIN-14, лишние ведущие нули —
     barcode.search_keys) и часть кода от 4 цифр («содержит»). Товары с точным совпадением штрихкода — первыми.
+
+    status: active (по умолчанию — товары в каталоге), archived (архив), all (все).
     """
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
     query = db.query(Product)
+    if status in (PRODUCT_ACTIVE, PRODUCT_ARCHIVED):
+        query = query.filter(Product.status == status)
+    elif status != "all":
+        raise ApiError(422, "product_status_invalid", "Состояние товара: active (в каталоге), archived (в архиве) или all.")
     pattern = text_search.like_pattern(q)
     exact_codes = search_keys(q)
     if pattern:
@@ -422,6 +441,7 @@ def update_product(
     product = db.get(Product, product_id)
     if product is None:
         raise ApiError(404, "product_not_found", "Товар не найден.")
+    _check_version(product, body.expected_version)
     # Сначала проверяем ВСЁ и только потом применяем: ошибка в цене не должна оставить применённым новое название.
     changes: dict[str, object] = {}
     try:
@@ -484,12 +504,61 @@ def update_product(
 
 
 def _apply_product_changes(db: Session, product: Product, changes: dict, remove_link, add_code: str | None) -> None:
+    changed = False
     for field, value in changes.items():
+        changed = changed or getattr(product, field) != value
         setattr(product, field, value)
     if remove_link is not None:
         db.delete(remove_link)
+        changed = True
     if add_code:
         db.add(ProductBarcodeORM(barcode=add_code, product_id=product.id))
+        changed = True
+    if changed:
+        _bump(product)
+
+
+def _bump(product: Product) -> None:
+    product.version = (product.version or 1) + 1
+    product.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _check_version(product: Product, expected: int | None) -> None:
+    """Человек правил товар, который успели изменить (другой сотрудник, другая вкладка): 409 вместо тихой перезаписи."""
+    if expected is not None and expected != (product.version or 1):
+        raise _concurrent_update_error()
+
+
+_STATUS_ACTIONS = {PRODUCT_ARCHIVED: "catalog.product.archived", PRODUCT_ACTIVE: "catalog.product.restored"}
+
+
+@router.post("/products/{product_id}/status", response_model=ProductSummary)
+def set_product_status(
+    product_id: str,
+    body: StatusUpdate,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(require_permission(Permission.CATALOG_WRITE)),
+) -> ProductSummary:
+    """Убрать товар в архив или вернуть. В архиве товар не распознаётся (ни по виду, ни по штрихкоду), покупатель его не видит,
+    в списке «Товары» он только в разделе «Архив». Ничего не удаляется: вернули — всё работает, как раньше (индекс не
+    пересобирается, действует со следующего кадра). Запись в журнале действий — в той же транзакции."""
+    if body.status not in _STATUS_ACTIONS:
+        raise ApiError(422, "product_status_invalid", "Состояние товара: active (в каталоге), archived (в архиве) или all.")
+    product = db.get(Product, product_id)
+    if product is None:
+        raise ApiError(404, "product_not_found", "Товар не найден.")
+    _check_version(product, body.expected_version)
+    before = product.status or PRODUCT_ACTIVE
+    if before != body.status:
+        from app.services import audit            # здесь, а не в начале файла: журнал тянет SQLAlchemy-запросы
+        product.status = body.status
+        _bump(product)
+        audit.record(db, _STATUS_ACTIONS[body.status], actor=audit.AuditActor(user.id, "api"), target_type="product",
+                     target_id=product.id, before={"status": before}, after={"status": body.status},
+                     reason=(body.reason or "").strip() or None)
+        db.commit()
+        db.refresh(product)
+    return _summary(product, _barcodes_of(db, [product.id]).get(product.id), _photo_summaries(db, [product.id]).get(product.id))
 
 
 @router.get("/products/tasks/{task_id}")
@@ -646,7 +715,7 @@ def run_identify(db: Session, data: bytes, lang: str = "ru") -> dict:
     for code in codes:
         owner = owners.get(code)
         product = db.get(Product, owner[0]) if owner else None
-        if product is not None:
+        if product is not None and product.status != PRODUCT_ARCHIVED:      # товар в архиве — как будто его нет в базе
             info = {"id": product.id, "name": product.name, "brand": product.brand, "expected_price": product.expected_price, "score": 1.0}
             return {"status": "matched", "by": "barcode", "product": info, "score": 1.0, "candidates": [info], "demo_mode": False,
                     "barcode": {"code": code, "known": True}}
@@ -708,11 +777,6 @@ def add_outside_name(result: dict, jpeg: bytes | None, codes: list[str], lang: s
         if any(names_overlap(guess, c) for c in candidates if c):
             return result
     return {**result, "status": "not_in_catalog", "guess": guess.as_dict(), "product": None, "candidates": []}
-    from app.services.product_namer import name_product     # noqa: PLC0415
-    guess = name_product(jpeg, codes, lang, get_settings())
-    if guess is not None:
-        result = {**result, "status": "not_in_catalog", "guess": guess.as_dict(), "product": None}
-    return result
 
 
 @router.post("/identify")

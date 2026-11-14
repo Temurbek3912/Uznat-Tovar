@@ -134,11 +134,15 @@
           <button id="editSave" type="button" class="btn btn--primary" data-i18n="common.save">Сохранить</button>
           <button id="editCancel" type="button" class="btn btn--secondary" data-i18n="common.cancel">Отмена</button>
           <button id="editAddPhotos" type="button" class="btn btn--secondary"></button>
+          <button id="editArchive" type="button" class="btn btn--secondary"></button>
         </div>
       </section>
 
       <section class="area" id="listCard">
-        <h2 class="section-title" data-i18n="products.list_title">Товары в каталоге</h2>
+        <div class="row">
+          <h2 class="section-title" id="listTitle">Товары в каталоге</h2>
+          <button id="listViewBtn" type="button" class="btn btn--secondary"></button>
+        </div>
         <p class="notice notice--danger" id="listError" role="alert" hidden></p>
         <div id="productList" hidden></div>
         <p class="blank" id="listEmpty" hidden data-i18n="products.list_empty">Пока нет ни одного товара. Добавьте первый.</p>

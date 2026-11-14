@@ -96,3 +96,17 @@ def provisioning_uri(secret_b32: str, account: str, issuer: str = "Uznat tovar")
 def group_secret(secret_b32: str) -> str:
     """Секрет группами по 4 символа — удобнее вводить вручную: «JBSW Y3DP EHPK 3PXP»."""
     return " ".join(secret_b32[i:i + 4] for i in range(0, len(secret_b32), 4))
+
+
+def qr_data_uri(text: str) -> str:
+    """QR-код ссылки otpauth:// картинкой SVG (data:-адрес): владелец наводит камеру телефона на экран компьютера вместо того, чтобы
+    набирать 32 знака ключа. Нет библиотеки qrcode — пустая строка (страница покажет только ключ). Картинка строится в памяти
+    и не сохраняется; секрет и так показывается один раз тем же ответом."""
+    try:
+        import qrcode
+        import qrcode.image.svg
+    except ImportError:  # pragma: no cover — qrcode необязательна (requirements.txt)
+        return ""
+    image = qrcode.make(text, image_factory=qrcode.image.svg.SvgPathFillImage, box_size=10, border=2)
+    svg = image.to_string()
+    return "data:image/svg+xml;base64," + base64.b64encode(svg).decode("ascii")

@@ -121,15 +121,19 @@ class Col:
     def __ne__(self, other):
         return lambda row: getattr(row, self.name) != other
 
+    def __eq__(self, other):                                  # Product.status == "active" (миграция 0006)
+        return lambda row: getattr(row, self.name) == other
+
     __hash__ = object.__hash__
 
 
 class FakeProduct:
-    id = sku = name = brand = category = expected_price = created_at = None      # заменяются столбцами ниже
+    id = sku = name = brand = category = expected_price = created_at = status = version = updated_at = None   # столбцы ниже
 
     def __init__(self, sku, name, brand="X", category="Напитки", expected_price=None, id=None, created_at=0):
         self.id = id or f"id-{sku}"
         self.sku, self.name, self.brand, self.category, self.expected_price, self.created_at = sku, name, brand, category, expected_price, created_at
+        self.status, self.version, self.updated_at = "active", 1, None
 
 
 class FakeBarcode:
@@ -144,7 +148,7 @@ class FakeProductImage:
     id = product_id = sha256 = role = is_active = source_ref = storage_path = created_at = None
 
 
-for _cls, _names in ((FakeProduct, "id sku name brand category expected_price created_at"), (FakeBarcode, "barcode product_id"),
+for _cls, _names in ((FakeProduct, "id sku name brand category expected_price created_at status version updated_at"), (FakeBarcode, "barcode product_id"),
                      (FakeProductImage, "id product_id sha256 role is_active source_ref storage_path created_at")):
     for _n in _names.split():
         setattr(_cls, _n, Col(_n, _cls))
@@ -344,7 +348,8 @@ def _build_env(env, tmp_path: Path):
 
     inject("app.api.deps", require_permission=_fake_require_permission)
     inject("app.core.config", get_settings=lambda: env.settings, resolve_project_path=lambda p: Path(p))
-    inject("app.db.models", Product=FakeProduct, ProductBarcodeORM=FakeBarcode, ProductImage=FakeProductImage)
+    inject("app.db.models", Product=FakeProduct, ProductBarcodeORM=FakeBarcode, ProductImage=FakeProductImage,
+           PRODUCT_ACTIVE="active", PRODUCT_ARCHIVED="archived")
     inject("app.db.session", get_db=lambda: env.db)
 
     def make_task(name, result=None):

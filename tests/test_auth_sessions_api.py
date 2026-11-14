@@ -120,6 +120,7 @@ def enroll(e, username, password=PASSWORD):
     enroll_token = first.json()["enroll_token"]
     setup = e.client.post("/api/v1/auth/2fa/setup", json={}, headers=bearer(enroll_token))
     assert setup.status_code == 200, setup.text
+    assert setup.json()["qr"].startswith("data:image/svg+xml;base64,")      # QR-код ключа: не набирать 32 знака вручную
     e.secrets[username] = setup.json()["secret"]
     done = e.client.post("/api/v1/auth/2fa/confirm", json={"code": code(e, username)}, headers=bearer(enroll_token))
     assert done.status_code == 200 and done.json()["access_token"] and len(done.json()["recovery_codes"]) == 10, done.text

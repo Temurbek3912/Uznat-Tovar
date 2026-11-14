@@ -53,6 +53,7 @@ naming:
   vision_url: "http://127.0.0.1:1234/v1"     # локальная модель «зрение + текст» (LM Studio). Кадр не покидает компьютер. "" — выключить
   vision_model: "qwen/qwen3-vl-4b"
   vision_timeout_seconds: 40                 # первый запрос после запуска LM Studio загружает модель — бывает долгим
+  min_confidence: high                       # ниже — «не удалось определить». Замер 2026-11-14: «medium» неверны 4 из 4 (07, §10.6)
 
 pipeline:
   max_image_side_px: 2048

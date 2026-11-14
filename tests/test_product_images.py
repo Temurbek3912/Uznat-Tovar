@@ -149,7 +149,7 @@ def test_migration_0005_applies_to_an_existing_database_and_keeps_its_data(datab
         c.execute(text("INSERT INTO products (id, sku, name, brand, category, created_at) "
                        "VALUES ('p1', 'KOLA', 'Кола', '-', '-', CURRENT_TIMESTAMP)"))
     result = migrate.upgrade_to_head(engine)
-    assert result.before == "0004" and result.after == "0005" == migrate.head_revision()
+    assert result.before == "0004" and result.after == migrate.head_revision()
     tables = set(inspect(engine).get_table_names())
     assert {"product_images", "image_embeddings", "embedding_models"} <= tables
     with engine.connect() as c:

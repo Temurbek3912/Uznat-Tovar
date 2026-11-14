@@ -544,8 +544,8 @@ class AuthService:
         security.totp_pending_enc = self._encrypt(secret, secret_key)
         security.updated_at = utcnow()
         self.db.commit()
-        return {"secret": secret, "secret_grouped": totp.group_secret(secret),
-                "otpauth_uri": totp.provisioning_uri(secret, user.username)}
+        uri = totp.provisioning_uri(secret, user.username)
+        return {"secret": secret, "secret_grouped": totp.group_secret(secret), "otpauth_uri": uri, "qr": totp.qr_data_uri(uri)}
 
     def confirm_totp_setup(self, user_id: str, code: str, secret_key: str, *, keep_session_id: str | None = None) -> dict:
         """Шаг 2: код из приложения подтверждает, что секрет сохранён верно. Включает второй фактор, создаёт коды восстановления

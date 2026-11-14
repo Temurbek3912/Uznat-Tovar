@@ -77,18 +77,20 @@
         if (!r.ok) { initialMsg = r.params ? { key: r.key, params: r.params } : { key: r.key }; renderAccount(); return null; }
         initialMsg = null;
         if (r.signedIn) return refreshAccount();
-        loginMsg = { key: "login.password_set_sign_in" }; renderAccount();                 // нужен второй фактор — вход с новым паролем
+        loginMsg = { key: "login.password_set_sign_in", ok: true }; renderAccount();                 // нужен второй фактор — вход с новым паролем
         var u = $("loginUser"); if (u && u.focus) u.focus();
         return null;
       }).then(function (x) { btn.disabled = false; return x; }, function (e) { btn.disabled = false; throw e; });
     }
     function renderAccount() {
       var signedIn = account.name !== null;
-      setHidden($("loginPanel"), signedIn || !account.known || changingPassword()); setHidden($("accountInfo"), !signedIn);
+      setHidden($("loginPanel"), signedIn || !account.known || changingPassword() || enrolling()); setHidden($("accountInfo"), !signedIn);
       renderInitial();
       if (signedIn) $("accountName").textContent = t("settings.signed_in", { name: account.name });
       var err = $("loginError"), text = loginMsg ? t(loginMsg.key, loginMsg.params) : "";
       err.textContent = text; setHidden(err, !text);
+      err.className = loginMsg && loginMsg.ok ? "notice" : "notice notice--danger";      // «пароль установлен» — не ошибка
+      err.setAttribute("role", loginMsg && loginMsg.ok ? "status" : "alert");
       renderSecurity();
     }
     function revealRail(perms) {
@@ -142,12 +144,12 @@
     // ----- безопасность входа: второй фактор и сеансы (документ 18). Только после входа; данные — с сервера, тексты — ключами.
     // enrolling: администратор без второго фактора вошёл паролем и получил пропуск настройки (решение В-3) — сеанса ещё нет,
     // запросы идут с пропуском; recovery: коды восстановления, показанные один раз (в памяти страницы, не в хранилище).
-    var security = { mfa: null, sessions: [], step: "idle", msg: null, done: null, secret: null, uri: null, recovery: null };
+    var security = { mfa: null, sessions: [], step: "idle", msg: null, done: null, secret: null, uri: null, qr: null, recovery: null };
     var MIN_PASSWORD = 8;                                        // как MIN_PASSWORD_LENGTH в app/core/security.py (сервер проверяет сам)
     var LOCALES = { ru: "ru", uz: "uz-Latn", "uz-Cyrl": "uz-Cyrl", en: "en" };
     var KIND_KEYS = { phone: "security.kind_phone", tablet: "security.kind_tablet", computer: "security.kind_computer" };
     var SOURCE_KEYS = { local: "security.source_local", lan: "security.source_lan", remote: "security.source_remote" };
-    function resetSecurity() { security = { mfa: null, sessions: [], step: "idle", msg: null, done: null, secret: null, uri: null, recovery: null }; renderSecurity(); }
+    function resetSecurity() { security = { mfa: null, sessions: [], step: "idle", msg: null, done: null, secret: null, uri: null, qr: null, recovery: null }; renderSecurity(); }
     function enrolling() { return !auth.getToken() && !!auth.enrollToken(); }
     function api(path, method, body) {
       var headers = auth.authHeaders({ enroll: true });
@@ -214,7 +216,8 @@
       codes.forEach(function (c) { var li = doc.createElement("li"); li.textContent = String(c); list0.appendChild(li); });
       setHidden($("recoveryBox"), !codes.length);
       setHidden($("sessionsTitle"), enroll); setHidden($("sessionList"), enroll); setHidden($("sessionButtons"), enroll);
-      $("mfaStatus").textContent = security.mfa ? (mfa.enabled ? t("security.mfa_on", { date: when(mfa.enabled_at) }) : t("security.mfa_off")) : "";
+      $("mfaStatus").textContent = security.mfa && !enroll ? (mfa.enabled ? t("security.mfa_on", { date: when(mfa.enabled_at) }) : t("security.mfa_off")) : "";
+      setHidden($("mfaStatus"), !$("mfaStatus").textContent);          // при обязательной настройке «достаточно пароля» — неправда
       setHidden($("mfaUnavailable"), !security.mfa || mfa.enabled || mfa.available !== false);
       setHidden($("mfaEnableBtn"), !security.mfa || mfa.enabled || mfa.available === false || !idle || enroll);
       setHidden($("mfaDisableBtn"), !security.mfa || !mfa.enabled || !idle || !!mfa.required);
@@ -222,6 +225,9 @@
       setHidden($("mfaConfirmForm"), security.step !== "confirm");
       setHidden($("mfaDisableForm"), security.step !== "disable");
       $("mfaSecret").textContent = security.step === "confirm" ? (security.secret || "") : "";
+      var qr = security.step === "confirm" && /^data:image\/svg\+xml;base64,/.test(security.qr || "") ? security.qr : "";
+      if (qr) $("mfaQr").setAttribute("src", qr); else $("mfaQr").removeAttribute("src");
+      setHidden($("mfaQr"), !qr); setHidden($("mfaQrHint"), !qr);
       $("mfaLink").setAttribute("href", security.step === "confirm" && /^otpauth:\/\//.test(security.uri || "") ? security.uri : "#");
       var err = $("securityError"), errText = security.msg ? t(security.msg.key, security.msg.params) : "";
       err.textContent = errText; setHidden(err, !errText);
@@ -258,7 +264,7 @@
       if (evt && evt.preventDefault) evt.preventDefault();
       var pass = $("mfaSetupPass").value; $("mfaSetupPass").value = "";
       return act(api("/api/v1/auth/2fa/setup", "POST", { password: pass }), function (data) {
-        security.secret = String(data.secret_grouped || data.secret || ""); security.uri = String(data.otpauth_uri || "");
+        security.secret = String(data.secret_grouped || data.secret || ""); security.uri = String(data.otpauth_uri || ""); security.qr = String(data.qr || "");
         security.step = "confirm"; renderSecurity();
         var c = $("mfaConfirmCode"); if (c && c.focus) c.focus();
       });
@@ -267,7 +273,7 @@
       if (evt && evt.preventDefault) evt.preventDefault();
       var code = $("mfaConfirmCode").value; $("mfaConfirmCode").value = "";
       return act(api("/api/v1/auth/2fa/confirm", "POST", { code: code }), function (data) {
-        security.step = "idle"; security.secret = security.uri = null;
+        security.step = "idle"; security.secret = security.uri = security.qr = null;
         security.recovery = Array.isArray(data.recovery_codes) ? data.recovery_codes.map(String) : null;
         security.done = { key: "security.mfa_enabled_done", params: { n: Number(data.other_sessions_ended) || 0 } };
         if (typeof data.access_token === "string" && data.access_token) {         // пропуск настройки сменился на обычный сеанс
@@ -279,7 +285,7 @@
     }
     function startEnroll() {
       return act(api("/api/v1/auth/2fa/setup", "POST", {}), function (data) {
-        security.secret = String(data.secret_grouped || data.secret || ""); security.uri = String(data.otpauth_uri || "");
+        security.secret = String(data.secret_grouped || data.secret || ""); security.uri = String(data.otpauth_uri || ""); security.qr = String(data.qr || "");
         security.step = "confirm"; renderSecurity();
         var c = $("mfaConfirmCode"); if (c && c.focus) c.focus();
       });

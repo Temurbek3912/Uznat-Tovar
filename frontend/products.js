@@ -88,6 +88,7 @@
     var msgs = {};                             // id -> {key, params} | {text}: сообщения хранятся логически и перерисовываются при смене языка
     var listNoteKind = "";                     // "", "ok" или "err" — вид строки под списком
     var thumbCache = {}, loaded = false;
+    var view = "active", editingStatus = "active", editingVersion = null;   // раздел списка: каталог или архив (миграция 0006)
     var editingImages = null, imagesFailed = false, imageUrls = {}, imageBusy = false;   // фото товара в карточке правки (из базы)
 
     // ----- вход (токен, адрес и запрос входа — в общем модуле Auth)
@@ -332,13 +333,14 @@
     }
     function renderListState() {                        // до первой удачной загрузки не показываем ни список, ни «пока пусто»: это не пустой каталог, а ожидание или сбой
       show("listEmpty", loaded && items.length === 0);
+      $("listEmpty").textContent = t(view === "archived" ? "products.archive_empty" : "products.list_empty");
       show("productList", loaded && items.length > 0);
     }
     function loadProducts() {
       setMsg("listError", null);
       var all = [];
       function page() {
-        return apiFetch("/api/v1/catalog/products?limit=" + PAGE_SIZE + "&offset=" + all.length + "&sort=new").then(function (res) {
+        return apiFetch("/api/v1/catalog/products?limit=" + PAGE_SIZE + "&offset=" + all.length + "&sort=new&status=" + view).then(function (res) {
           if (res.status === 403) { showAccess(); return false; }
           if (!res.ok) { setMsg("listError", { key: "products.list_error" }); return false; }
           return res.json().then(function (batch) {
@@ -355,7 +357,7 @@
         if (!ok) { renderListState(); return; }
         items = all; loaded = true; list.setItems(items); renderListState();
         if (capped) setMsg("listNote", { key: "products.list_capped", params: { n: MAX_ITEMS } }); else if (listNoteKind === "" && msgs.listNote && msgs.listNote.key === "products.list_capped") setMsg("listNote", null);
-        if (!items.length && !progress) openAddPanel(true);
+        if (!items.length && !progress && view === "active") openAddPanel(true);
       }, function (e) { if (!isNetError(e) || e.key !== "login.expired") setMsg("listError", isNetError(e) ? { key: e.key } : { key: "products.list_error" }); renderListState(); });
     }
     var list = ProductList.create(doc, $("productList"), {
@@ -381,6 +383,7 @@
     function renderEditTitle() { $("editTitle").textContent = t("products.edit_title", { name: editingName }); }
     function openEdit(p) {
       editingId = p.id; editingName = p.name || "";
+      editingStatus = p.status || "active"; editingVersion = typeof p.version === "number" ? p.version : null; relabel();
       editingCodes = Array.isArray(p.barcodes) ? p.barcodes.slice() : [];
       renderEditCodes(); renderEditTitle(); $("editBarcode").value = "";
       $("editName").value = p.name || "";
@@ -493,6 +496,7 @@
     function saveEdit() {
       if (!editingId) return Promise.resolve();
       var id = editingId, body = buildEditBody($("editName").value, $("editPrice").value, $("editBarcode").value);
+      if (editingVersion !== null) body.expected_version = editingVersion;   // товар успели изменить — сервер ответит 409, а не перезапишет
       setMsg("editError", null); $("editSave").disabled = true;
       return apiFetch("/api/v1/catalog/products/" + encodeURIComponent(id), { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(function (res) {
         if (res.status === 403) { showAccess(); return null; }
@@ -501,6 +505,29 @@
         return loadProducts();
       }).catch(function (e) { setMsg("editError", netMessage(e, "products.save_failed")); })
         .then(function () { $("editSave").disabled = false; });
+    }
+
+    // Архив (миграция 0006): товар не удаляется — перестаёт узнаваться и не виден покупателю; можно вернуть.
+    function toggleArchive() {
+      if (!editingId) return Promise.resolve();
+      var id = editingId, next = editingStatus === "archived" ? "active" : "archived";
+      if (next === "archived" && win.confirm && !win.confirm(t("products.archive_confirm", { name: editingName }))) return Promise.resolve();
+      var body = { status: next };
+      if (editingVersion !== null) body.expected_version = editingVersion;
+      setMsg("editError", null); $("editArchive").disabled = true;
+      return apiFetch("/api/v1/catalog/products/" + encodeURIComponent(id) + "/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(function (res) {
+        if (res.status === 403) { showAccess(); return null; }
+        if (!res.ok) return readError(res).then(function (b) { setMsg("editError", apiError(res.status, b)); return null; });
+        closeEdit(); setMsg("listNote", { key: next === "archived" ? "products.archived_done" : "products.restored_done" }, "ok");
+        return loadProducts();
+      }).catch(function (e) { setMsg("editError", netMessage(e, "products.save_failed")); })
+        .then(function () { $("editArchive").disabled = false; });
+    }
+    function switchView() {
+      view = view === "archived" ? "active" : "archived";
+      closeEdit(); setMsg("listNote", null); relabel();
+      loaded = false; renderListState();
+      return loadProducts();
     }
 
     // ----- вход, доступ, запуск
@@ -553,6 +580,9 @@
       label($("pickBtn"), "camera", t("products.pick_photos"));
       label($("submitBtn"), null, t("products.add"));
       label($("editAddPhotos"), "camera", t("products.add_photos"));
+      label($("editArchive"), null, t(editingStatus === "archived" ? "products.restore" : "products.archive"));
+      label($("listViewBtn"), null, t(view === "archived" ? "products.show_catalog" : "products.show_archive"));
+      $("listTitle").textContent = t(view === "archived" ? "products.show_archive" : "products.list_title");
       var mode = Theme.get(), theme = $("themeBtn");
       clear(theme);
       theme.appendChild(Icons.make(doc, mode === "dark" ? "moon" : mode === "light" ? "sun" : "monitor", { size: 20 }));
@@ -606,13 +636,15 @@
     }));
     $("editSave").addEventListener("click", guard(saveEdit));
     $("editCancel").addEventListener("click", closeEdit);
+    $("editArchive").addEventListener("click", guard(toggleArchive));
+    $("listViewBtn").addEventListener("click", guard(switchView));
     $("themeBtn").addEventListener("click", function () { Theme.next(); relabel(); });
     if (win.addEventListener) win.addEventListener("pagehide", function () { Object.keys(thumbCache).forEach(forgetThumb); forgetImages(); });
     syncPanels(); renderDuplicate(); paintAllMsgs();
 
     return {
       ready: init(),
-      state: function () { return { chosen: chosen.length, busy: busy, items: items.length, editingId: editingId, progress: progress && progress.type, addOpen: addOpen }; }
+      state: function () { return { chosen: chosen.length, busy: busy, items: items.length, editingId: editingId, progress: progress && progress.type, addOpen: addOpen, view: view }; }
     };
   }
 

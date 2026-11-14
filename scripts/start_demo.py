@@ -138,6 +138,23 @@ def _load_settings():
     return get_settings()
 
 
+class MigrateError(RuntimeError):
+    pass
+
+
+def _migrate() -> str:
+    """Схема базы — до последней ревизии (как bootstrap): после обновления программы владелец просто запускает start_demo.
+    -> текст для окна ("" — обновлять было нечего). Старая база с расхождениями — MigrateError, база не тронута."""
+    from app.db.migrate import upgrade_to_head
+    from app.db.session import engine
+    result = upgrade_to_head(engine)
+    if result.drift:
+        raise MigrateError("схема базы старее базовой ревизии — ничего не изменено. Запустите: python -m scripts.bootstrap")
+    if result.before != result.after:
+        return f"Схема базы обновлена: ревизия {result.before or 'нет'} -> {result.after}."
+    return ""
+
+
 def _preflight() -> int:
     from scripts import preflight
     return preflight.main()
@@ -155,6 +172,7 @@ class Deps:
     clock: Callable[[], float] = time.monotonic
     load_settings: Callable[[], object] = _load_settings
     preflight: Callable[[], int] = _preflight
+    migrate: Callable[[], str] = _migrate
     lan_ip: Callable[[], str | None] = phone_url.lan_ip
     render_qr: Callable[[str], str | None] = phone_url.render_qr
     worker_status: Callable[[Path], dict | None] = _worker_status
@@ -328,6 +346,13 @@ def run(opts: Options, deps: Deps | None = None, services: list[Service] | None 
             if not d.tcp_wait(host, port, 60.0):
                 out(f"{name} не отвечает на {host}:{port} за 60 с. Проверьте `docker compose ps` и журналы Docker.")
                 return 1
+        try:
+            message = d.migrate()
+        except Exception as exc:        # noqa: BLE001 — без нужной схемы API отвечает «не готов» на каждый запрос
+            out(f"Не удалось обновить схему базы: {exc}")
+            return 1
+        if message:
+            out(message)
 
     if d.port_busy(opts.port):
         out(f"Порт {opts.port} уже занят — возможно, демонстрация уже запущена в другом окне. "

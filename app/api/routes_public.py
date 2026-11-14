@@ -29,7 +29,7 @@ from starlette.concurrency import run_in_threadpool
 from app.core.errors import ApiError
 from app.core.memory_upload import read_frame
 from app.core.throttle import LoginThrottle
-from app.db.models import Product, Store
+from app.db.models import PRODUCT_ARCHIVED, Product, Store
 from app.db.session import get_db
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ def _price(value) -> float | None:
 
 
 def public_card(product: Product | None) -> dict | None:
-    if product is None:
+    if product is None or product.status == PRODUCT_ARCHIVED:      # товар в архиве покупатель не видит (последний рубеж)
         return None
     return {"name": product.name, "brand": product.brand or "", "category": product.category or "", "price": _price(product.expected_price)}
 
@@ -84,6 +84,8 @@ def public_result(db: Session, result: dict) -> dict:
         return {"status": "not_in_catalog", "by": None, "product": None, "candidates": [],
                 "guess": {"name": str(guess.get("name") or ""), "brand": str(guess.get("brand") or "")}}
     product = db.get(Product, result["product"]["id"]) if result.get("product") else None
+    if product is not None and product.status == PRODUCT_ARCHIVED:
+        product = None
     candidates = []
     if status == "uncertain":
         for item in result.get("candidates") or []:

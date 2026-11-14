@@ -124,6 +124,7 @@ def env(monkeypatch, tmp_path):
         db.commit()
         e.cola, e.fanta = cola.id, fanta.id
     e.tmp_path = tmp_path
+    e.Session = Session
     yield e
     fs.set_frame_store(None)
     routes_public.rate_limit.reset()
@@ -232,3 +233,15 @@ def test_customer_entrance_has_only_the_public_api_and_the_shop_page():
     proc = subprocess.run([sys.executable, "-c", CHECK_CUSTOMER_ENTRANCE], cwd=ROOT, env=env, capture_output=True, text=True,
                           encoding="utf-8", timeout=120)
     assert proc.returncode == 0 and "OK" in proc.stdout, proc.stdout + proc.stderr
+
+
+def test_barcode_of_an_archived_product_is_not_a_match(env):
+    """Товар в архиве (миграция 0006): его штрихкод не даёт карточку — дальше поиск по виду, как для чужого товара."""
+    with env.Session() as db:
+        db.get(Product, env.cola).status = "archived"
+        db.commit()
+    env.answer = lambda e: {"status": "unknown", "product": None, "score": 0.1, "candidates": [], "demo_mode": False}
+    resp = identify(env, barcode_jpeg())
+    assert resp.status_code == 200
+    assert resp.json()["status"] != "matched" and "Кола" not in resp.text
+    assert len(env.queued) == 1                                        # штрихкод не узнан — кадр ушёл на поиск по виду

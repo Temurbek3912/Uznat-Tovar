@@ -52,6 +52,10 @@ class ShelfORM(Base):
     name: Mapped[str] = mapped_column(String)
 
 
+PRODUCT_ACTIVE = "active"          # products.status (миграция 0006)
+PRODUCT_ARCHIVED = "archived"      # в архиве: не распознаётся, не находится по штрихкоду, не виден покупателю; можно вернуть
+
+
 class Product(Base):
     """Каталожный SKU. reference_image_urls хранит эталонные фото для построения эмбеддинга."""
 
@@ -65,6 +69,10 @@ class Product(Base):
     expected_price: Mapped[float | None] = mapped_column(Float, nullable=True)  # для сверки с ценником (F11)
     embedding_index_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # Миграция 0006 (документ 06, §4.1): товар в архиве не распознаётся и не виден покупателю, но не удаляется — его можно вернуть.
+    status: Mapped[str] = mapped_column(String(16), default=PRODUCT_ACTIVE, server_default=PRODUCT_ACTIVE, index=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")   # номер правки: защита от тихой перезаписи
 
 
 class ProductBarcodeORM(Base):

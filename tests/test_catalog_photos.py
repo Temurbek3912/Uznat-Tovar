@@ -394,3 +394,87 @@ def test_all_references_removed_means_not_found_rather_than_empty_catalog():
     assert answer["status"] == "unknown" and answer["product"] is None
     empty = M.ProductMatcher(M.NumpyCatalogIndex())
     assert identify_service.identify(np.zeros((2, 2, 3)), _Embedder(_unit([1, 0, 0])), empty, _Lookup({}))["status"] == "empty_catalog"
+
+
+# ------------------------------------------------------------------ товар в архиве и версия правки (миграция 0006)
+
+
+def test_archive_hides_the_product_from_the_list_writes_the_journal_and_restore_brings_it_back(env):
+    pid = _product(env)
+    _register(env, pid, "COLA", 1, (200, 10, 10))
+    row = env.client.get("/api/v1/catalog/products", headers=env.admin).json()[0]
+    assert row["status"] == "active" and row["version"] == 1
+    url = f"/api/v1/catalog/products/{pid}/status"
+    resp = env.client.post(url, headers=env.admin, json={"status": "archived", "reason": "больше не продаём", "expected_version": 1})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "archived" and resp.json()["version"] == 2
+    assert env.client.get("/api/v1/catalog/products", headers=env.admin).json() == []                   # в каталоге нет
+    archived = env.client.get("/api/v1/catalog/products?status=archived", headers=env.admin).json()
+    assert [p["id"] for p in archived] == [pid] and archived[0]["photo_count"] == 1                    # фото на месте
+    assert len(env.client.get("/api/v1/catalog/products?status=all", headers=env.admin).json()) == 1
+    assert env.client.post(url, headers=env.admin, json={"status": "archived"}).json()["version"] == 2   # повтор — без изменений
+    back = env.client.post(url, headers=env.admin, json={"status": "active"})
+    assert back.status_code == 200 and back.json()["status"] == "active" and back.json()["version"] == 3
+    with env.Session() as db:
+        events = db.query(AuditEvent).filter(AuditEvent.target_id == pid).order_by(AuditEvent.at, AuditEvent.id).all()
+        assert [e.action for e in events] == ["catalog.product.archived", "catalog.product.restored"]
+        assert json.loads(events[0].before_json) == {"status": "active"} and events[0].reason == "больше не продаём"
+        assert db.get(Product, pid).updated_at is not None
+
+
+def test_status_change_needs_catalog_write_a_valid_state_and_the_current_version(env):
+    pid = _product(env)
+    url = f"/api/v1/catalog/products/{pid}/status"
+    assert env.client.post(url, headers=env.analyst, json={"status": "archived"}).status_code == 403
+    bad = env.client.post(url, headers=env.admin, json={"status": "deleted"})
+    assert bad.status_code == 422 and bad.json()["code"] == "product_status_invalid"
+    assert env.client.get("/api/v1/catalog/products?status=deleted", headers=env.admin).status_code == 422
+    assert env.client.post("/api/v1/catalog/products/nope/status", headers=env.admin, json={"status": "archived"}).status_code == 404
+    stale = env.client.post(url, headers=env.admin, json={"status": "archived", "expected_version": 7})
+    assert stale.status_code == 409 and stale.json()["code"] == "concurrent_update"
+    with env.Session() as db:
+        assert db.get(Product, pid).status == "active"
+
+
+def test_edit_bumps_the_version_and_a_stale_edit_is_refused_instead_of_overwriting(env):
+    pid = _product(env)
+    url = f"/api/v1/catalog/products/{pid}"
+    first = env.client.patch(url, headers=env.admin, json={"name": "Кола 0,5 л", "expected_version": 1})
+    assert first.status_code == 200 and first.json()["version"] == 2
+    stale = env.client.patch(url, headers=env.admin, json={"name": "Кола 1 л", "expected_version": 1})   # вторая вкладка
+    assert stale.status_code == 409 and stale.json()["code"] == "concurrent_update"
+    assert env.client.patch(url, headers=env.admin, json={"name": "Кола 0,5 л"}).json()["version"] == 2    # без изменений
+    assert env.client.patch(url, headers=env.admin, json={"brand": "Y"}).json()["version"] == 3           # без версии — как раньше
+    with env.Session() as db:
+        assert db.get(Product, pid).name == "Кола 0,5 л"
+
+
+def test_archived_products_are_skipped_by_the_matcher_with_and_without_sources():
+    index = M.NumpyCatalogIndex()
+    index.add("cola", np.stack([_unit([1, 0, 0]), _unit([0.9, 0.1, 0])]), ["upload:c/1", "upload:c/2"])
+    index.add("pepsi", _unit([0.7, 0.7, 0]), ["upload:p/1"])
+    matcher = M.ProductMatcher(index, top_k=1, candidates_k=1)
+    query = _unit([1, 0, 0])
+    matcher.excluded_products = frozenset({"cola"})
+    assert [pid for pid, _ in matcher.rank(query)] == ["pepsi"]
+
+    class Old:
+        def search(self, query, top_k):
+            return [("cola", 0.95), ("pepsi", 0.6)][:top_k]
+    old = M.ProductMatcher(Old(), top_k=1, candidates_k=1)
+    old.excluded_products = frozenset({"cola"})
+    assert old.rank(np.zeros(3)) == [("pepsi", 0.6)]
+
+
+def test_shopper_never_sees_an_archived_product(env):
+    from app.api.routes_public import public_card, public_result
+    pid = _product(env)
+    with env.Session() as db:
+        p = db.get(Product, pid)
+        assert public_card(p)["name"] == "Кола"
+        p.status = "archived"
+        db.commit()
+        p = db.get(Product, pid)
+        assert public_card(p) is None
+        found = {"status": "matched", "product": {"id": pid}, "candidates": [{"id": pid}]}
+        assert public_result(db, found)["status"] == "unknown"

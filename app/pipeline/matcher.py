@@ -711,6 +711,9 @@ def resync_index(matcher, index_path: str | None, embedding_dim: int) -> str | N
     return None
 
 
+ARCHIVED_DEPTH_PER_PRODUCT = 64     # насколько глубже искать на каждый товар в архиве (векторов одного товара обычно меньше)
+
+
 class ProductMatcher:
     """Применяет пороги match_threshold/unknown_threshold к результатам поиска по индексу."""
 
@@ -725,6 +728,9 @@ class ProductMatcher:
         # (товар, источник) векторов, которые распознавание пропускает: фото выведены из эталонов или сделаны витринными
         # (app/services/product_images.PhotoRegistry.excluded_sources; воркер обновляет перед каждым «Узнать товар»).
         self.excluded: frozenset[tuple[str, str]] = frozenset()
+        # Товары в архиве (products.status, миграция 0006): все их векторы пропускаются, товар не распознаётся. Воркер обновляет
+        # из базы перед каждым «Узнать товар»; индекс не пересобирается — товар можно вернуть из архива.
+        self.excluded_products: frozenset[str] = frozenset()
 
     def rank(self, embedding: np.ndarray, k: int | None = None) -> list[tuple[str, float]]:
         """Лучший счёт на каждый товар; k — сколько ВЕКТОРОВ просмотреть (по умолчанию max(top_k, candidates_k)).
@@ -733,10 +739,15 @@ class ProductMatcher:
         участвующими. Индекс без источников у векторов (search_sources нет) — прежний поиск без исключений."""
         k = k or max(self.top_k, self.candidates_k)
         search_sources = getattr(self.index, "search_sources", None)
-        if not self.excluded or search_sources is None:
+        archived = self.excluded_products
+        if not archived and (not self.excluded or search_sources is None):
             return rank_products(self.index.search(embedding, k))
-        found = search_sources(embedding, k + len(self.excluded))
-        kept = [(pid, score) for pid, score, source in found if (pid, source) not in self.excluded]
+        depth = k + len(self.excluded) + ARCHIVED_DEPTH_PER_PRODUCT * len(archived)
+        if search_sources is None:                       # индекс без источников: исключить можно только товар целиком
+            kept = [(pid, score) for pid, score in self.index.search(embedding, depth) if pid not in archived]
+        else:
+            kept = [(pid, score) for pid, score, source in search_sources(embedding, depth)
+                    if pid not in archived and (pid, source) not in self.excluded]
         return rank_products(kept[:k])
 
     def match(self, embedding: np.ndarray) -> MatchResult:

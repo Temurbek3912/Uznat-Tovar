@@ -26,6 +26,9 @@ from app.core.mfa_policy import LISTENER_ADMIN, listener_for_request
 
 EXEMPT_PATHS = ("/api/v1/auth/transport",)
 PROTECTED_PREFIX = "/api/v1/"
+# Публичный вход покупателя (app/api/routes_public.py): ни паролей, ни токенов, ни кодов — защищённый канал не нужен (документ 14,
+# §2.1 п. 10: первая локальная версия — без HTTPS). Всё остальное под /api/v1/ — по-прежнему только по защищённому каналу.
+PUBLIC_PREFIX = "/api/v1/public/"
 
 
 def is_secure(*, scheme: str | None, request_listener: str) -> bool:
@@ -33,7 +36,7 @@ def is_secure(*, scheme: str | None, request_listener: str) -> bool:
 
 
 def needs_check(path: str) -> bool:
-    return path.startswith(PROTECTED_PREFIX) and path not in EXEMPT_PATHS
+    return path.startswith(PROTECTED_PREFIX) and path not in EXEMPT_PATHS and not path.startswith(PUBLIC_PREFIX)
 
 
 def describe(*, secure: bool, required: bool, https_url: str | None) -> dict:

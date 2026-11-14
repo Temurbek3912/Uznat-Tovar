@@ -16,11 +16,12 @@
 """
 from __future__ import annotations
 
-import time
-import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
+import logging
+
+from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
@@ -31,6 +32,8 @@ from app.core import text_search
 from app.core.app_errors import AppError
 from app.core.config import get_settings, resolve_project_path
 from app.core.errors import ApiError, from_app_error, from_catalog_error, reason
+from app.core.frame_store import FrameStoreError, frame_ref, get_frame_store
+from app.core.memory_upload import read_frame
 from app.core.schemas import ProductIn
 from app.core.security import CurrentUser, Permission
 from app.db.models import Product, ProductBarcodeORM
@@ -57,15 +60,12 @@ from app.services.catalog_upload import (
     clean_text,
     describe_task,
     find_duplicate,
-    identify_root,
     list_photo_files,
     make_sku,
     make_thumbnail,
     normalize_photo,
     parse_price,
-    save_identify_frame,
     save_photos,
-    sweep_old_files,
     uploads_root,
 )
 from app.services.frame_lifecycle import FRAME_TTL_SECONDS
@@ -80,6 +80,7 @@ IDENTIFY_MAX_MB = 10               # кадр с камеры — десятки
 IDENTIFY_WAIT_SECONDS = 25         # сколько API ждёт ответ воркера (занят снимком полки — кадр постоит в очереди)
 IDENTIFY_KEEP_SECONDS = FRAME_TTL_SECONDS  # ТК-2: временный кадр живёт не больше 2 минут (app/services/frame_lifecycle.py)
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/catalog", tags=["catalog"])
 
 
@@ -506,21 +507,17 @@ def product_photo(
     return Response(content=content, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
 
 
-@router.post("/identify")
-def identify_product(
-    file: UploadFile,
-    db: Session = Depends(get_db),
-    _user: CurrentUser = Depends(require_permission(Permission.CATALOG_READ)),
-) -> dict:
-    """«Узнать товар»: один кадр (камера или файл) -> название товара из каталога. Сначала ищем штрих-код на кадре: известный
-    код даёт ответ сразу (by="barcode", без модели и воркера — точнее и быстрее). Иначе — распознавание по виду через воркер
-    (ждём до 25 секунд — странице не нужно опрашивать статус). Прочитанный, но неизвестный код возвращается в barcode
-    (known=false): страница предложит привязать его. Ответ: см. app/services/identify_service.py + demo_mode + by + barcode."""
-    data = _read_limited(file, IDENTIFY_MAX_MB * 1024 * 1024, "Кадр")
+def run_identify(db: Session, data: bytes) -> dict:
+    """Общий путь «Узнать товар» для сотрудника и покупателя (D-10а: кадр не пишется на диск).
+
+    Сначала штрих-код на кадре: известный код даёт ответ сразу (by="barcode", без модели и воркера). Иначе — распознавание по виду
+    через воркер: кадр кладётся в хранилище кадров в памяти (app/core/frame_store.py: отдельный Redis без сохранения или память
+    процесса), в очередь уходит только номер кадра; воркер забирает кадр и сразу удаляет. Не дождались — кадр удаляется здесь."""
     try:
         photo = normalize_photo(data, check_quality=False)
     except PhotoError as exc:
         raise from_catalog_error(422, exc) from exc
+    del data
 
     try:
         codes = decode_image(load_rgb(photo.jpeg))
@@ -535,22 +532,28 @@ def identify_product(
             return {"status": "matched", "by": "barcode", "product": info, "score": 1.0, "candidates": [info], "demo_mode": False,
                     "barcode": {"code": code, "known": True}}
 
-    root = identify_root(_media_root())
-    sweep_old_files(root, max_age_seconds=IDENTIFY_KEEP_SECONDS, now=time.time())
-    ref = save_identify_frame(root, uuid.uuid4().hex, photo.jpeg)
-    task = None
+    store = get_frame_store()
     try:
-        # expires: если воркер не взял задание за время ожидания (остановлен, занят), оно не выполнится позже — клиент уже ушёл,
-        # а устаревшие кадры не должны задерживать новые после перезапуска воркера.
-        task = identify_product_task.apply_async(args=[ref], expires=IDENTIFY_WAIT_SECONDS)
-    except Exception as exc:  # noqa: BLE001
-        raise ApiError(503, "queue_unavailable",
-                       "Очередь задач сейчас недоступна. Проверьте, что система запущена (docker compose ps), и повторите.") from exc
+        frame_id = store.put(photo.jpeg)
+    except FrameStoreError as exc:
+        logger.warning("Хранилище кадров: %s", exc)
+        raise ApiError(503, "frames_unavailable",
+                       "Распознавание по виду сейчас недоступно. Попробуйте снять штрихкод или повторите позже.") from exc
+    del photo
     try:
-        result = task.get(timeout=IDENTIFY_WAIT_SECONDS, propagate=False)
-    except Exception as exc:  # noqa: BLE001 — celery.exceptions.TimeoutError и ошибки бэкенда
-        raise ApiError(504, "identify_timeout",
-                       "Система не успела ответить. Проверьте, что она запущена и не занята (docker compose ps), и повторите.") from exc
+        try:
+            # expires: если воркер не взял задание за время ожидания (остановлен, занят), оно не выполнится позже — клиент уже ушёл.
+            task = identify_product_task.apply_async(args=[frame_ref(frame_id)], expires=IDENTIFY_WAIT_SECONDS)
+        except Exception as exc:  # noqa: BLE001
+            raise ApiError(503, "queue_unavailable",
+                           "Очередь задач сейчас недоступна. Проверьте, что система запущена (docker compose ps), и повторите.") from exc
+        try:
+            result = task.get(timeout=IDENTIFY_WAIT_SECONDS, propagate=False)
+        except Exception as exc:  # noqa: BLE001 — celery.exceptions.TimeoutError и ошибки бэкенда
+            raise ApiError(504, "identify_timeout",
+                           "Система не успела ответить. Проверьте, что она запущена и не занята (docker compose ps), и повторите.") from exc
+    finally:
+        store.discard(frame_id)          # воркер уже удалил кадр, если забрал; если нет — удаляем сейчас, а не через 2 минуты
     if isinstance(result, Exception):
         if isinstance(result, AppError) or type(result).__name__ in {"PhotoError", "CatalogAddError", "NotReadyError"}:
             raise from_app_error(result, fallback_code="catalog_error")        # статус по виду: 422, а «не готово» — 503
@@ -558,3 +561,16 @@ def identify_product(
     result["by"] = "look"
     result["barcode"] = {"code": codes[0], "known": False} if codes else None
     return result
+
+
+@router.post("/identify")
+async def identify_product(
+    request: Request,
+    db: Session = Depends(get_db),
+    _user: CurrentUser = Depends(require_permission(Permission.CATALOG_READ)),
+) -> dict:
+    """«Узнать товар» для сотрудника: один кадр (камера или файл) -> название товара из каталога. Кадр — полем file формы
+    (как раньше) или самим телом запроса (image/*); принимается целиком в памяти (app/core/memory_upload.py, D-10а).
+    Ответ: см. app/services/identify_service.py + demo_mode + by + barcode."""
+    data = await read_frame(request, IDENTIFY_MAX_MB * 1024 * 1024)
+    return await run_in_threadpool(run_identify, db, data)

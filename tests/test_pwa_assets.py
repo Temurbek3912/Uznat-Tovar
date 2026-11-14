@@ -141,8 +141,9 @@ def test_server_root_redirects_to_the_home_page():
         and any(isinstance(d, ast.Call) and getattr(d.func, "attr", "") == "get" and d.args
                 and isinstance(d.args[0], ast.Constant) and d.args[0].value == "/" for d in n.decorator_list)
     )
-    target = re.search(r'RedirectResponse\(url="([^"]+)"\)', ast.unparse(handler).replace("'", '"'))
-    assert target and target.group(1) == "/ui/index.html"
+    code = ast.unparse(handler).replace("'", '"')
+    # сотрудники — главная; вход покупателя (адрес из QR) — страница покупателя
+    assert re.search(r'RedirectResponse\(url="/ui/shop.html" if CUSTOMER_ENTRANCE else "/ui/index.html"\)', code), code
     assert (FRONTEND / "index.html").is_file()
 
 

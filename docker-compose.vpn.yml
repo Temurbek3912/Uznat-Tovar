@@ -28,6 +28,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-shelf_audit}
       QUEUE_BROKER_URL: redis://redis:6379/0
+      FRAMES_REDIS_URL: redis://frames:6379/0     # кадры «Узнать товар» — только в памяти (D-10а)
       ENVIRONMENT: ${ENVIRONMENT:-development}
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-25}
       ALLOW_DEBUG_EMBEDDER: ${ALLOW_DEBUG_EMBEDDER:-0}
@@ -47,6 +48,8 @@ services:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      frames:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=4)"]

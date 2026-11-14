@@ -16,7 +16,10 @@ API = ROOT / "app" / "api"
 ROUTE_FILES = sorted(API.glob("routes_*.py"))
 
 # Маршруты, которым токен не нужен (или нужен только для отзыва): вход, второй шаг входа, выход.
-PUBLIC_ROUTES = {("post", "/auth/login"), ("post", "/auth/login/2fa"), ("post", "/auth/logout"), ("get", "/auth/transport")}
+PUBLIC_ROUTES = {("post", "/auth/login"), ("post", "/auth/login/2fa"), ("post", "/auth/logout"), ("get", "/auth/transport"),
+                 # публичный вход покупателя (app/api/routes_public.py): без входа по замыслу — только «Узнать товар» с ограничением
+                 # частоты и только публичные поля; данных сотрудников и управления там нет (tests/test_public_api.py)
+                 ("post", "/public/identify"), ("get", "/public/store")}
 AUTH_DEPS = {"get_current_user", "require_permission", "require_recent_auth", "get_enrolling_user", "get_password_changing_user"}
 ENROLL_ROUTES = {("get", "/auth/2fa"), ("post", "/auth/2fa/setup"), ("post", "/auth/2fa/confirm")}
 

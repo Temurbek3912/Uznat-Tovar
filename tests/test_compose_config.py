@@ -30,7 +30,7 @@ def _depends(service: str) -> dict:
 # ------------------------------------------------------------------ состав и сборка
 
 def test_expected_services_and_stable_project_name():
-    assert set(SERVICES) == {"db", "redis", "bootstrap", "api", "admin-api", "worker"}
+    assert set(SERVICES) == {"db", "redis", "frames", "bootstrap", "api", "admin-api", "shop", "worker"}
     assert COMPOSE["name"] == "retail-shelf-audit"        # имена томов не зависят от названия папки
     assert "version" not in COMPOSE                       # устарело: Compose v2 печатает предупреждение
 
@@ -237,3 +237,26 @@ def test_https_override_turns_the_employee_port_into_tls_and_leaves_the_admin_li
 def test_backups_do_not_take_the_tls_private_keys():
     text = (ROOT / "scripts" / "full_backup.py").read_text(encoding="utf-8")
     assert "secrets/tls" not in text and '"secrets"' not in text
+
+
+# ------------------------------------------------------------------ D-10а и вход покупателя (2026-11-14)
+
+
+def test_frames_redis_keeps_frames_only_in_memory():
+    """Решение D-10а: кадр не пишется на диск. Redis кадров — без RDB и AOF, без тома, /data в памяти, порт наружу не открыт."""
+    frames = SERVICES["frames"]
+    command = frames["command"]
+    assert command[command.index("--save") + 1] == "" and command[command.index("--appendonly") + 1] == "no"
+    assert "volumes" not in frames and "/data" in frames["tmpfs"] and "ports" not in frames
+    for name in ("api", "admin-api", "worker", "shop"):
+        assert _env(name)["FRAMES_REDIS_URL"] == "redis://frames:6379/0", name
+        assert _depends(name)["frames"]["condition"] == "service_healthy", name
+    assert "FRAMES_REDIS_URL" != _env("api")["QUEUE_BROKER_URL"]
+
+
+def test_customer_entrance_is_its_own_service_with_a_fixed_port():
+    shop = SERVICES["shop"]
+    assert _env("shop")["APP_LISTENER"] == "customer"
+    assert shop["ports"] == ["${SHOP_PORT:-8080}:8080"] and "--port" in shop["command"] and "8080" in shop["command"]
+    assert "/health/ready" in " ".join(shop["healthcheck"]["test"]) and shop["restart"] == "unless-stopped"
+    assert "AUTH_SECRET_KEY" not in _env("shop") and "ADMIN_PASSWORD" not in _env("shop")     # секреты входа покупателю не нужны

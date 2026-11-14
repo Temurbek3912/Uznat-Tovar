@@ -128,6 +128,9 @@ class Settings(BaseSettings):
     # управления на нём НЕ действуют; admin — административный порт (публикуется только на 127.0.0.1 и адресе VPN);
     # all — один процесс без разделения (запуск без Docker). docker-compose.yml задаёт public для api и admin для admin-api.
     app_listener: str = "all"
+    # Хранилище кадров «Узнать товар» (D-10а, app/core/frame_store.py): отдельный Redis БЕЗ сохранения на диск. Пусто — кадры в
+    # памяти этого процесса (запуск одним процессом). В docker-compose.yml — служба frames.
+    frames_redis_url: str = ""
     # Имена, по которым открывают административный вход (кроме localhost/127.0.0.1/::1): адрес компьютера в VPN (VPN_BIND_IP — тот же,
     # что в docker-compose.vpn.yml) и, через запятую, другие имена (ADMIN_ALLOWED_HOSTS, например имя в Tailscale). Запрос
     # с другим именем в заголовке Host прав управления не получает (защита от подмены DNS — mfa_policy.effective_listener).

@@ -325,7 +325,7 @@ def _build_env(env, tmp_path: Path):
             return lambda fn: fn
         get = post = patch = put = delete = _deco
 
-    inject("fastapi", APIRouter=APIRouter, Depends=lambda x=None: x, File=lambda default=None, **k: default,
+    inject("fastapi", APIRouter=APIRouter, Depends=lambda x=None: x, File=lambda default=None, **k: default, Request=object,
            Form=lambda default=None, **k: default, HTTPException=HTTPException, UploadFile=Upload,
            Response=lambda content=b"", media_type=None, headers=None: types.SimpleNamespace(content=content, media_type=media_type, headers=headers))
     inject("pydantic", BaseModel=FakeBaseModel)
@@ -615,15 +615,27 @@ def test_photo_endpoint_thumbnail_full_cache_and_404s(tmp_path):
 
 # ------------------------------------------------------------------ узнать товар
 
-def test_identify_returns_workers_answer_and_stores_the_frame_in_the_temporary_folder(tmp_path):
+def _frames(env):
+    from app.core.frame_store import get_frame_store
+    return get_frame_store()
+
+
+def _no_frame_files(tmp_path):
+    folder = tmp_path / "media" / "identify-tmp"
+    return not folder.exists() or not any(folder.iterdir())
+
+
+def test_identify_returns_workers_answer_and_the_frame_never_touches_the_disk(tmp_path):
+    """D-10а: кадр — только в памяти. В очередь уходит номер кадра («frame:…»), а не файл; после ответа кадра нет нигде."""
     env, restore = with_env(tmp_path)
     try:
         env.identify_answer = {"status": "matched", "product": {"name": "Кола"}}
-        out = env.routes.identify_product(file=Upload(jpeg(1)), _user=None)
+        out = env.routes.run_identify(env.db, jpeg(1))
         assert out["product"]["name"] == "Кола"
         (task, args), = env.queued
-        assert task == "identify" and args[0].startswith("identify:") and args[0].endswith(".jpg")
-        assert (tmp_path / "media" / "identify-tmp" / args[0].split(":", 1)[1]).is_file()
+        assert task == "identify" and args[0].startswith("frame:")
+        assert _no_frame_files(tmp_path) and not (tmp_path / "media").exists()
+        assert _frames(env).take(args[0].split(":", 1)[1]) is None          # API удалил кадр сразу после ответа
     finally:
         restore()
 
@@ -631,7 +643,7 @@ def test_identify_returns_workers_answer_and_stores_the_frame_in_the_temporary_f
 def test_identify_errors_are_plain_and_distinguishable(tmp_path):
     env, restore = with_env(tmp_path)
     try:
-        call = lambda data=None: env.routes.identify_product(file=Upload(data if data is not None else jpeg()), _user=None)
+        call = lambda data=None: env.routes.run_identify(env.db, data if data is not None else jpeg())
         code, detail = status_of(env, call, b"junk")
         assert code == 422 and "Не удалось открыть" in detail
         from app.services.catalog_upload import PhotoError
@@ -646,70 +658,54 @@ def test_identify_errors_are_plain_and_distinguishable(tmp_path):
         env.queue_down = True
         assert status_of(env, call)[0] == 503
         env.queue_down = False
-        huge = b"\xff\xd8" + b"0" * (10 * 1024 * 1024 + 10)
-        assert status_of(env, call, huge)[0] == 413
-    finally:
-        restore()
-
-
-def test_old_temporary_frames_are_swept_on_the_next_request(tmp_path):
-    env, restore = with_env(tmp_path)
-    try:
-        import os
-        import time
-        folder = tmp_path / "media" / "identify-tmp"
-        folder.mkdir(parents=True)
-        stale = folder / ("a" * 32 + ".jpg")
-        stale.write_bytes(b"old")
-        os.utime(stale, (time.time() - 7200, time.time() - 7200))
-        env.identify_answer = {"status": "unknown", "product": None}
-        env.routes.identify_product(file=Upload(jpeg()), _user=None)
-        assert not stale.exists()
+        assert _no_frame_files(tmp_path)
     finally:
         restore()
 
 
 def test_identify_task_expires_when_the_worker_does_not_take_it_in_time(tmp_path):
-    """Воркер остановлен или занят: задание не должно выполниться после того, как клиент ушёл (ТК-2, временная мера D-10а)."""
+    """Воркер остановлен или занят: задание не должно выполниться после того, как клиент ушёл."""
     env, restore = with_env(tmp_path)
     try:
         env.identify_answer = {"status": "unknown", "product": None}
-        env.routes.identify_product(file=Upload(jpeg()), _user=None)
+        env.routes.run_identify(env.db, jpeg())
         (name, options), = env.queue_options
         assert name == "identify" and options.get("expires") == env.routes.IDENTIFY_WAIT_SECONDS
     finally:
         restore()
 
 
-def test_temporary_frames_live_at_most_two_minutes_and_fresh_ones_are_kept(tmp_path):
+def test_frame_is_removed_from_memory_even_when_the_worker_did_not_answer(tmp_path):
+    """Не дождались воркера (504) или очередь недоступна (503): кадр удаляется сразу, а не ждёт срока в 2 минуты (D-10а)."""
     env, restore = with_env(tmp_path)
     try:
-        import os
-        import time
-        assert env.routes.IDENTIFY_KEEP_SECONDS == 120
-        folder = tmp_path / "media" / "identify-tmp"
-        folder.mkdir(parents=True)
-        old, fresh = folder / ("b" * 32 + ".jpg"), folder / ("c" * 32 + ".jpg")
-        old.write_bytes(b"old")
-        fresh.write_bytes(b"fresh")
-        os.utime(old, (time.time() - 130, time.time() - 130))
-        os.utime(fresh, (time.time() - 100, time.time() - 100))
-        env.identify_answer = {"status": "unknown", "product": None}
-        env.routes.identify_product(file=Upload(jpeg()), _user=None)
-        assert not old.exists() and fresh.exists()
+        env.identify_answer = TimeoutError("воркер не ответил")
+        assert status_of(env, lambda: env.routes.run_identify(env.db, jpeg(2)))[0] == 504
+        (_task, args), = env.queued
+        assert _frames(env).take(args[0].split(":", 1)[1]) is None and _no_frame_files(tmp_path)
+        env.queue_down = True
+        before = _frames(env).count() if hasattr(_frames(env), "count") else 0
+        assert status_of(env, lambda: env.routes.run_identify(env.db, jpeg(3)))[0] == 503
+        assert (_frames(env).count() if hasattr(_frames(env), "count") else 0) == before
     finally:
         restore()
 
 
-def test_api_does_not_delete_the_frame_right_after_answering(tmp_path):
-    """Немедленное удаление после ответа не вводится: оно помешало бы выбору товара на кадре (ТК-3). Срок задаёт уборка."""
+def test_frame_store_that_writes_to_disk_is_refused_and_nothing_is_queued(tmp_path):
     env, restore = with_env(tmp_path)
     try:
-        env.identify_answer = TimeoutError("воркер не ответил")
-        call = lambda: env.routes.identify_product(file=Upload(jpeg(2)), _user=None)
-        assert status_of(env, call)[0] == 504
-        (_task, args), = env.queued
-        assert (tmp_path / "media" / "identify-tmp" / args[0].split(":", 1)[1]).is_file()
+        from app.core import frame_store as fs
+
+        class Persistent:
+            def config_get(self, name):
+                return {"save": "3600 1", "appendonly": "no"} if name == "save" else {"appendonly": "yes"}
+        old = fs._store
+        fs.set_frame_store(fs.RedisFrameStore(Persistent()))
+        try:
+            code, _detail = status_of(env, lambda: env.routes.run_identify(env.db, jpeg(4)))
+            assert code == 503 and env.queued == []
+        finally:
+            fs.set_frame_store(old)
     finally:
         restore()
 
@@ -864,12 +860,12 @@ def test_identify_answers_from_a_known_barcode_without_asking_the_worker(tmp_pat
     try:
         env.db.products.append(FakeProduct("COLA", "Кола 0,5 л", brand="BrandCola", expected_price=9900.0, id="cola"))
         env.db.barcodes.append(FakeBarcode(EAN_A, "cola"))
-        out = env.routes.identify_product(file=Upload(barcode_jpeg(EAN_A)), db=env.db, _user=None)
+        out = env.routes.run_identify(env.db, barcode_jpeg(EAN_A))
         assert out["status"] == "matched" and out["by"] == "barcode" and out["score"] == 1.0 and out["demo_mode"] is False
         assert out["product"] == {"id": "cola", "name": "Кола 0,5 л", "brand": "BrandCola", "expected_price": 9900.0, "score": 1.0}
         assert out["barcode"] == {"code": EAN_A, "known": True} and env.queued == []              # воркер не нужен
         env.queue_down = True                                                                     # и при недоступной очереди код читается
-        assert env.routes.identify_product(file=Upload(barcode_jpeg(EAN_A, seed=5)), db=env.db, _user=None)["product"]["name"] == "Кола 0,5 л"
+        assert env.routes.run_identify(env.db, barcode_jpeg(EAN_A, seed=5))["product"]["name"] == "Кола 0,5 л"
     finally:
         restore()
 
@@ -878,14 +874,14 @@ def test_identify_with_an_unknown_barcode_still_recognises_by_look_and_reports_t
     env, restore = with_env(tmp_path)
     try:
         env.identify_answer = {"status": "matched", "product": {"id": "cola", "name": "Кола"}, "candidates": []}
-        out = env.routes.identify_product(file=Upload(barcode_jpeg(EAN_C)), db=env.db, _user=None)
+        out = env.routes.run_identify(env.db, barcode_jpeg(EAN_C))
         assert out["by"] == "look" and out["barcode"] == {"code": EAN_C, "known": False} and out["product"]["name"] == "Кола"
         assert env.queued[0][0] == "identify"
-        plain = env.routes.identify_product(file=Upload(jpeg(1)), db=env.db, _user=None)
+        plain = env.routes.run_identify(env.db, jpeg(1))
         assert plain["by"] == "look" and plain["barcode"] is None
         env.db.products.append(FakeProduct("X", "Икс", id="x"))
         env.db.barcodes.append(FakeBarcode(EAN_C, "ghost"))                                       # код привязан к исчезнувшему товару
-        ghost = env.routes.identify_product(file=Upload(barcode_jpeg(EAN_C, seed=6)), db=env.db, _user=None)
+        ghost = env.routes.run_identify(env.db, barcode_jpeg(EAN_C, seed=6))
         assert ghost["by"] == "look"                                                              # не выдаём ответ про несуществующий товар
     finally:
         restore()
@@ -958,14 +954,12 @@ def test_errors_carry_a_code_and_params_and_keep_the_russian_text(tmp_path):
         assert (missing.status_code, missing.code, missing.detail) == (404, "product_not_found", "Товар не найден.")
 
         huge = b"\xff\xd8" + b"0" * (10 * 1024 * 1024 + 10)
-        frame = error_of(env, env.routes.identify_product, file=Upload(huge), _user=None)
-        assert (frame.status_code, frame.code, frame.params) == (413, "frame_too_large", {"mb": 10})
-
-        bad = error_of(env, env.routes.identify_product, file=Upload(b"junk"), _user=None)
+        assert len(huge) > 10 * 1024 * 1024        # предел кадра — при чтении запроса в память: tests/test_memory_upload.py
+        bad = error_of(env, env.routes.run_identify, env.db, b"junk")
         assert bad.code == "photo_not_image" and "Не удалось открыть" in bad.detail
 
         env.identify_answer = TimeoutError("нет ответа")
-        slow = error_of(env, env.routes.identify_product, file=Upload(jpeg()), _user=None)
+        slow = error_of(env, env.routes.run_identify, env.db, jpeg())
         assert (slow.status_code, slow.code) == (504, "identify_timeout")
     finally:
         restore()

@@ -122,7 +122,8 @@ def test_worker_sweeps_stale_frames_when_it_starts():
 
 def test_identify_route_queues_with_expiry_and_never_with_plain_delay():
     src = (ROOT / "app/api/routes_catalog.py").read_text(encoding="utf-8")
-    route = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "identify_product")
+    route = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "run_identify")
     body = ast.unparse(route)
-    assert "identify_product_task.apply_async(args=[ref], expires=IDENTIFY_WAIT_SECONDS)" in body
+    assert "identify_product_task.apply_async(args=[frame_ref(frame_id)], expires=IDENTIFY_WAIT_SECONDS)" in body
+    assert "save_identify_frame" not in src                     # D-10а: API больше не пишет кадр файлом
     assert "identify_product_task.delay" not in body

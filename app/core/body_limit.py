@@ -153,6 +153,7 @@ def build_rules(*, identify_max_mb: int, max_upload_mb: int, max_photos_per_requ
     photos = max_upload_mb * MB * max_photos_per_request + MULTIPART_OVERHEAD
     return (
         BodyLimitRule(r"/api/v1/catalog/identify", identify_max_mb * MB + IDENTIFY_OVERHEAD),
+        BodyLimitRule(r"/api/v1/public/identify", identify_max_mb * MB + IDENTIFY_OVERHEAD),
         BodyLimitRule(r"/api/v1/catalog/products/upload", photos),
         BodyLimitRule(r"/api/v1/catalog/products/[^/]+/photos", photos),
     )

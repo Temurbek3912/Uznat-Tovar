@@ -76,8 +76,13 @@ def test_accepting_routes_answer_202_and_their_handlers_are_plain_def_so_file_re
         node = routes[key][0]
         deco = next(d for d in node.decorator_list if isinstance(d, ast.Call))
         assert any(k.arg == "status_code" and getattr(k.value, "value", None) == 202 for k in deco.keywords), key
-    for key in (("POST", "/products/upload"), ("POST", "/products/{product_id}/photos"), ("POST", "/identify"), ("PATCH", "/products/{product_id}")):
+    for key in (("POST", "/products/upload"), ("POST", "/products/{product_id}/photos"), ("PATCH", "/products/{product_id}")):
         assert isinstance(routes[key][0], ast.FunctionDef), f"{key}: синхронный def (файлы читаются блокирующе — FastAPI уведёт в пул потоков)"
+    # «Узнать товар» (D-10а): кадр читается из запроса в память асинхронно (read_frame), а блокирующая часть — штрихкод, очередь,
+    # ожидание воркера — уходит в пул потоков, цикл событий не блокируется.
+    identify = ast.unparse(routes[("POST", "/identify")][0])
+    assert isinstance(routes[("POST", "/identify")][0], ast.AsyncFunctionDef)
+    assert "await read_frame(" in identify and "await run_in_threadpool(run_identify" in identify
 
 
 def test_user_facing_texts_do_not_leak_internals_and_status_codes_are_plain_numbers():

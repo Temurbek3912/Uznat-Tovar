@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes_admin import router as admin_router
 from app.api.routes_auth import router as auth_router
 from app.api.routes_catalog import router as catalog_router
+from app.api.routes_public import router as public_router
 from app.api.routes_stores import router as stores_router
 from app.core.config import get_settings, resolve_project_path
 from app.core.cors import describe_cors, is_production, resolve_cors_origins
@@ -35,7 +36,8 @@ _docs_enabled = settings.environment != "production"
 
 for _line in startup_warnings(require_for_admins=settings.auth_require_2fa_for_admins,
                               key_configured=auth_secrets.is_configured(settings.auth_secret_key), listener=settings.app_listener):
-    logger.warning("%s", _line)
+    if (settings.app_listener or "").strip().lower() != "customer":     # на входе покупателя входа сотрудников нет — и ключ не нужен
+        logger.warning("%s", _line)
 
 
 @asynccontextmanager
@@ -111,24 +113,53 @@ app.add_middleware(SecurityHeadersMiddleware)
 # неожиданные исключения — 500 с общим текстом, подробности только в журнал сервера.
 install_error_handlers(app, cors_origins=_cors_origins)
 
-app.include_router(auth_router)
-app.include_router(catalog_router)
-app.include_router(stores_router)
-app.include_router(admin_router)
+# Вход покупателя (APP_LISTENER=customer, документ 04, §3.5; В-5): ТОЛЬКО публичный API и страница покупателя — маршрутов
+# сотрудников и управления на нём нет вовсе (их нельзя открыть даже с украденным токеном). Остальные входы — как раньше, плюс
+# публичный API (он без входа и с ограничением частоты), кроме административного.
+CUSTOMER_ENTRANCE = (settings.app_listener or "").strip().lower() == "customer"
+if CUSTOMER_ENTRANCE:
+    app.include_router(public_router)
+else:
+    app.include_router(auth_router)
+    app.include_router(catalog_router)
+    app.include_router(stores_router)
+    app.include_router(admin_router)
+    if normalize_listener(settings.app_listener) != LISTENER_ADMIN:
+        app.include_router(public_router)
 
 # Фронтенд раздаётся самим API: телефон не может открыть HTML-файл с ноутбука, а на странице «localhost» —
 # это сам телефон. Страницы открываются как http://<адрес-сервера>:8000/ui/index.html и ходят в API
 # того же источника (apiBaseUrl() в страницах берёт window.location.origin). Только статика — данных тут нет,
 # доступ к ним по-прежнему закрыт токеном.
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+# Вход покупателя раздаёт ТОЛЬКО страницу покупателя и то, что она подключает: страниц сотрудников и управления на нём нет.
+CUSTOMER_FILES = frozenset({
+    "shop.html", "shop.js", "shop.css", "tokens.css", "ui.css", "theme.js", "theme-apply.js", "i18n.js", "i18n.ru.js", "i18n.uz.js",
+    "i18n.uz-cyrl.js", "i18n.en.js", "icons.js", "ticket.js", "boot.js", "icons/favicon-32.png", "icons/apple-touch-icon.png",
+})
+
+
+class _CustomerStaticFiles(StaticFiles):
+    """StaticFiles со списком разрешённых файлов: остальное — 404, как будто его нет."""
+
+    def get_path(self, scope) -> str:
+        path = super().get_path(scope).replace("\\", "/").lstrip("/")
+        if path not in CUSTOMER_FILES:
+            from starlette.exceptions import HTTPException as StarletteHTTPException
+            raise StarletteHTTPException(status_code=404)
+        return path
+
+
 if _FRONTEND_DIR.is_dir():
-    app.mount("/ui", StaticFiles(directory=str(_FRONTEND_DIR), html=True), name="ui")
+    _static = _CustomerStaticFiles if CUSTOMER_ENTRANCE else StaticFiles
+    app.mount("/ui", _static(directory=str(_FRONTEND_DIR), html=not CUSTOMER_ENTRANCE), name="ui")
 
 
 @app.get("/", include_in_schema=False)
 def root_redirect() -> RedirectResponse:
-    """Адрес сервера без пути (http://192.168.1.50:8000) открывает главную: крупные кнопки «Сфотографировать», «Результаты» и т.д."""
-    return RedirectResponse(url="/ui/index.html")
+    """Адрес сервера без пути (http://192.168.1.50:8000) открывает главную: крупные кнопки «Сфотографировать», «Результаты» и т.д.
+    На входе покупателя (адрес из QR-кода) — страницу покупателя."""
+    return RedirectResponse(url="/ui/shop.html" if CUSTOMER_ENTRANCE else "/ui/index.html")
 
 
 @app.get("/health")

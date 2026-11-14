@@ -394,17 +394,33 @@ def identify_product_task(self, ref: str) -> dict:
     except MLNotReadyError as exc:
         raise _ml_unavailable(exc) from exc
 
+    from app.core.frame_store import FrameStoreError, frame_id_of, get_frame_store, is_frame_ref
     from app.services.identify_service import ProductInfo, identify
 
-    if not is_identify_ref(ref):
+    path = None
+    if is_frame_ref(ref):
+        # D-10а: кадр — только в памяти (отдельный Redis без сохранения на диск, app/core/frame_store.py). take = прочитать и сразу
+        # удалить; дальше кадр живёт только в памяти этого вызова.
+        try:
+            frame = get_frame_store().take(frame_id_of(ref))
+        except FrameStoreError as exc:
+            raise PhotoError("Кадр недоступен — попробуйте ещё раз.", code="frame_unavailable") from exc
+        if frame is None:
+            raise PhotoError("Кадр устарел — сфотографируйте товар ещё раз.", code="frame_expired")
+        source = frame
+    elif is_identify_ref(ref):
+        # Прежний способ (файл в identify-tmp) — только чтобы дочитать задания, поставленные до обновления. Файл удаляется ниже.
+        path = resolve_ref(identify_root(_media_root()), IDENTIFY_REF_PREFIX, ref)
+        source = path
+    else:
         raise PhotoError("Неверная ссылка на кадр.", code="photo_bad_ref")
-    path = resolve_ref(identify_root(_media_root()), IDENTIFY_REF_PREFIX, ref)
     db = SessionLocal()
     try:
         try:
-            image = load_rgb(path)
+            image = load_rgb(source)
         except Exception as exc:  # noqa: BLE001
             raise PhotoError("Кадр не читается — попробуйте ещё раз.", code="frame_unreadable") from exc
+        del source
 
         def lookup(ids: list[str]) -> dict:
             rows = db.query(Product).filter(Product.id.in_(ids)).all()
@@ -416,7 +432,8 @@ def identify_product_task(self, ref: str) -> dict:
         return result
     finally:
         db.close()
-        try:
-            path.unlink()
-        except OSError:
-            pass
+        if path is not None:
+            try:
+                path.unlink()
+            except OSError:
+                pass

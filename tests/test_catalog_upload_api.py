@@ -321,13 +321,17 @@ def test_task_status_speaks_plain_russian(env):
 
 # ------------------------------------------------------------------ узнать товар
 
-def test_identify_returns_the_workers_answer_and_stores_the_frame_only_temporarily(env):
-    resp = env.client.post("/api/v1/catalog/identify", headers=headers_for(env, "analyst"), files=files(jpeg(1), name="file")[:1])
+def test_identify_returns_the_workers_answer_and_the_frame_never_touches_the_disk(env):
+    """D-10а: кадр — только в памяти; в очередь уходит номер кадра, файла кадра нет ни в одном виде."""
+    h = headers_for(env, "analyst")
+    resp = env.client.post("/api/v1/catalog/identify", headers=h, files=files(jpeg(1), name="file")[:1])
     assert resp.status_code == 200, resp.text
     assert resp.json()["product"]["name"] == "Кола" and resp.json()["status"] == "matched"
     (task, args), = env.queued
-    assert task == "identify" and args[0].startswith("identify:") and args[0].endswith(".jpg")
-    assert (env.media / "identify-tmp").is_dir()
+    assert task == "identify" and args[0].startswith("frame:")
+    assert not (env.media / "identify-tmp").exists()
+    raw = env.client.post("/api/v1/catalog/identify", headers={**h, "Content-Type": "image/jpeg"}, content=jpeg(2))   # телом запроса
+    assert raw.status_code == 200 and not (env.media / "identify-tmp").exists()
 
 
 def test_identify_errors_are_plain(env):

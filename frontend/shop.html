@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<title data-i18n="shop.title">Узнать товар</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="ui.css">
+<link rel="stylesheet" href="shop.css">
+<script src="theme.js"></script>
+<script src="theme-apply.js"></script>
+</head>
+<body data-page="shop">
+<main class="shop">
+  <header class="shop__head">
+    <div class="shop__brand">
+      <h1 class="shop__title" data-i18n="shop.title">Узнать товар</h1>
+      <p class="shop__store" id="storeName" hidden></p>
+    </div>
+    <div id="langHost"></div>
+  </header>
+
+  <section class="shop__intro">
+    <p class="shop__lead" data-i18n="shop.lead">Сфотографируйте товар или его штрихкод — мы покажем название и цену.</p>
+  </section>
+
+  <section class="shop__actions">
+    <label class="btn btn--primary shop__shot" for="cameraInput">
+      <span data-icon="camera"></span><span data-i18n="shop.take_photo">Сфотографировать товар</span>
+    </label>
+    <input id="cameraInput" class="visually-hidden" type="file" accept="image/*" capture="environment">
+    <label class="btn btn--secondary" for="fileInput"><span data-icon="viewfinder"></span><span data-i18n="shop.choose_photo">Выбрать фото</span></label>
+    <input id="fileInput" class="visually-hidden" type="file" accept="image/*">
+  </section>
+
+  <div class="shop__preview" id="previewBox" hidden><img id="preview" alt="" data-i18n-attr="alt:shop.preview_alt"></div>
+
+  <section class="shop__result" id="ticketHost" aria-live="polite"></section>
+
+  <ul class="shop__tips">
+    <li data-i18n="shop.tip_close">Снимайте близко, чтобы товар занимал почти весь кадр.</li>
+    <li data-i18n="shop.tip_barcode">Штрихкод крупно и без бликов — самый точный способ.</li>
+  </ul>
+
+  <footer class="shop__privacy">
+    <p data-i18n="shop.privacy">Фото не сохраняется: оно используется только чтобы узнать товар и сразу удаляется. Регистрация не нужна.</p>
+  </footer>
+</main>
+<script src="i18n.js"></script>
+<script src="i18n.ru.js"></script>
+<script src="i18n.uz.js"></script>
+<script src="i18n.uz-cyrl.js"></script>
+<script src="i18n.en.js"></script>
+<script src="icons.js"></script>
+<script src="ticket.js"></script>
+<script src="shop.js"></script>
+<script src="boot.js" data-start="Shop"></script>
+</body>
+</html>

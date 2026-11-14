@@ -19,6 +19,8 @@ x-app-env: &app-env
   # Пароль БД не должен содержать символы @ : / ? # % — он подставляется прямо в URL.
   DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-shelf_audit}
   QUEUE_BROKER_URL: redis://redis:6379/0
+  # Кадры «Узнать товар» — только в памяти (решение D-10а): отдельный Redis БЕЗ сохранения на диск (служба frames ниже).
+  FRAMES_REDIS_URL: redis://frames:6379/0
   ENVIRONMENT: ${ENVIRONMENT:-development}
   MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-25}
   ALLOW_DEBUG_EMBEDDER: ${ALLOW_DEBUG_EMBEDDER:-0}
@@ -56,6 +58,21 @@ services:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # Кадры «Узнать товар» (решение D-10а): только в оперативной памяти. Без сохранения (--save "" --appendonly no), без тома,
+  # /data — в памяти (tmpfs), порт наружу не публикуется. Кадр живёт не дольше 2 минут и удаляется сразу после распознавания
+  # (app/core/frame_store.py — программа сама проверяет эти настройки и без них распознавание по виду не включает).
+  frames:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "volatile-ttl"]
+    tmpfs:
+      - /data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -102,6 +119,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      frames:
+        condition: service_healthy
     healthcheck:
       # /health/ready: БД отвечает, таблицы на месте, брокер доступен. В образе нет curl — проверяем питоном.
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=4)"]
@@ -136,8 +155,40 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      frames:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=4)"]
+      interval: 15s
+      timeout: 6s
+      retries: 5
+      start_period: 40s
+
+  # Вход покупателя (документ 04, §3.5; решение В-5): адрес из QR-кода магазина. ТОЛЬКО публичный API («Узнать товар» без входа,
+  # с ограничением частоты) и страница покупателя — маршрутов сотрудников и управления здесь нет вовсе. Порт фиксированный (D-07).
+  # Гостевую сеть покупателей роутер должен пускать только на этот порт (документ 04, §5).
+  shop:
+    image: retail-shelf-audit:latest
+    pull_policy: never
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "${SHOP_PORT:-8080}:8080"
+    environment:
+      <<: *app-env
+      APP_LISTENER: customer
+    volumes: *app-volumes
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      frames:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=4)"]
       interval: 15s
       timeout: 6s
       retries: 5
@@ -161,6 +212,8 @@ services:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      frames:
         condition: service_healthy
     healthcheck:
       # ГОТОВ = (1) инициализация компонентов распознавания прошла (scripts.worker_health читает файл статуса воркера) И

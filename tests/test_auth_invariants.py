@@ -240,7 +240,7 @@ def test_every_route_with_an_admin_only_right_goes_through_the_listener_check():
     assert set(found) == names - {"CAMERA_MANAGE"}, found               # маршрутов камер в этой версии ещё нет (право зарезервировано)
     assert "routes_catalog.py" in found["CATALOG_WRITE"]
     catalog = (API / "routes_catalog.py").read_text(encoding="utf-8")
-    assert catalog.count("require_permission(Permission.CATALOG_WRITE)") == 5
+    assert catalog.count("require_permission(Permission.CATALOG_WRITE)") == 6          # + PATCH …/images/{фото} (шаг Р-7)
 
 
 def test_password_change_pass_is_accepted_only_by_the_initial_password_route():

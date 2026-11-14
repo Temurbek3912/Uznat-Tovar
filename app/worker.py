@@ -135,6 +135,20 @@ def _refresh_index() -> None:
         logger.error("Индекс каталога изменён другим процессом и не загружается: %s", status)
 
 
+def _refresh_exclusions(db: Session) -> None:
+    """Перед распознаванием: какие векторы индекса пропускать — фото, выведенные из эталонов или сделанные витринными на
+    странице «Товары» (база — источник истины; индекс не пересобирается, изменение действует со следующего кадра). Сбой
+    чтения базы — остаётся прежний список, распознавание не останавливается."""
+    if _matcher is None:
+        return
+    from app.services.product_images import PhotoRegistry
+    try:
+        _matcher.excluded = frozenset(PhotoRegistry(db).excluded_sources())
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        logger.error("Не удалось прочитать выведенные из эталонов фото: %s", type(exc).__name__)
+
+
 def _resync_index_after_failure(size_before: int, exc: BaseException) -> None:
     """Задача упала после того, как векторы уже попали в индекс в памяти (сохранение или база не удались), либо индекс на
     диске оказался чужим. Индекс в памяти заменяется сохранённым на диске: иначе несохранённые векторы (товара, которого нет
@@ -495,6 +509,7 @@ def identify_product_task(self, ref: str) -> dict:
             return {r.id: ProductInfo(id=r.id, name=r.name, brand=r.brand, expected_price=r.expected_price) for r in rows}
 
         _refresh_index()
+        _refresh_exclusions(db)
         result = identify(image, _embedder, _matcher, lookup)
         result["demo_mode"] = _runtime is not None and _runtime.component("embedder").status == ml_runtime.DEGRADED
         return result

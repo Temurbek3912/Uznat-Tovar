@@ -50,7 +50,8 @@ def _ranked_existing(vector: np.ndarray, matcher, lookup: Lookup) -> tuple[list[
     в индексе дальше, остался бы неузнанным из-за чужих векторов."""
     ranked = matcher.rank(vector)
     if not ranked:
-        return [], {}, True
+        # пустой ответ при непустом индексе — все векторы исключены (фото выведены из эталонов): «не нашли», а не «каталог пуст»
+        return [], {}, _index_total(matcher) == 0
     infos = dict(lookup([product_id for product_id, _ in ranked]))
     existing = [(pid, score) for pid, score in ranked if pid in infos]
     total = _index_total(matcher)

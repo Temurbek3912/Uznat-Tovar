@@ -139,7 +139,13 @@ class FakeBarcode:
         self.barcode, self.product_id = barcode, product_id
 
 
-for _cls, _names in ((FakeProduct, "id sku name brand category expected_price created_at"), (FakeBarcode, "barcode product_id")):
+class FakeProductImage:
+    """Запись о фото (product_images): в этих тестах таблица пуста — товары без записей, фото считаются по папке, как раньше."""
+    id = product_id = sha256 = role = is_active = source_ref = storage_path = created_at = None
+
+
+for _cls, _names in ((FakeProduct, "id sku name brand category expected_price created_at"), (FakeBarcode, "barcode product_id"),
+                     (FakeProductImage, "id product_id sha256 role is_active source_ref storage_path created_at")):
     for _n in _names.split():
         setattr(_cls, _n, Col(_n, _cls))
 
@@ -165,7 +171,7 @@ class FakeQuery:
         return FakeQuery(self.rows[:n], self.cols)
 
     def all(self):
-        if len(self.cols) == 1 and self.cols[0] is FakeProduct:
+        if len(self.cols) == 1 and self.cols[0] in (FakeProduct, FakeProductImage):
             return self.rows
         return [types.SimpleNamespace(**{c.name: getattr(r, c.name) for c in self.cols}) for r in self.rows]
 
@@ -180,7 +186,7 @@ class FakeDB:
     успевающий записать что-то между проверками маршрута и его commit."""
 
     def __init__(self):
-        self.products, self.barcodes = [], []
+        self.products, self.barcodes, self.images = [], [], []
         self.commits, self.rollbacks = 0, 0
         self._pending_add, self._pending_delete = [], []
         self._saved: dict[int, dict] = {}
@@ -191,6 +197,8 @@ class FakeDB:
             self._saved.setdefault(id(p), dict(vars(p)))
 
     def _table(self, owner):
+        if owner is FakeProductImage:
+            return self.images
         return self.products if owner is FakeProduct else self.barcodes
 
     def query(self, *cols):
@@ -200,7 +208,7 @@ class FakeDB:
 
     def get(self, model, ident):
         self._remember()
-        key = "id" if model is FakeProduct else "barcode"
+        key = "id" if model in (FakeProduct, FakeProductImage) else "barcode"
         return next((r for r in self._table(model) if getattr(r, key) == ident), None)
 
     def add(self, obj):
@@ -336,7 +344,7 @@ def _build_env(env, tmp_path: Path):
 
     inject("app.api.deps", require_permission=_fake_require_permission)
     inject("app.core.config", get_settings=lambda: env.settings, resolve_project_path=lambda p: Path(p))
-    inject("app.db.models", Product=FakeProduct, ProductBarcodeORM=FakeBarcode)
+    inject("app.db.models", Product=FakeProduct, ProductBarcodeORM=FakeBarcode, ProductImage=FakeProductImage)
     inject("app.db.session", get_db=lambda: env.db)
 
     def make_task(name, result=None):

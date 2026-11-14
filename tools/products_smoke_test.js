@@ -50,7 +50,8 @@ function boot(opts) {
     [/\/catalog\/products\/[^/?]+\/photos$/, (u, o) => (opts.photos ? opts.photos(u, o) : json(202, { task_id: "t2", name: "Товар 1", photos: 2, warnings: [] }))],
     [/\/catalog\/products\/[^/?]+\/photo\?/, () => (opts.thumb ? opts.thumb() : json(200, {}))],
     [/\/catalog\/products\/[^/?]+$/, (u, o) => (opts.patch ? opts.patch(u, o) : json(200, Object.assign(P(1), { barcodes: [] })))],
-    [/\/catalog\/products\?/, (u) => (opts.listHandler ? opts.listHandler(u) : (() => { const q = new URLSearchParams(u.split("?")[1]); const off = +q.get("offset"), lim = +q.get("limit"); return json(200, list.slice(off, off + lim)); })())]
+    [/\/catalog\/products\?/, (u) => (opts.listHandler ? opts.listHandler(u) : (() => { const q = new URLSearchParams(u.split("?")[1]); const off = +q.get("offset"), lim = +q.get("limit"); return json(200, list.slice(off, off + lim)); })())],
+    [/\/catalog\/products\/[^/?]+\/images(\/[^/?]+)?$/, (u, o) => (opts.images ? opts.images(u, o) : json(200, { images: [], reference_count: 0 }))]
   ];
   const fetch = async (url, o) => {
     calls.push({ url, opts: o || {} });
@@ -441,6 +442,58 @@ const sorted = (a) => a.slice().sort();
     await withPage({ list: MANY(2) }, async (s) => {
       await s.click("openAdd"); await s.choose("photoInput", s.photos(2)); assert.ok(s.text("photosHint").startsWith("2 фото.")); s.i18n.setLang("uz"); await flush(); assert.ok(s.text("photosHint").startsWith(tx("uz", "photos.count", { n: 2 }) + "."), s.text("photosHint"));
       assert.strictEqual(s.$("photoStrip").byTag("img")[0].getAttribute("alt"), tx("uz", "products.photo_alt", { n: 1 })); assert.strictEqual(s.$("photoStrip").byClass("ph__rm")[0].getAttribute("aria-label"), tx("uz", "products.photo_remove", { n: 1 }));
+    });
+  });
+
+  await test("фото товара в карточке: роли из базы, «Вывести из эталонов» / «Вернуть» / «Сделать витринным» шлют PATCH без удаления; без эталонов — предупреждение; сбой загрузки — понятная строка", async () => {
+    const IMG = (id, over) => Object.assign({ id, role: "reference", active: true, in_recognition: true, has_file: true, is_cover: false }, over || {});
+    let images = [IMG("i1", { is_cover: true }), IMG("i2"), IMG("i3", { role: "display", in_recognition: false })];
+    const patches = [];
+    const handler = (u, o) => {
+      if ((o.method || "GET") === "PATCH") {
+        const id = u.split("/").pop(), body = JSON.parse(o.body); patches.push([id, body]);
+        images = images.map((im) => im.id !== id ? im : Object.assign({}, im, body.active !== undefined ? { active: body.active } : {}, body.role ? { role: body.role } : {}));
+        images = images.map((im) => Object.assign(im, { in_recognition: im.role === "reference" && im.active }));
+        return json(200, { images, reference_count: images.filter((im) => im.in_recognition).length });
+      }
+      return json(200, { images, reference_count: 2 });
+    };
+    await withPage({ list: MANY(2), images: handler }, async (s) => {
+      s.openRow(0); await sleep(10); await flush();
+      const cards = () => s.$("editPhotos").byClass("gph");
+      assert.strictEqual(cards().length, 3);
+      assert.deepStrictEqual(cards().map((c) => c.byClass("gph__state")[0].textContent), ["Эталон: узнаётся по нему", "Эталон: узнаётся по нему", "Витринное"]);
+      assert.ok(s.by("GET", /\/photo\?size=thumb&image_id=i1$/).length === 1, "миниатюра фото — по его номеру в базе");
+      const btn = (i, text) => cards()[i].byTag("button").find((b) => b.textContent === text);
+      btn(0, "Вывести из эталонов").click(); await sleep(15); await flush();
+      assert.deepStrictEqual(patches[0], ["i1", { active: false }]);
+      assert.ok(cards()[0].className.includes("gph--off") && cards()[0].byClass("gph__state")[0].textContent === "Выведено из эталонов");
+      assert.strictEqual(s.text("editPhotosNote"), "Сохранено. Распознавание учтёт это со следующего снимка.");
+      assert.strictEqual(s.by("DELETE", /./).length, 0, "фото никогда не удаляются");
+      btn(1, "Сделать витринным").click(); await sleep(15); await flush();
+      assert.deepStrictEqual(patches[1], ["i2", { role: "display" }]);
+      assert.ok(s.text("editPhotosNote").startsWith("Сохранено. У товара не осталось эталонов"));
+      btn(0, "Вернуть в эталоны").click(); await sleep(15); await flush();
+      assert.deepStrictEqual(patches[2], ["i1", { active: true }]);
+      btn(2, "Сделать эталоном").click(); await sleep(15); await flush();
+      assert.deepStrictEqual(patches[3], ["i3", { role: "reference", active: true }]);
+      s.i18n.setLang("en"); await flush();
+      assert.strictEqual(cards()[0].byClass("gph__state")[0].textContent, "Reference: used for recognition");
+      s.i18n.setLang("ru"); await flush();
+      await s.click("editCancel"); assert.ok(!s.shown("editCard"));
+    });
+    await withPage({ list: MANY(1), images: () => json(500, {}) }, async (s) => {
+      s.openRow(0); await sleep(10); await flush();
+      assert.strictEqual(s.$("editPhotos").byClass("hint")[0].textContent, "Не удалось загрузить фото товара. Закройте и откройте карточку ещё раз.");
+    });
+    await withPage({ list: MANY(1) }, async (s) => {
+      s.openRow(0); await sleep(10); await flush();
+      assert.ok(s.$("editPhotos").byClass("hint")[0].textContent.startsWith("Фото этого товара ещё не записаны в базу"));
+    });
+    await withPage({ list: MANY(1), images: (u, o) => ((o.method || "GET") === "PATCH" ? json(404, { detail: "Такого фото у этого товара нет.", code: "photo_not_found" }) : json(200, { images: [IMG("i1")] })) }, async (s) => {
+      s.openRow(0); await sleep(10); await flush();
+      s.$("editPhotos").byTag("button")[0].click(); await sleep(15); await flush();
+      assert.ok(s.text("editPhotosNote").length > 0 && s.shown("editPhotosNote"), "ошибка сервера видна у фото");
     });
   });
 

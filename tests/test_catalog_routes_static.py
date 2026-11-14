@@ -20,6 +20,8 @@ EXPECTED = {
     ("PATCH", "/products/{product_id}"): "CATALOG_WRITE",
     ("GET", "/products/tasks/{task_id}"): "CATALOG_WRITE",
     ("GET", "/products/{product_id}/photo"): "CATALOG_READ",
+    ("GET", "/products/{product_id}/images"): "CATALOG_READ",            # фото товара из базы (шаг Р-7)
+    ("PATCH", "/products/{product_id}/images/{image_id}"): "CATALOG_WRITE",  # вывести из эталонов / витринное — только admin
     ("POST", "/identify"): "CATALOG_READ",
 }
 

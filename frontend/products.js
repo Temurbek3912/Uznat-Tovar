@@ -4,7 +4,8 @@
    страница догружает порциями). Фото на сервере отдаются только с заголовком авторизации, поэтому миниатюры грузятся через fetch и показываются как blob: (лениво, по мере
    появления строки на экране). Вход и токен ведёт общий модуль Auth (auth.js). Тексты — только через I18N.t; сообщения хранятся как «ключ + параметры» и перерисовываются при смене языка. Данные из базы в разметку строкой
    не попадают: только textContent / setAttribute. Сервер: GET /api/v1/catalog/products, POST …/products/upload (202 + task_id), POST …/{id}/photos, GET …/tasks/{id},
-   PATCH …/{id}, GET …/{id}/photo?size=thumb. */
+   PATCH …/{id}, GET …/{id}/photo?size=thumb; фото товара из базы — GET …/{id}/images, PATCH …/{id}/images/{фото} (вывести из эталонов, вернуть,
+   сделать витринным или эталоном; фото не удаляются), миниатюра фото — GET …/{id}/photo?size=thumb&image_id=. */
 (function (root, factory) {
   "use strict";
   var api = factory();
@@ -87,6 +88,7 @@
     var msgs = {};                             // id -> {key, params} | {text}: сообщения хранятся логически и перерисовываются при смене языка
     var listNoteKind = "";                     // "", "ok" или "err" — вид строки под списком
     var thumbCache = {}, loaded = false;
+    var editingImages = null, imagesFailed = false, imageUrls = {}, imageBusy = false;   // фото товара в карточке правки (из базы)
 
     // ----- вход (токен, адрес и запрос входа — в общем модуле Auth)
     var auth = Auth.create(win);
@@ -138,7 +140,7 @@
       if (id === "listNote") listNoteKind = m ? (kind || "") : "";
       paintMsg(id);
     }
-    function paintAllMsgs() { ["loginError", "formError", "editError", "listError", "listNote"].forEach(paintMsg); }
+    function paintAllMsgs() { ["loginError", "formError", "editError", "listError", "listNote", "editPhotosNote"].forEach(paintMsg); }
 
     // ----- выбор и подготовка фото
     function shrinkPhoto(file) {
@@ -384,10 +386,101 @@
       $("editName").value = p.name || "";
       $("editPrice").value = p.expected_price === null || p.expected_price === undefined ? "" : String(p.expected_price).replace(".", ",");
       setMsg("editError", null); show("editCard", true);
+      forgetImages(); loadImages(p.id);
       var first = $("editName"); if (first.focus) first.focus();
       scrollTo("editCard");
     }
-    function closeEdit() { editingId = null; show("editCard", false); }
+    function closeEdit() { editingId = null; show("editCard", false); forgetImages(); }
+
+    // ----- фото товара в карточке правки: эталоны, витринное, выведенные (из базы; файлы не удаляются никогда)
+    function forgetImages() {
+      Object.keys(imageUrls).forEach(function (id) { if (imageUrls[id]) win.URL.revokeObjectURL(imageUrls[id]); });
+      imageUrls = {}; editingImages = null; imagesFailed = false; setMsg("editPhotosNote", null);
+    }
+    function imageState(img) {
+      if (img.role === "display") return { key: img.is_cover ? "products.photo_state_cover" : "products.photo_state_display", ok: false };
+      if (!img.active) return { key: "products.photo_state_off", ok: false };
+      return { key: "products.photo_state_ref", ok: true };
+    }
+    function imageActions(img) {                        // какие кнопки у фото: [ключ текста, что отправить]
+      if (img.role === "display") return [["products.photo_make_ref", { role: "reference", active: true }]];
+      if (!img.active) return [["products.photo_activate", { active: true }]];
+      return [["products.photo_deactivate", { active: false }], ["products.photo_make_display", { role: "display" }]];
+    }
+    function putPic(host, url, img) {
+      clear(host);
+      var pic = doc.createElement("img"); pic.setAttribute("src", url);
+      pic.setAttribute("alt", t("products.photo_alt", { n: editingImages ? editingImages.indexOf(img) + 1 : 1 }));
+      host.appendChild(pic);
+    }
+    function loadImageThumb(productId, img, host) {
+      if (!img.has_file) return;
+      if (imageUrls[img.id]) { putPic(host, imageUrls[img.id], img); return; }
+      apiFetch("/api/v1/catalog/products/" + encodeURIComponent(productId) + "/photo?size=thumb&image_id=" + encodeURIComponent(img.id)).then(function (res) {
+        if (!res.ok) return null;
+        return res.blob().then(function (blob) {
+          if (editingId !== productId) return;                                  // карточку уже закрыли или открыли другой товар
+          imageUrls[img.id] = win.URL.createObjectURL(blob); putPic(host, imageUrls[img.id], img);
+        });
+      }).catch(function () { /* без миниатюры остаётся подпись */ });
+    }
+    function hintLine(box, key) { var p = doc.createElement("p"); p.className = "hint"; p.textContent = t(key); box.appendChild(p); }
+    function renderEditPhotos() {
+      var box = $("editPhotos");
+      clear(box);
+      if (imagesFailed) { hintLine(box, "products.photos_load_failed"); return; }
+      if (!editingImages) { hintLine(box, "common.loading"); return; }
+      if (!editingImages.length) { hintLine(box, "products.photos_db_none"); return; }
+      var productId = editingId;
+      editingImages.forEach(function (img, index) {
+        var card = doc.createElement("div"); card.className = img.in_recognition ? "gph" : "gph gph--off";
+        var pic = doc.createElement("div"); pic.className = "gph__pic";
+        pic.textContent = img.has_file ? t("products.photo_alt", { n: index + 1 }) : t("products.photo_no_file");
+        card.appendChild(pic);
+        var st = imageState(img), state = doc.createElement("span");
+        state.className = st.ok ? "gph__state gph__state--ok" : "gph__state"; state.textContent = t(st.key);
+        card.appendChild(state);
+        imageActions(img).forEach(function (a) {
+          var b = doc.createElement("button"); b.setAttribute("type", "button"); b.className = "btn btn--secondary gph__btn";
+          b.textContent = t(a[0]); if (imageBusy) b.disabled = true;
+          b.addEventListener("click", guard(function () { return changeImage(productId, img, a[1]); }));
+          card.appendChild(b);
+        });
+        box.appendChild(card);
+        loadImageThumb(productId, img, pic);
+      });
+    }
+    function loadImages(productId) {
+      editingImages = null; imagesFailed = false; renderEditPhotos();
+      return apiFetch("/api/v1/catalog/products/" + encodeURIComponent(productId) + "/images").then(function (res) {
+        if (editingId !== productId) return null;
+        if (!res.ok) { imagesFailed = true; renderEditPhotos(); return null; }
+        return res.json().then(function (data) {
+          if (editingId !== productId) return;
+          editingImages = data && Array.isArray(data.images) ? data.images : [];
+          renderEditPhotos();
+        });
+      }).catch(function (e) { if (editingId === productId && !(isNetError(e) && e.key === "login.expired")) { imagesFailed = true; renderEditPhotos(); } });
+    }
+    function changeImage(productId, img, body) {
+      if (imageBusy) return Promise.resolve();
+      imageBusy = true; setMsg("editPhotosNote", null); renderEditPhotos();
+      return apiFetch("/api/v1/catalog/products/" + encodeURIComponent(productId) + "/images/" + encodeURIComponent(img.id), {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+      }).then(function (res) {
+        if (res.status === 403) { showAccess(); return null; }
+        if (!res.ok) return readError(res).then(function (b) { setMsg("editPhotosNote", apiError(res.status, b)); return null; });
+        return res.json().then(function (data) {
+          if (editingId !== productId) return null;
+          editingImages = data && Array.isArray(data.images) ? data.images : editingImages;
+          var refs = data && typeof data.reference_count === "number" ? data.reference_count : null;
+          setMsg("editPhotosNote", refs === 0 ? { key: "products.photos_no_refs" } : { key: "products.photo_changed" });
+          forgetThumb(productId);                                   // миниатюра в списке могла смениться (витринное фото)
+          return loadProducts();
+        });
+      }).catch(function (e) { setMsg("editPhotosNote", netMessage(e, "products.save_failed")); })
+        .then(function () { imageBusy = false; if (editingId === productId) renderEditPhotos(); });
+    }
     function removeBarcode(code) {
       var id = editingId;
       setMsg("editError", null);
@@ -473,6 +566,7 @@
     relabel();
     I18N.onChange(function () {
       relabel(); refreshForm(); renderProgress(); renderDuplicate(); renderEditCodes(); renderEditTitle(); paintAllMsgs(); list.refresh();
+      if (editingId) renderEditPhotos();
       $("rail").setAttribute("aria-label", t("nav.menu"));
     });
 
@@ -513,7 +607,7 @@
     $("editSave").addEventListener("click", guard(saveEdit));
     $("editCancel").addEventListener("click", closeEdit);
     $("themeBtn").addEventListener("click", function () { Theme.next(); relabel(); });
-    if (win.addEventListener) win.addEventListener("pagehide", function () { Object.keys(thumbCache).forEach(forgetThumb); });
+    if (win.addEventListener) win.addEventListener("pagehide", function () { Object.keys(thumbCache).forEach(forgetThumb); forgetImages(); });
     syncPanels(); renderDuplicate(); paintAllMsgs();
 
     return {

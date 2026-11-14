@@ -226,13 +226,59 @@ class PhotoRegistry:
 
     def set_active(self, image_id: str, active: bool) -> None:
         """Вывести фото из эталонов (или вернуть). Запись и файл остаются."""
+        self.change(image_id, active=active)
+        self.db.commit()
+
+    def change(self, image_id: str, *, active: bool | None = None, role: str | None = None,
+               product_id: str | None = None) -> tuple[object, dict, dict]:
+        """Изменить активность и (или) роль фото БЕЗ фиксации — вызывающий добавляет запись журнала и делает commit в той же
+        транзакции. Возвращает (запись, было, стало) — только изменившиеся поля. product_id — фото должно принадлежать этому
+        товару (иначе LookupError, как и для несуществующего фото). Файл и запись не удаляются никогда."""
         from app.db.models import ProductImage
         row = self.db.get(ProductImage, image_id)
-        if row is None:
+        if row is None or (product_id is not None and row.product_id != product_id):
             raise LookupError(image_id)
-        row.is_active = bool(active)
-        row.deactivated_at = None if active else _utcnow()
-        self.db.commit()
+        if role is not None and role not in ROLES:
+            raise ValueError(f"неизвестная роль фото: {role!r}")
+        before = {"active": bool(row.is_active), "role": row.role}
+        if active is not None and bool(active) != bool(row.is_active):
+            row.is_active = bool(active)
+            row.deactivated_at = None if active else _utcnow()
+        if role is not None:
+            row.role = role
+        after = {"active": bool(row.is_active), "role": row.role}
+        keys = [k for k in after if before[k] != after[k]]
+        return row, {k: before[k] for k in keys}, {k: after[k] for k in keys}
+
+    def excluded_sources(self) -> set[tuple[str, str]]:
+        """(товар, источник вектора) фото, которые НЕ участвуют в распознавании: выведенные из эталонов и витринные. Векторы
+        таких фото могут оставаться в индексе (индекс — производные данные, пересборка необязательна): распознавание их
+        пропускает (ProductMatcher.excluded). Если у того же товара с тем же источником есть активный эталон — не исключается."""
+        from app.db.models import ProductImage
+        rows = self.db.query(ProductImage.product_id, ProductImage.source_ref, ProductImage.role, ProductImage.is_active).filter(
+            ProductImage.source_ref.isnot(None)).all()
+        used = {(pid, src) for pid, src, role, active in rows if role == REFERENCE and active}
+        return {(pid, src) for pid, src, role, active in rows if not (role == REFERENCE and active)} - used
+
+    def summaries(self, product_ids: Sequence[str]) -> dict[str, "PhotoSummary"]:
+        """Сводка фото для списка товаров одним запросом (по частям — предел числа параметров): {товар: PhotoSummary}.
+        Товара без записей в ответе нет."""
+        from app.db.models import ProductImage
+        ids = list(dict.fromkeys(product_ids))
+        rows: list = []
+        for start in range(0, len(ids), 500):
+            part = ids[start:start + 500]
+            rows += (self.db.query(ProductImage).filter(ProductImage.product_id.in_(part))
+                     .order_by(ProductImage.product_id, ProductImage.created_at, ProductImage.id).all())
+        grouped: dict[str, list] = {}
+        for row in rows:
+            grouped.setdefault(row.product_id, []).append(row)
+        return {pid: summarize(images) for pid, images in grouped.items()}
+
+    def images_of(self, product_id: str) -> list:
+        from app.db.models import ProductImage
+        return (self.db.query(ProductImage).filter(ProductImage.product_id == product_id)
+                .order_by(ProductImage.created_at, ProductImage.id).all())
 
     # чтение ---------------------------------------------------------------
     def known_source_refs(self) -> set[str]:
@@ -252,6 +298,52 @@ class PhotoRegistry:
         rows = self.db.query(ImageEmbedding.image_id, ImageEmbedding.dim, ImageEmbedding.vector).filter(
             ImageEmbedding.model_version == version).all()
         return {image_id: vector_from_bytes(data, dim) for image_id, dim, data in rows}
+
+
+# --------------------------------------------------------------------------- сводка для каталога (шаг Р-7)
+
+
+def in_recognition(image) -> bool:
+    """Участвует ли фото в распознавании: только активный эталон."""
+    return image.role == REFERENCE and bool(image.is_active)
+
+
+def cover_image(images: Sequence):
+    """Какое фото показывать миниатюрой товара: первое активное витринное, иначе первый активный эталон, иначе первое любое —
+    из тех, у которых есть файл в программе (storage_path). Нет ни одного файла — None."""
+    with_file = [i for i in images if i.storage_path]
+    for pick in (lambda i: i.role == DISPLAY and i.is_active, lambda i: i.role == REFERENCE and i.is_active, lambda i: True):
+        for image in with_file:
+            if pick(image):
+                return image
+    return None
+
+
+@dataclass(frozen=True)
+class PhotoSummary:
+    total: int                     # все записи о фото товара (включая выведенные и витринные)
+    references: int                # активные эталоны — участвуют в распознавании
+    display: int                   # витринные
+    inactive: int                  # выведенные из эталонов
+    cover_id: str | None           # фото для миниатюры (cover_image)
+
+
+def summarize(images: Sequence) -> PhotoSummary:
+    cover = cover_image(images)
+    return PhotoSummary(total=len(images), references=sum(1 for i in images if in_recognition(i)),
+                        display=sum(1 for i in images if i.role == DISPLAY), inactive=sum(1 for i in images if not i.is_active),
+                        cover_id=cover.id if cover is not None else None)
+
+
+def photo_file(media_root: Path, image) -> Path | None:
+    """Файл фото внутри media_root по storage_path; путь вне media_root, отсутствующий файл или фото вне программы — None."""
+    if image is None or not image.storage_path:
+        return None
+    root = Path(media_root).resolve()
+    path = (root / image.storage_path).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        return None
+    return path
 
 
 # --------------------------------------------------------------------------- перенос существующих фото

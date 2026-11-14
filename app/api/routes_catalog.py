@@ -10,6 +10,8 @@
   POST  /products/{id}/photos          добавить фото (штрих-код на фото привяжется) — только admin
   PATCH /products/{id}                 название/цена/бренд/категория, ±штрих-код   — только admin
   GET   /products/{id}/photo           миниатюра или фото товара                   — все роли с catalog:read
+  GET   /products/{id}/images          фото товара из базы: эталоны, витринные, выведенные — все роли с catalog:read
+  PATCH /products/{id}/images/{img}    вывести из эталонов / вернуть / сделать витринным — только admin (журнал)
   GET   /products/tasks/{task_id}      ход добавления (state: working/done/failed)
   POST  /identify                      «Узнать товар»: кадр -> штрих-код или вид   — все роли с catalog:read
   POST  /products                      прежний способ: JSON со ссылками на фото    — только admin
@@ -36,7 +38,7 @@ from app.core.frame_store import FrameStoreError, frame_ref, get_frame_store
 from app.core.memory_upload import read_frame
 from app.core.schemas import ProductIn
 from app.core.security import CurrentUser, Permission
-from app.db.models import Product, ProductBarcodeORM
+from app.db.models import Product, ProductBarcodeORM, ProductImage
 from app.db.session import get_db
 from app.pipeline.imageio import load_rgb
 from app.services.barcode import (
@@ -69,6 +71,14 @@ from app.services.catalog_upload import (
     uploads_root,
 )
 from app.services.frame_lifecycle import FRAME_TTL_SECONDS
+from app.services.product_images import (
+    DISPLAY,
+    REFERENCE,
+    PhotoRegistry,
+    PhotoSummary,
+    in_recognition,
+    photo_file,
+)
 from app.worker import (
     add_catalog_photos_task,
     add_catalog_product_task,
@@ -91,8 +101,19 @@ class ProductSummary(BaseModel):
     brand: str
     category: str
     expected_price: float | None = None
-    photo_count: int = 0           # фото, загруженные из браузера; у товаров из импорта папкой — 0 (там фото в catalog/)
+    photo_count: int = 0           # фото товара в базе (product_images, все роли); товар без записей в базе (фото ещё не
+                                   # перенесены воркером) — по-прежнему число файлов в data/catalog-uploads
     barcodes: list[str] = []       # привязанные штрих-коды (нормализованные)
+    reference_count: int | None = None   # фото, по которым товар узнаётся (активные эталоны); None — фото ещё не в базе
+    cover_image_id: str | None = None    # фото для миниатюры (витринное, иначе первый эталон); None — нет файла в программе
+
+
+class ImageUpdate(BaseModel):
+    """Что изменить у фото товара. Не присланное поле не меняется. Фото и файл не удаляются никогда."""
+
+    active: bool | None = None     # False — вывести из эталонов (в распознавании не участвует), True — вернуть
+    role: str | None = None        # "reference" — эталон для распознавания, "display" — витринное (только показ в карточке)
+    reason: str | None = None      # причина — для журнала действий
 
 
 class ProductUpdate(BaseModel):
@@ -115,12 +136,22 @@ def _photos_dir() -> Path:
     return uploads_root(_media_root())
 
 
-def _summary(product: Product, barcodes: list[str] | None = None) -> ProductSummary:
+def _summary(product: Product, barcodes: list[str] | None = None, photos: PhotoSummary | None = None) -> ProductSummary:
+    """Сводка товара. Фото — из базы (product_images); если записей о фото у товара нет (перенос воркером ещё не выполнен),
+    число фото — по папке data/catalog-uploads, как раньше: прежние клиенты видят то же самое."""
+    if photos is not None:
+        count, refs, cover = photos.total, photos.references, photos.cover_id
+    else:
+        count, refs, cover = len(list_photo_files(_photos_dir(), product.sku)), None, None
     return ProductSummary(
         id=product.id, sku=product.sku, name=product.name, brand=product.brand, category=product.category,
-        expected_price=product.expected_price, photo_count=len(list_photo_files(_photos_dir(), product.sku)),
-        barcodes=sorted(barcodes or []),
+        expected_price=product.expected_price, photo_count=count, barcodes=sorted(barcodes or []),
+        reference_count=refs, cover_image_id=cover,
     )
+
+
+def _photo_summaries(db: Session, product_ids: list[str]) -> dict[str, PhotoSummary]:
+    return PhotoRegistry(db).summaries(product_ids)
 
 
 def _barcodes_of(db: Session, product_ids: list[str]) -> dict[str, list[str]]:
@@ -270,8 +301,9 @@ async def search_products(
         exact = Product.id.in_(db.query(ProductBarcodeORM.product_id).filter(ProductBarcodeORM.barcode.in_(exact_codes)))
         order = (exact.desc(), *order)
     products = query.order_by(*order).offset(offset).limit(limit).all()
-    codes = _barcodes_of(db, [p.id for p in products])
-    return [_summary(p, codes.get(p.id)) for p in products]
+    ids = [p.id for p in products]
+    codes, photos = _barcodes_of(db, ids), _photo_summaries(db, ids)
+    return [_summary(p, codes.get(p.id), photos.get(p.id)) for p in products]
 
 
 @router.post("/products", status_code=202)
@@ -448,7 +480,7 @@ def update_product(
             db.rollback()
             raise _concurrent_update_error() from None
     db.refresh(product)
-    return _summary(product, _barcodes_of(db, [product.id]).get(product.id))
+    return _summary(product, _barcodes_of(db, [product.id]).get(product.id), _photo_summaries(db, [product.id]).get(product.id))
 
 
 def _apply_product_changes(db: Session, product: Product, changes: dict, remove_link, add_code: str | None) -> None:
@@ -481,17 +513,34 @@ async def get_add_product_status(
 def product_photo(
     product_id: str,
     size: str = "thumb",
-    n: int = 0,
+    n: int | None = None,
+    image_id: str | None = None,
     db: Session = Depends(get_db),
     _user: CurrentUser = Depends(require_permission(Permission.CATALOG_READ)),
 ) -> Response:
     """Фото товара (size=thumb — миниатюра 240 px для списка, size=full — как сохранено). Нужен заголовок Authorization,
-    поэтому страница получает его через fetch -> blob, а не через <img src>."""
+    поэтому страница получает его через fetch -> blob, а не через <img src>.
+
+    Какое фото: image_id — конкретное фото из базы (GET …/images); без image_id и n — витринное фото товара из базы
+    (product_images.cover_image), а если записей о фото нет — первое фото из папки, как раньше; n — прежний способ:
+    n-е фото в папке data/catalog-uploads."""
     product = db.get(Product, product_id)
-    files = list_photo_files(_photos_dir(), product.sku) if product is not None else []
-    if not files or not 0 <= n < len(files):
+    if product is None:
         raise ApiError(404, "product_has_no_photos", "У товара нет фото.")
-    source = files[n]
+    source = None
+    if image_id is not None:
+        image = db.get(ProductImage, image_id)
+        source = photo_file(_media_root(), image) if image is not None and image.product_id == product.id else None
+    else:
+        summary = _photo_summaries(db, [product.id]).get(product.id) if n is None else None
+        if summary is not None:
+            source = photo_file(_media_root(), db.get(ProductImage, summary.cover_id)) if summary.cover_id else None
+        else:
+            files = list_photo_files(_photos_dir(), product.sku)
+            index = n or 0
+            source = files[index] if 0 <= index < len(files) else None
+    if source is None:
+        raise ApiError(404, "product_has_no_photos", "У товара нет фото.")
     if size == "full":
         content = source.read_bytes()
     else:
@@ -505,6 +554,76 @@ def product_photo(
             except OSError:
                 pass                                   # миниатюра — удобство, не обязанность: без кэша просто пересчитаем
     return Response(content=content, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
+
+
+def _image_out(image: ProductImage, cover_id: str | None) -> dict:
+    """Фото для страницы «Товары»: без путей на сервере и без содержимого (оно — через GET …/photo?image_id=)."""
+    return {"id": image.id, "role": image.role, "active": bool(image.is_active), "in_recognition": in_recognition(image),
+            "has_file": bool(image.storage_path), "is_cover": image.id == cover_id, "original_name": image.original_name,
+            "width": image.width, "height": image.height, "created_at": image.created_at, "deactivated_at": image.deactivated_at}
+
+
+def _images_payload(db: Session, product: Product) -> dict:
+    registry = PhotoRegistry(db)
+    images = registry.images_of(product.id)
+    summary = registry.summaries([product.id]).get(product.id)
+    cover = summary.cover_id if summary else None
+    return {"product_id": product.id, "name": product.name, "photo_count": len(images),
+            "reference_count": summary.references if summary else 0, "cover_image_id": cover,
+            "images": [_image_out(i, cover) for i in images]}
+
+
+@router.get("/products/{product_id}/images")
+def product_images(
+    product_id: str,
+    db: Session = Depends(get_db),
+    _user: CurrentUser = Depends(require_permission(Permission.CATALOG_READ)),
+) -> dict:
+    """Фото товара из базы, старые первыми: роль (эталон/витринное), выведено ли из эталонов, участвует ли в распознавании,
+    витринное ли для миниатюры. Фото, которые воркер ещё не перенёс в базу, здесь не видны (они появятся после его запуска)."""
+    product = db.get(Product, product_id)
+    if product is None:
+        raise ApiError(404, "product_not_found", "Товар не найден.")
+    return _images_payload(db, product)
+
+
+_PHOTO_ACTIONS = {("active", False): "catalog.photo.deactivated", ("active", True): "catalog.photo.activated",
+                  ("role", DISPLAY): "catalog.photo.made_display", ("role", REFERENCE): "catalog.photo.made_reference"}
+
+
+@router.patch("/products/{product_id}/images/{image_id}")
+def update_product_image(
+    product_id: str,
+    image_id: str,
+    body: ImageUpdate,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(require_permission(Permission.CATALOG_WRITE)),
+) -> dict:
+    """Вывести фото из эталонов (active=false) или вернуть (true); сделать витринным (role=display) или эталоном (reference).
+    Фото и файл не удаляются. Распознавание учитывает изменение со следующего кадра: воркер пропускает векторы фото, которые
+    не являются активными эталонами (индекс пересобирать не нужно). Каждое изменение — запись в журнале действий, в той же
+    транзакции."""
+    product = db.get(Product, product_id)
+    if product is None:
+        raise ApiError(404, "product_not_found", "Товар не найден.")
+    if body.role is not None and body.role not in (REFERENCE, DISPLAY):
+        raise ApiError(422, "photo_role_invalid", "Роль фото: эталон (reference) или витринное (display).")
+    try:
+        _row, before, after = PhotoRegistry(db).change(image_id, active=body.active, role=body.role, product_id=product.id)
+    except LookupError:
+        raise ApiError(404, "photo_not_found", "Такого фото у этого товара нет.") from None
+    from app.services import audit            # здесь, а не в начале файла: журнал тянет SQLAlchemy-запросы (тест логики без неё)
+    actor = audit.AuditActor(user.id, "api")
+    reason_text = (body.reason or "").strip() or None
+    for field_name in ("active", "role"):
+        if field_name in after:
+            audit.record(db, _PHOTO_ACTIONS[(field_name, after[field_name])], actor=actor, target_type="product",
+                         target_id=product.id, before={"image_id": image_id, field_name: before[field_name]},
+                         after={"image_id": image_id, field_name: after[field_name]}, reason=reason_text)
+    db.commit()
+    payload = _images_payload(db, product)
+    payload["changed"] = sorted(after)
+    return payload
 
 
 def run_identify(db: Session, data: bytes) -> dict:

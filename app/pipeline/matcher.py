@@ -268,6 +268,16 @@ class NumpyCatalogIndex:
         top_idx = top_idx[np.argsort(-sims[top_idx])]
         return [(self._ids[i], float(sims[i])) for i in top_idx]
 
+    def search_sources(self, query: np.ndarray, top_k: int = 5) -> list[tuple[str, float, str | None]]:
+        """Как search, но с источником каждого вектора — чтобы распознавание пропускало выведенные из эталонов фото."""
+        if not self._vectors:
+            return []
+        sims = np.stack(self._vectors) @ query
+        top_k = min(top_k, len(sims))
+        top_idx = np.argpartition(-sims, top_k - 1)[:top_k]
+        top_idx = top_idx[np.argsort(-sims[top_idx])]
+        return [(self._ids[i], float(sims[i]), self._sources[i]) for i in top_idx]
+
     @property
     def dimension(self) -> int | None:
         """Размерность векторов; None — индекс пуст (размерность ещё не определена)."""
@@ -376,6 +386,14 @@ class FaissCatalogIndex:
             for idx, score in zip(indices[0], scores[0])
             if idx != -1
         ]
+
+    def search_sources(self, query: np.ndarray, top_k: int = 5) -> list[tuple[str, float, str | None]]:
+        """Как search, но с источником каждого вектора (см. NumpyCatalogIndex.search_sources)."""
+        if self._index.ntotal == 0:
+            return []
+        query = np.atleast_2d(query).astype("float32")
+        scores, indices = self._index.search(query, min(top_k, self._index.ntotal))
+        return [(self._ids[idx], float(score), self._sources[idx]) for idx, score in zip(indices[0], scores[0]) if idx != -1]
 
     @property
     def dimension(self) -> int:
@@ -704,10 +722,22 @@ class ProductMatcher:
         self.unknown_threshold = unknown_threshold
         self.margin_threshold = margin_threshold
         self.candidates_k = candidates_k          # сколько ВЕКТОРОВ просматривать, чтобы найти соперника среди других товаров
+        # (товар, источник) векторов, которые распознавание пропускает: фото выведены из эталонов или сделаны витринными
+        # (app/services/product_images.PhotoRegistry.excluded_sources; воркер обновляет перед каждым «Узнать товар»).
+        self.excluded: frozenset[tuple[str, str]] = frozenset()
 
     def rank(self, embedding: np.ndarray, k: int | None = None) -> list[tuple[str, float]]:
-        """Лучший счёт на каждый товар; k — сколько ВЕКТОРОВ просмотреть (по умолчанию max(top_k, candidates_k))."""
-        return rank_products(self.index.search(embedding, k or max(self.top_k, self.candidates_k)))
+        """Лучший счёт на каждый товар; k — сколько ВЕКТОРОВ просмотреть (по умолчанию max(top_k, candidates_k)).
+
+        Исключённые векторы (self.excluded) отбрасываются, а просмотр углубляется на их число: k векторов остаются k
+        участвующими. Индекс без источников у векторов (search_sources нет) — прежний поиск без исключений."""
+        k = k or max(self.top_k, self.candidates_k)
+        search_sources = getattr(self.index, "search_sources", None)
+        if not self.excluded or search_sources is None:
+            return rank_products(self.index.search(embedding, k))
+        found = search_sources(embedding, k + len(self.excluded))
+        kept = [(pid, score) for pid, score, source in found if (pid, source) not in self.excluded]
+        return rank_products(kept[:k])
 
     def match(self, embedding: np.ndarray) -> MatchResult:
         return decide_match(self.rank(embedding), self.match_threshold, self.unknown_threshold, self.margin_threshold)

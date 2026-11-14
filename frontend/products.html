@@ -123,6 +123,12 @@
           <div class="tags" id="editCodes"></div>
         </div>
         <input class="input" id="editBarcode" type="text" inputmode="numeric" autocomplete="off" data-i18n-attr="placeholder:products.code_add;aria-label:products.codes" placeholder="Добавить штрих-код: 4780001234562" aria-label="Штрих-коды товара">
+        <div class="field" id="editPhotosBox">
+          <span class="field__label" data-i18n="products.photos_title">Фото товара</span>
+          <p class="hint" data-i18n="products.photos_roles">Эталоны — фото, по которым система узнаёт товар. Витринное фото показывается в карточке и в распознавании не участвует. Выведенное из эталонов фото не удаляется: его можно вернуть.</p>
+          <div class="gallery" id="editPhotos"></div>
+          <p class="hint" id="editPhotosNote" role="status" hidden></p>
+        </div>
         <p class="notice notice--danger" id="editError" role="alert" hidden></p>
         <div class="row">
           <button id="editSave" type="button" class="btn btn--primary" data-i18n="common.save">Сохранить</button>
@@ -142,7 +148,7 @@
 
       <details class="tech">
         <summary data-i18n="identify.tech">Для специалиста</summary>
-        <p><span data-i18n="identify.tech_connected">Подключено к</span> <code id="footerApiBase"></code>. <span data-i18n="products.tech_storage">Фото хранятся в папке</span> <code>data/catalog-uploads</code>.</p>
+        <p><span data-i18n="identify.tech_connected">Подключено к</span> <code id="footerApiBase"></code>. <span data-i18n="products.tech_storage">Фото хранятся в папке</span> <code>data/catalog-uploads</code>. <span data-i18n="products.tech_records">Записи о фото и их роли — в базе (таблица product_images).</span></p>
         <p data-i18n="products.tech_bulk">Много товаров сразу (десятки): папка catalog и команда python -m scripts.import_catalog --dir catalog — инструкция в docs/catalog_guide.md.</p>
       </details>
     </div>

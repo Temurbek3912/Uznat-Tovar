@@ -243,11 +243,13 @@ def test_backups_do_not_take_the_tls_private_keys():
 
 
 def test_frames_redis_keeps_frames_only_in_memory():
-    """Решение D-10а: кадр не пишется на диск. Redis кадров — без RDB и AOF, без тома, /data в памяти, порт наружу не открыт."""
+    """Решение D-10а: кадр не пишется на диск. Redis кадров — без RDB и AOF, без тома, /data в памяти. Порт — только на 127.0.0.1
+    этого компьютера (для запуска без образа: API и воркер — два процесса, scripts/start_demo.py), в сеть не открыт."""
     frames = SERVICES["frames"]
     command = frames["command"]
     assert command[command.index("--save") + 1] == "" and command[command.index("--appendonly") + 1] == "no"
-    assert "volumes" not in frames and "/data" in frames["tmpfs"] and "ports" not in frames
+    assert "volumes" not in frames and "/data" in frames["tmpfs"]
+    assert frames.get("ports", []) == ["127.0.0.1:${FRAMES_PORT:-6380}:6379"]
     for name in ("api", "admin-api", "worker", "shop"):
         assert _env(name)["FRAMES_REDIS_URL"] == "redis://frames:6379/0", name
         assert _depends(name)["frames"]["condition"] == "service_healthy", name

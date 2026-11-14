@@ -60,6 +60,9 @@
       return { state: "uncertain", product: list[0], candidates: list };
     }
     if (status === "empty_catalog") return { state: "empty_catalog" };
+    if (status === "not_in_catalog" && result.guess && result.guess.name) {
+      return { state: "not_in_catalog", guess: { name: String(result.guess.name), brand: String(result.guess.brand || "") } };
+    }
     return { state: "unknown" };
   }
   /** Ключ текста про камеру. secure === false — страница открыта не по https и не как localhost: камеру браузер не даст. */
@@ -302,7 +305,7 @@
       var manual = !!(opts && opts.manual);
       setBusy(true, manual); errorState = null; renderError();
       var fd = new win.FormData(); fd.append("file", blob, "frame.jpg");
-      return request(apiBase() + "/api/v1/catalog/identify", { method: "POST", headers: authHeaders(), body: fd }).then(function (res) {
+      return request(apiBase() + "/api/v1/catalog/identify?lang=" + encodeURIComponent(I18N.getLang ? I18N.getLang() : "ru"), { method: "POST", headers: authHeaders(), body: fd }).then(function (res) {
         if (res.status === 401) { setToken(null); stopCamera(); showLogin("login.expired"); return null; }
         if (res.status === 403) { stopCamera(); resetViews(); show("accessBanner", true); return null; }
         if (!res.ok) return readError(res).then(function (b) { fail(apiError(res.status, b)); return null; });

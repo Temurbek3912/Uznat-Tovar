@@ -10,10 +10,10 @@ storage:
   raw_image_retention_days: 30      # хранение исходных фото (комплаенс/приватность)
 
 database:
-  url: "postgresql://postgres:postgres@localhost:5432/shelf_audit"
+  url: "postgresql://postgres:postgres@127.0.0.1:5432/shelf_audit"
 
 queue:
-  broker_url: "redis://localhost:6379/0"
+  broker_url: "redis://127.0.0.1:6379/0"
 
 auth:
   token_ttl_minutes: 720            # срок жизни токена доступа (F13); 720 = 12 ч, одна смена
@@ -45,6 +45,14 @@ models:
     match_threshold: 0.72       # ниже порога -> "uncertain", в очередь на ручную проверку
     unknown_threshold: 0.45     # ниже -> "unknown" (товар не из каталога)
     margin_threshold: 0.0       # 0 = выключено; >0: при близком втором товаре -> "uncertain". Подбор: python -m ml.evaluate_matching
+
+# «Назвать любой товар» (документ 07, §10.6): если товара нет в базе — назвать его и попросить обратиться к сотруднику.
+naming:
+  enabled: true
+  barcode_lookup: true                       # штрихкод -> открытые базы (Open Food Facts и др.); уходит только номер штрихкода
+  vision_url: "http://127.0.0.1:1234/v1"     # локальная модель «зрение + текст» (LM Studio). Кадр не покидает компьютер. "" — выключить
+  vision_model: "qwen/qwen3-vl-4b"
+  vision_timeout_seconds: 40                 # первый запрос после запуска LM Studio загружает модель — бывает долгим
 
 pipeline:
   max_image_side_px: 2048

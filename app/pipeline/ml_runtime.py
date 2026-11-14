@@ -209,7 +209,9 @@ def build_runtime(settings, env: Mapping[str, str] | None = None, factories: Fac
                          "он не предназначен для реальных полок, результаты ненадёжны!", _describe(exc), ALLOW_HEURISTIC_ENV)
             return f.heuristic_detector(), f"ЭВРИСТИКА вместо YOLO ({ALLOW_HEURISTIC_ENV}=1; причина: {_describe(exc)})"
 
-    rt.detector = attempt("detector", True, make_detector)
+    # Детектор полок больше не обязателен (2026-11-14): «Узнать товар» работает с одним товаром в кадре и детектор не вызывает
+    # (документ 07, §3.1, §7 — лицензия YOLO). Не загрузился — компонент «пропущен», воркер всё равно готов.
+    rt.detector = attempt("detector", False, make_detector)
     if rt.detector is not None and rt.component("detector").detail.startswith("ЭВРИСТИКА"):
         rt.component("detector").status = DEGRADED
 
@@ -274,14 +276,7 @@ def preflight(settings, env: Mapping[str, str] | None = None, cv2_module=None,
             return [f"cv2 не импортируется: {exc}"]
     from app.core.opencv_check import capability_problems
     problems += [f"OpenCV: {p}" for p in capability_problems(cv2_module)]
-    cfg = settings.detector
-    if cfg is None:
-        problems.append("models.detector не задан в config.yaml")
-    elif not _flag(env, ALLOW_HEURISTIC_ENV):
-        weights = _resolve(cfg.weights_path, resolve_path)
-        if not Path(weights).is_file():
-            problems.append(f"файл весов детектора не найден: {weights} (положите обученные веса YOLO или задайте "
-                            f"{ALLOW_HEURISTIC_ENV}=1 для сознательной работы без них — только демо)")
+    # Детектор полок не обязателен (см. build_runtime): нет весов — не повод не запускать воркер «Узнать товар».
     return problems
 
 

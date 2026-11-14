@@ -59,9 +59,10 @@ def test_a_failing_face_blurrer_no_longer_hides_the_other_components():
     rt.require("detector", "embedder")                                                          # задачам, которым блюр не нужен, он не мешает
 
 
-def test_yolo_failure_is_NOT_silently_replaced_by_the_heuristic_detector():
+def test_yolo_failure_is_NOT_silently_replaced_by_the_heuristic_detector_and_does_not_block_the_worker():
     rt = _build(detector=FileNotFoundError("weights"))
-    assert not rt.ready and rt.detector is None
+    # детектор полок «Узнать товар» не нужен (2026-11-14): без весов он пропущен, а воркер готов
+    assert rt.ready and rt.detector is None and rt.component("detector").status == mr.SKIPPED
     assert "YOLO-детектор не загрузился" in rt.component("detector").error and mr.ALLOW_HEURISTIC_ENV in rt.component("detector").error
 
 
@@ -87,7 +88,7 @@ def test_matcher_cannot_be_built_without_an_embedder():
 def test_missing_detector_section_is_a_reported_failure_not_an_exception():
     settings = types.SimpleNamespace(detector=None, embedder=SETTINGS.embedder, matcher=SETTINGS.matcher)
     rt = mr.build_runtime(settings, {}, _factories(), resolve_path=lambda p: Path(p))
-    assert not rt.ready and "models.detector не задан" in rt.component("detector").error
+    assert rt.ready and "models.detector не задан" in rt.component("detector").error
 
 
 def test_status_file_round_trip_and_a_broken_runtime_is_not_ready(tmp_path):
@@ -110,7 +111,7 @@ def test_preflight_stops_a_worker_with_broken_opencv_or_missing_weights(tmp_path
     weights.mkdir(parents=True)
     resolve = lambda p: tmp_path / p
     problems = mr.preflight(SETTINGS, {}, cv2_module=broken_cv2, resolve_path=resolve)
-    assert any("CascadeClassifier" in p for p in problems) and any("файл весов детектора не найден" in p for p in problems)
+    assert any("CascadeClassifier" in p for p in problems) and not any("детектор" in p for p in problems)   # без весов детектора — можно
     (weights / "x.pt").write_bytes(b"w")
     cascade_dir = tmp_path / "cv"
     cascade_dir.mkdir()

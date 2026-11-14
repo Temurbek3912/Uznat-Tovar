@@ -49,7 +49,7 @@ function boot(opts) {
   const routes = [
     [/\/auth\/me$/, () => (typeof me === "function" ? me() : json(200, me))],
     [/\/auth\/login$/, (u, o) => (opts.login ? opts.login(u, o) : json(200, { access_token: "new-token" }))],
-    [/\/catalog\/identify$/, (u, o) => { const a = typeof opts.answer === "function" ? opts.answer(u, o) : opts.answer; return Promise.resolve(a).then((r) => (r && r.status && r.ok !== undefined ? r : json(200, r))); }],
+    [/\/catalog\/identify(\?|$)/, (u, o) => { const a = typeof opts.answer === "function" ? opts.answer(u, o) : opts.answer; return Promise.resolve(a).then((r) => (r && r.status && r.ok !== undefined ? r : json(200, r))); }],
     [/\/catalog\/products\//, (u, o) => (opts.patch ? opts.patch(u, o) : json(200, {}))]
   ];
   const fetch = async (url, o) => {
@@ -81,7 +81,7 @@ function boot(opts) {
     ticket: () => $("ticket").textContent,
     kind: () => $("ticket").getAttribute("data-state"),
     stage: () => $("stage").getAttribute("data-state"),
-    identifyCalls: () => calls.filter((c) => /catalog\/identify$/.test(c.url)),
+    identifyCalls: () => calls.filter((c) => /catalog\/identify(\?|$)/.test(c.url)),
     hist: () => $("histList").children.map((li) => li.children[0].textContent),
     byText: (text) => $("ticket").byTag("button").find((b) => b.textContent.includes(text)),
     file: async (name) => { const input = $("fileInput"); input.files = [{ name: name || "a.jpg", size: 10, type: "image/jpeg" }]; input.dispatch("change"); await sleep(25); await flush(); },

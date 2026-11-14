@@ -626,7 +626,7 @@ def update_product_image(
     return payload
 
 
-def run_identify(db: Session, data: bytes) -> dict:
+def run_identify(db: Session, data: bytes, lang: str = "ru") -> dict:
     """Общий путь «Узнать товар» для сотрудника и покупателя (D-10а: кадр не пишется на диск).
 
     Сначала штрих-код на кадре: известный код даёт ответ сразу (by="barcode", без модели и воркера). Иначе — распознавание по виду
@@ -651,9 +651,10 @@ def run_identify(db: Session, data: bytes) -> dict:
             return {"status": "matched", "by": "barcode", "product": info, "score": 1.0, "candidates": [info], "demo_mode": False,
                     "barcode": {"code": code, "known": True}}
 
+    jpeg = photo.jpeg            # только в памяти этого запроса: нужен, чтобы назвать товар вне базы (документ 07, §10.6)
     store = get_frame_store()
     try:
-        frame_id = store.put(photo.jpeg)
+        frame_id = store.put(jpeg)
     except FrameStoreError as exc:
         logger.warning("Хранилище кадров: %s", exc)
         raise ApiError(503, "frames_unavailable",
@@ -679,12 +680,45 @@ def run_identify(db: Session, data: bytes) -> dict:
         raise ApiError(500, "recognize_failed", "Не получилось распознать товар. Попробуйте ещё раз.")
     result["by"] = "look"
     result["barcode"] = {"code": codes[0], "known": False} if codes else None
+    try:
+        return add_outside_name(result, jpeg, codes, lang)
+    finally:
+        del jpeg
+
+
+def add_outside_name(result: dict, jpeg: bytes | None, codes: list[str], lang: str) -> dict:
+    """Товар не найден в базе — попробовать назвать его (штрихкод -> открытые базы, иначе локальная модель «зрение + текст»;
+    документ 07, §10.6). Назвали — status not_in_catalog и guess {name, brand, source}; нет — как было («не узнали»).
+
+    «Похоже» (uncertain) тоже проверяется: поиск по виду путает похожие упаковки разных товаров (банка Red Bull «похожа» на банку
+    Coca-Cola). Если название назвало ДРУГОЙ товар — ни одного общего слова с кандидатами — а модель уверена (high), это
+    not_in_catalog; иначе ответ «похоже» остаётся как был (выбор за человеком).
+    При заглушке вместо модели (demo_mode) поиск по каталогу недостоверен: «нет в базе» сказать нельзя — ничего не добавляем."""
+    status = result.get("status")
+    if result.get("demo_mode") or status not in ("unknown", "empty_catalog", "uncertain"):
+        return result
+    from app.services.product_namer import name_product, names_overlap     # noqa: PLC0415
+    guess = name_product(jpeg, codes, lang, get_settings())
+    if guess is None:
+        return result
+    if status == "uncertain":
+        if not guess.sure:
+            return result
+        candidates = [result.get("product") or {}] + list(result.get("candidates") or [])
+        if any(names_overlap(guess, c) for c in candidates if c):
+            return result
+    return {**result, "status": "not_in_catalog", "guess": guess.as_dict(), "product": None, "candidates": []}
+    from app.services.product_namer import name_product     # noqa: PLC0415
+    guess = name_product(jpeg, codes, lang, get_settings())
+    if guess is not None:
+        result = {**result, "status": "not_in_catalog", "guess": guess.as_dict(), "product": None}
     return result
 
 
 @router.post("/identify")
 async def identify_product(
     request: Request,
+    lang: str | None = None,
     db: Session = Depends(get_db),
     _user: CurrentUser = Depends(require_permission(Permission.CATALOG_READ)),
 ) -> dict:
@@ -692,4 +726,5 @@ async def identify_product(
     (как раньше) или самим телом запроса (image/*); принимается целиком в памяти (app/core/memory_upload.py, D-10а).
     Ответ: см. app/services/identify_service.py + demo_mode + by + barcode."""
     data = await read_frame(request, IDENTIFY_MAX_MB * 1024 * 1024)
-    return await run_in_threadpool(run_identify, db, data)
+    from app.services.product_namer import normalize_lang     # noqa: PLC0415
+    return await run_in_threadpool(run_identify, db, data, normalize_lang(lang))

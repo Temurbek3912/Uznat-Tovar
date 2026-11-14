@@ -30,6 +30,9 @@
       var list = (Array.isArray(body.candidates) && body.candidates.length ? body.candidates : [body.product]).map(card);
       return { state: "uncertain", product: card(body.product), candidates: list };
     }
+    if (status === "not_in_catalog" && body.guess && body.guess.name) {
+      return { state: "not_in_catalog", guess: { name: String(body.guess.name), brand: String(body.guess.brand || "") } };
+    }
     return { state: "unknown" };
   }
 
@@ -107,7 +110,8 @@
       draw();
       return shrink(file).then(function (blob) {
         if (blob.size > MAX_SEND_BYTES) { fail({ key: "shop.err_too_large" }); return; }
-        return win.fetch("/api/v1/public/identify", {
+        var lang = I18N.getLang ? I18N.getLang() : "ru";
+        return win.fetch("/api/v1/public/identify?lang=" + encodeURIComponent(lang), {
           method: "POST", body: blob, headers: { "Content-Type": blob.type || "image/jpeg" }, credentials: "omit", cache: "no-store",
         }).then(function (res) {
           return res.json().catch(function () { return null; }).then(function (body) {

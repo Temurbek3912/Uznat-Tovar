@@ -1,9 +1,9 @@
 /* «Ценник» — карточка ответа на экране «Узнать товар». Одна функция рисует все исходы узнавания; данные в разметку не подставляются
    строкой (только textContent), поэтому название товара из базы безопасно. Тексты берутся через deps.t (i18n.js), значки — через Icons.
-   Ответ сервера (app/services/identify_service.py): {status: matched | uncertain | unknown | empty_catalog, product, candidates}.
+   Ответ сервера (app/services/identify_service.py): {status: matched | uncertain | not_in_catalog | unknown | empty_catalog, product, candidates, guess}.
    Необязательные поля товара: category (категория) и fields — [{label, value}], уже переведённые на язык интерфейса (у каждой категории свой набор).
    Ticket.render(document, hostElement, view, deps):
-     view = {state, product, candidates, message}; state — idle | searching | matched | uncertain | unknown | empty_catalog | camera_error | error
+     view = {state, product, candidates, guess, message}; state — idle | searching | matched | uncertain | not_in_catalog | unknown | empty_catalog | camera_error | error
      deps = {t, onPick(candidate), onAdd(), onRetry(), onPhoto(), onWrong(), onMore(product), maxSpecs}
      Нет deps.onAdd (у человека нет права добавлять товары) — кнопка «Добавить в каталог» не рисуется, подсказка другая. */
 (function (root, factory) {
@@ -14,7 +14,7 @@
 })(typeof window !== "undefined" ? window : globalThis, function (root) {
   "use strict";
   var NBSP = "\u00A0";
-  var STATES = ["idle", "searching", "matched", "uncertain", "unknown", "empty_catalog", "camera_error", "error"];
+  var STATES = ["idle", "searching", "matched", "uncertain", "not_in_catalog", "unknown", "empty_catalog", "camera_error", "error"];
   var MAX_SPECS = 4;
   var MAX_CANDIDATES = 3;
 
@@ -116,6 +116,19 @@
         list.appendChild(li);
       });
       card.appendChild(list);
+    } else if (state === "not_in_catalog") {
+      // Товара нет в базе, но программа его назвала (документ 07, §10.6): «Это похоже на …» + просьба обратиться к сотруднику.
+      var guess = view.guess || {};
+      card.appendChild(node(doc, "div", "ticket__head")).appendChild(chip("notice", "search-off", t("ticket.outside_chip")));
+      card.appendChild(node(doc, "p", "ticket__hint", t("ticket.outside_title")));
+      if (guess.brand) card.appendChild(node(doc, "span", "ticket__brand", guess.brand));
+      card.appendChild(node(doc, "h2", "ticket__name", guess.name || ""));
+      var canAddGuess = typeof deps.onAdd === "function";
+      card.appendChild(node(doc, "p", "ticket__hint", t(canAddGuess ? "ticket.outside_hint" : "ticket.outside_hint_readonly")));
+      var a0 = node(doc, "div", "ticket__actions");
+      if (canAddGuess) a0.appendChild(button("primary", "plus", t("identify.add_product"), function () { call(deps.onAdd); }));
+      a0.appendChild(button(canAddGuess ? "secondary" : "primary", "camera", t("ticket.retake"), function () { call(deps.onRetry); }));
+      card.appendChild(a0);
     } else if (state === "unknown") {
       card.appendChild(node(doc, "div", "ticket__head")).appendChild(chip("danger", "search-off", t("ticket.not_found")));
       card.appendChild(node(doc, "h2", "ticket__title", t("ticket.not_found_title")));

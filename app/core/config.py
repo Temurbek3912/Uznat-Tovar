@@ -65,8 +65,8 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_nested_delimiter="__", extra="ignore")
 
-    database_url: str = "postgresql://postgres:postgres@localhost:5432/shelf_audit"
-    queue_broker_url: str = "redis://localhost:6379/0"
+    database_url: str = "postgresql://postgres:postgres@127.0.0.1:5432/shelf_audit"
+    queue_broker_url: str = "redis://127.0.0.1:6379/0"
     environment: str = "development"
 
     # Локальное хранилище снимков полок (см. app/api/routes_upload.py).
@@ -144,6 +144,16 @@ class Settings(BaseSettings):
     # Часовой пояс отчётов и «календарных суток» (Узбекистан: UTC+5, перехода на летнее время нет).
     app_timezone: str = "Asia/Tashkent"
 
+    # «Назвать любой товар» (документ 07, §10.6): товара нет в базе — программа всё равно пытается его назвать.
+    # naming_enabled — главный выключатель; naming_barcode_lookup — штрихкод -> открытые базы товаров в интернете (уходит ТОЛЬКО
+    # номер штрихкода, кадр — нет); naming_vision_url — локальная модель «зрение + текст» с OpenAI-совместимым входом (LM Studio:
+    # http://127.0.0.1:1234/v1). Кадр уходит только на этот адрес; по умолчанию — только этот компьютер (D-10а). Пусто — выключено.
+    naming_enabled: bool = True
+    naming_barcode_lookup: bool = True
+    naming_vision_url: str = "http://127.0.0.1:1234/v1"
+    naming_vision_model: str = "qwen/qwen3-vl-4b"
+    naming_vision_timeout_seconds: float = 40.0
+
     # ML-конфиги подтягиваются из YAML (см. load_yaml_config), но могут быть
     # переопределены через ENV вида MODELS__DETECTOR__CONFIDENCE_THRESHOLD=0.4
     detector: DetectorConfig | None = None
@@ -168,6 +178,7 @@ def get_settings() -> Settings:
     osa = raw.get("osa", {})
     app_cfg = raw.get("app", {})
     auth_cfg = raw.get("auth", {})
+    naming = raw.get("naming", {}) or {}
 
     # БАГФИКС (найдено при повторном ревью, не выполнением — pydantic по-прежнему
     # недоступен в sandbox): раньше YAML-значения передавались как явные kwargs
@@ -212,6 +223,14 @@ def get_settings() -> Settings:
         )
         auth_require_secure_transport: bool = auth_cfg.get(
             "require_secure_transport", Settings.model_fields["auth_require_secure_transport"].default
+        )
+
+        naming_enabled: bool = naming.get("enabled", Settings.model_fields["naming_enabled"].default)
+        naming_barcode_lookup: bool = naming.get("barcode_lookup", Settings.model_fields["naming_barcode_lookup"].default)
+        naming_vision_url: str = naming.get("vision_url", Settings.model_fields["naming_vision_url"].default) or ""
+        naming_vision_model: str = naming.get("vision_model", Settings.model_fields["naming_vision_model"].default)
+        naming_vision_timeout_seconds: float = naming.get(
+            "vision_timeout_seconds", Settings.model_fields["naming_vision_timeout_seconds"].default
         )
 
     return _SettingsWithYamlDefaults(

@@ -26,3 +26,4 @@ models/embedder/
 models/detector/*.pt
 *.part
 .claude/settings.local.json
+models/index/

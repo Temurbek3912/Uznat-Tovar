@@ -78,6 +78,11 @@ def public_result(db: Session, result: dict) -> dict:
         return {"status": "unknown", "by": None, "product": None, "candidates": []}
     if status == "empty_catalog":
         status = "unknown"
+    if status == "not_in_catalog" and isinstance(result.get("guess"), dict):
+        # товара нет в базе магазина, но программа его назвала (документ 07, §10.6): только название и бренд, без источника
+        guess = result["guess"]
+        return {"status": "not_in_catalog", "by": None, "product": None, "candidates": [],
+                "guess": {"name": str(guess.get("name") or ""), "brand": str(guess.get("brand") or "")}}
     product = db.get(Product, result["product"]["id"]) if result.get("product") else None
     candidates = []
     if status == "uncertain":
@@ -91,14 +96,16 @@ def public_result(db: Session, result: dict) -> dict:
 
 
 @router.post("/identify")
-async def public_identify(request: Request, db: Session = Depends(get_db)) -> dict:
-    """Покупатель узнаёт товар по фото (штрихкод на фото — точнее и быстрее). Ответ: status matched | uncertain | unknown,
-    product — публичная карточка, candidates — варианты при uncertain."""
+async def public_identify(request: Request, lang: str | None = None, db: Session = Depends(get_db)) -> dict:
+    """Покупатель узнаёт товар по фото (штрихкод на фото — точнее и быстрее). Ответ: status matched | uncertain |
+    not_in_catalog | unknown; product — публичная карточка, candidates — варианты при uncertain, guess — название товара,
+    которого нет в базе (not_in_catalog). lang — язык страницы (ru, uz, uz-Cyrl, en): на нём называется товар вне базы."""
     _check_rate(request)
     data = await read_frame(request, PUBLIC_IDENTIFY_MAX_MB * 1024 * 1024)
     from app.api.routes_catalog import run_identify     # маршруты каталога импортируют воркер: только при первом запросе
     try:
-        result = await run_in_threadpool(run_identify, db, data)
+        from app.services.product_namer import normalize_lang
+        result = await run_in_threadpool(run_identify, db, data, normalize_lang(lang))
     except ApiError as exc:
         if exc.status_code >= 500:                       # очередь, воркер, хранилище кадров: покупателю — без подробностей
             logger.warning("Публичный вход: распознавание недоступно (%s)", exc.code)

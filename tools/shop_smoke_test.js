@@ -53,7 +53,7 @@ test("без innerHTML/eval; снимок уходит только на сво�
   for (const bad of ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "localStorage"]) {
     assert.ok(!src.includes(bad), `shop.js: найдено ${bad}`);
   }
-  assert.ok(src.includes('win.fetch("/api/v1/public/identify"') && src.includes('credentials: "omit"'));
+  assert.ok(src.includes('win.fetch("/api/v1/public/identify?lang="') && src.includes('credentials: "omit"'));
   assert.ok(!/https?:\/\//.test(src.replace(/\/\*[\s\S]*?\*\//g, "")), "shop.js: внешний адрес");
   assert.ok(!/<script>(?!<\/script>)/.test(html) && !html.includes("password") && !html.includes("auth.js"));
   assert.ok(html.includes('capture="environment"'), "камера телефона по <input capture> — работает без HTTPS");

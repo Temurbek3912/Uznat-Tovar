@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import socket
 import subprocess
@@ -33,6 +34,7 @@ from scripts import phone_url
 from scripts.preflight import parse_host_port
 
 ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_FRAMES_URL = "redis://127.0.0.1:6380/0"    # служба frames из docker-compose.yml (порт FRAMES_PORT, только 127.0.0.1)
 STOP_TIMEOUT = 8.0
 
 
@@ -94,6 +96,43 @@ def _http_ready(url: str) -> bool:
         return False
 
 
+def _worker_status(path: Path) -> dict | None:
+    """Файл статуса воркера (app/pipeline/ml_runtime.py): появляется, когда модели загружены. None — ещё не готов."""
+    try:
+        import json
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _find_lms(which) -> str | None:
+    """Утилита LM Studio (lms): в PATH или в обычном месте установки (~/.lmstudio/bin)."""
+    found = which("lms")
+    if found:
+        return found
+    candidate = Path.home() / ".lmstudio" / "bin" / ("lms.exe" if sys.platform.startswith("win") else "lms")
+    return str(candidate) if candidate.is_file() else None
+
+
+def start_local_vision(d: "Deps", settings) -> None:
+    """«Назвать товар вне базы» (документ 07, §10.6) по фото — локальная модель в LM Studio на этом компьютере. Включаем её сервер
+    (модель LM Studio загружает сама при первом запросе). Не получилось — не беда: штрихкод и поиск по базе работают и без неё."""
+    url = (getattr(settings, "naming_vision_url", "") or "") if getattr(settings, "naming_enabled", False) else ""
+    if not url or not any(h in url for h in ("127.0.0.1", "localhost")):
+        return
+    lms = d.find_lms(d.which)
+    if not lms:
+        d.out("LM Studio не найден — товары вне базы будут называться только по штрихкоду (docs/RUNBOOK.md, «Назвать любой товар»).")
+        return
+    try:
+        res = d.run_cmd([lms, "server", "start"], cwd=str(d.root), capture_output=True, timeout=60)
+        ok = getattr(res, "returncode", 1) == 0
+    except Exception:            # noqa: BLE001
+        ok = False
+    d.out("Модель «зрение + текст» (LM Studio): " + ("сервер включён." if ok else
+          "не удалось включить сервер — откройте LM Studio и включите Local Server (вкладка Developer)."))
+
+
 def _load_settings():
     from app.core.config import get_settings   # лениво: тяжёлый импорт и зависимости нужны только при реальном запуске
     return get_settings()
@@ -118,9 +157,12 @@ class Deps:
     preflight: Callable[[], int] = _preflight
     lan_ip: Callable[[], str | None] = phone_url.lan_ip
     render_qr: Callable[[str], str | None] = phone_url.render_qr
+    worker_status: Callable[[Path], dict | None] = _worker_status
+    find_lms: Callable = _find_lms
     open_browser: Callable[[str], object] = webbrowser.open
     out: Callable[[str], None] = print
     platform: str = sys.platform
+    environ: dict = field(default_factory=lambda: dict(os.environ))
     python: str = sys.executable
     root: Path = field(default_factory=lambda: ROOT)
 
@@ -210,7 +252,7 @@ def _show_addresses(d: Deps, port: int, no_browser: bool, notice: str | None = N
             # Решение владельца 2026-11-08 (документ 18, §14): по HTTP с телефона вход невозможен — пароль не отправляется.
             out("ВНИМАНИЕ: работа без HTTPS — войти с телефона нельзя (пароли по Wi-Fi без защиты не передаются).\n"
                 "Настройка: python -m scripts.make_local_tls --ip " + ip + " — и перезапустите (docs/REMOTE_ACCESS_GUIDE.md, п. 7).\n")
-        qr = d.render_qr(urls["home"])
+        qr = d.render_qr(urls["shop"])
         if qr:
             try:
                 out(qr)
@@ -249,8 +291,8 @@ def run(opts: Options, deps: Deps | None = None, services: list[Service] | None 
 
     if not opts.no_docker:
         if d.which("docker"):
-            out("Запускаю Postgres и Redis (docker compose up -d db redis)...")
-            res = d.run_cmd(["docker", "compose", "up", "-d", "db", "redis"], cwd=str(d.root))
+            out("Запускаю Postgres и Redis (docker compose up -d db redis frames)...")
+            res = d.run_cmd(["docker", "compose", "up", "-d", "db", "redis", "frames"], cwd=str(d.root))
             if res.returncode != 0:
                 out("Не удалось запустить Postgres/Redis. Запущен ли Docker Desktop? "
                     "Если Postgres и Redis уже работают без Docker — запустите с --no-docker.")
@@ -263,11 +305,24 @@ def run(opts: Options, deps: Deps | None = None, services: list[Service] | None 
     except Exception as exc:        # noqa: BLE001
         out(f"Предупреждение: настройки не загрузились ({exc.__class__.__name__}: {exc}); проверка Postgres/Redis пропущена.")
         settings = None
-    notice = detector_notice(settings, d.root) if settings is not None else None
+    notice = None      # детектор полок «Узнать товар» не нужен (документ 07, §3.1): предупреждение о его весах больше не показывается
     if notice:
         out(notice)
     if settings is not None:
-        for name, url, default in (("Postgres", settings.database_url, 5432), ("Redis", settings.queue_broker_url, 6379)):
+        start_local_vision(d, settings)
+    status_file = d.root / "logs" / "worker_status.json"
+    child_env = {**d.environ, "ML_STATUS_FILE": str(status_file)}     # где воркер скажет «модели загружены» (ждём его ниже)
+    if settings is not None:
+        checks = [("Postgres", settings.database_url, 5432), ("Redis", settings.queue_broker_url, 6379)]
+        frames_url = (getattr(settings, "frames_redis_url", "") or "").strip()
+        if not frames_url and not opts.no_docker:
+            # API и воркер — два процесса: кадр «Узнать товар» должен быть виден обоим. Хранилище в памяти процесса API воркеру
+            # недоступно (кадр «устарел» на каждом снимке) — поэтому Redis кадров без сохранения на диск (служба frames, D-10а).
+            frames_url = DEFAULT_FRAMES_URL
+            child_env["FRAMES_REDIS_URL"] = frames_url
+        if frames_url:
+            checks.append(("Redis кадров", frames_url, 6380))
+        for name, url, default in checks:
             host, port = parse_host_port(url, default)
             out(f"Жду {name} ({host}:{port})...")
             if not d.tcp_wait(host, port, 60.0):
@@ -283,11 +338,15 @@ def run(opts: Options, deps: Deps | None = None, services: list[Service] | None 
     services = services if services is not None else service_commands(d.python, opts.port, d.platform, tls)
     log_dir = d.root / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        status_file.unlink()                       # статус прошлого запуска не должен выдавать себя за текущий
+    except OSError:
+        pass
     procs: list = []
     try:
         for svc in services:
             logf = open(log_dir / f"{svc.name}.log", "wb")
-            procs.append((svc, d.popen(svc.argv, cwd=str(d.root), stdout=logf, stderr=subprocess.STDOUT), logf))
+            procs.append((svc, d.popen(svc.argv, cwd=str(d.root), stdout=logf, stderr=subprocess.STDOUT, env=child_env), logf))
             out(f"  запущено: {svc.name}  (журнал: logs/{svc.name}.log)")
 
         health = f"{'https' if tls else 'http'}://127.0.0.1:{opts.port}/health"
@@ -303,11 +362,24 @@ def run(opts: Options, deps: Deps | None = None, services: list[Service] | None 
                     f"повторите с --timeout 300).")
                 return 1
             d.sleep(0.5)
-        d.sleep(2.0)                # воркер не отвечает по HTTP: даём ему шанс упасть сразу (нет весов, нет Redis…)
-        dead = _dead(procs)
-        if dead:
-            _report_dead(dead, d.root, out)
-            return 1
+        # Воркер не отвечает по HTTP: ждём файл статуса — модели распознавания загружены (первый запуск — до минуты). Без этого
+        # первое фото сразу после «ВСЁ ЗАПУЩЕНО» получало «сейчас не получается узнать товар».
+        out("Жду загрузки моделей распознавания...")
+        status = None
+        while status is None:
+            dead = _dead(procs)
+            if dead:
+                _report_dead(dead, d.root, out)
+                return 1
+            status = d.worker_status(status_file)
+            if status is None and d.clock() > deadline:
+                out("Распознавание ещё загружается — первые снимки могут не получиться. Журнал: logs/worker.log")
+                break
+            if status is None:
+                d.sleep(0.5)
+        if status is not None and not status.get("ready", False):
+            out("ВНИМАНИЕ: распознавание по виду не готово (работает только штрихкод): "
+                + "; ".join(str(p) for p in status.get("problems") or []) + ". Журнал: logs/worker.log")
 
         _show_addresses(d, opts.port, opts.no_browser, notice, tls=bool(tls))
         while True:
@@ -324,6 +396,11 @@ def run(opts: Options, deps: Deps | None = None, services: list[Service] | None 
 
 
 def main(argv: list[str] | None = None, deps: Deps | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):      # окно без UTF-8 (вывод в файл, старая консоль): не падать на русских буквах журнала
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--no-docker", action="store_true")

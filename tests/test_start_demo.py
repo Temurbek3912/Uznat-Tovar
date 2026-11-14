@@ -63,7 +63,7 @@ class Env:
             port_busy=lambda p: False, tcp_wait=lambda h, p, t: True, http_ready=lambda u: True,
             sleep=self._sleep, clock=self._clock, load_settings=lambda: settings, preflight=lambda: 0,
             lan_ip=lambda: "192.168.1.57", render_qr=lambda url: f"[QR {url}]", open_browser=self.opened.append,
-            out=self.lines.append, platform="win32", python="PY", root=tmp_path,
+            out=self.lines.append, platform="win32", python="PY", root=tmp_path, worker_status=lambda p: {"ready": True},
         )
         kw.update(over)
         self.deps = Deps(**kw)
@@ -115,10 +115,10 @@ def test_service_commands_differ_by_platform_and_listen_on_all_interfaces():
 def test_happy_path_starts_in_order_prints_addresses_and_stops_everything_on_ctrl_c(tmp_path):
     code, env = go(tmp_path)
     assert code == 0
-    assert env.docker_calls[0][0] == ["docker", "compose", "up", "-d", "db", "redis"]
+    assert env.docker_calls[0][0] == ["docker", "compose", "up", "-d", "db", "redis", "frames"]
     assert [n for n, _, _ in env.started] == ["api", "worker"]
     assert env.started[0][2]["cwd"] == str(tmp_path)
-    assert "http://192.168.1.57:8000/ui/index.html" in env.text and "[QR http://192.168.1.57:8000/ui/index.html]" in env.text
+    assert "http://192.168.1.57:8000/ui/index.html" in env.text and "[QR http://192.168.1.57:8000/ui/shop.html]" in env.text
     assert "Ctrl+C" in env.text and "Остановка" in env.text
     assert env.procs["api"].events == ["terminate"] and env.procs["worker"].events == ["terminate"]
     assert (tmp_path / "logs" / "api.log").exists() and (tmp_path / "logs" / "worker.log").exists()
@@ -162,12 +162,28 @@ def _settings_with_detector(path):
               detector=NS(weights_path=path))
 
 
-def test_missing_detector_weights_are_announced_at_startup_and_again_at_the_end(tmp_path):
+def test_missing_detector_weights_are_not_announced_detector_is_not_needed(tmp_path):
+    # «Узнать товар» работает без детектора полок (2026-11-14): предупреждение о его весах только пугало бы
+    code, env = go(tmp_path, settings=_settings_with_detector("models/detector/y.pt"))
+    assert code == 0 and not [l for l in env.lines if "детектор" in str(l)]
+
+
+def test_frames_store_is_shared_by_api_and_worker(tmp_path):
+    # API и воркер — два процесса: без общего Redis кадров воркер не видит кадр («кадр устарел» на каждом снимке)
     code, env = go(tmp_path, settings=_settings_with_detector("models/detector/y.pt"))
     assert code == 0
-    notices = [l for l in env.lines if "нет файла весов детектора" in str(l)]
-    assert len(notices) == 2 and "models/detector/y.pt" in notices[0] and "detector_quickstart.md" in notices[0]
-    assert env.lines.index(notices[1]) > env.lines.index(next(l for l in env.lines if "ВСЁ ЗАПУЩЕНО" in str(l)))   # второй раз — под итогом
+    envs = [kw.get("env") for _, _, kw in env.started]
+    assert len(envs) == 2 and all(e and e.get("FRAMES_REDIS_URL") == "redis://127.0.0.1:6380/0" for e in envs)
+    assert all(e.get("ML_STATUS_FILE", "").endswith("worker_status.json") for e in envs)
+
+
+def test_waits_for_the_worker_models_before_announcing_and_warns_when_recognition_is_not_ready(tmp_path):
+    answers = iter([None, None, {"ready": False, "problems": ["embedder: нет интернета"]}])
+    code, env = go(tmp_path, worker_status=lambda p: next(answers), stop_after=20)
+    assert code == 0
+    text = env.text
+    assert "Жду загрузки моделей" in text and "работает только штрихкод" in text and "нет интернета" in text
+    assert text.index("работает только штрихкод") < text.index("ВСЁ ЗАПУЩЕНО")
 
 
 def test_existing_detector_weights_produce_no_notice_relative_and_absolute(tmp_path):
@@ -320,7 +336,7 @@ def _real_env(tmp_path, port, **over):
         if len(sleeps) >= 4:
             raise KeyboardInterrupt
         time.sleep(0.05)
-    kw = dict(popen=popen, http_ready=sd._http_ready, which=lambda n: None, load_settings=lambda: None,
+    kw = dict(popen=popen, http_ready=sd._http_ready, worker_status=lambda p: {"ready": True}, which=lambda n: None, load_settings=lambda: None,
               port_busy=lambda p: False, sleep=sleep, out=lines.append, lan_ip=lambda: "10.0.0.2", render_qr=lambda u: None,
               open_browser=lambda u: None, platform="linux", python=sys.executable, root=tmp_path)
     kw.update(over)
@@ -464,3 +480,21 @@ def test_https_is_used_automatically_when_the_store_certificate_exists(tmp_path)
     cert, key = tls_files(tmp_path)
     api = service_commands("PY", 8000, "linux", (cert, key))[0]
     assert api.argv[-4:] == ["--ssl-certfile", cert, "--ssl-keyfile", key] and "0.0.0.0" in api.argv
+
+
+def test_local_vision_model_server_is_switched_on_when_lm_studio_is_installed(tmp_path):
+    settings = NS(database_url="postgresql://u:p@dbhost:5432/x", queue_broker_url="redis://redishost:6379/0",
+                  naming_enabled=True, naming_vision_url="http://127.0.0.1:1234/v1")
+    code, env = go(tmp_path, settings=settings, find_lms=lambda which: "C:/lms.exe")
+    assert code == 0 and ["C:/lms.exe", "server", "start"] in [argv for argv, _ in env.docker_calls]
+    assert "сервер включён" in env.text
+
+
+def test_no_lm_studio_or_a_remote_model_is_not_touched(tmp_path):
+    settings = NS(database_url="postgresql://u:p@dbhost:5432/x", queue_broker_url="redis://redishost:6379/0",
+                  naming_enabled=True, naming_vision_url="http://127.0.0.1:1234/v1")
+    code, env = go(tmp_path, settings=settings, find_lms=lambda which: None)
+    assert code == 0 and "только по штрихкоду" in env.text
+    remote = NS(**{**vars(settings), "naming_vision_url": "https://example.org/v1"})
+    code, env = go(tmp_path, settings=remote, find_lms=lambda which: "C:/lms.exe")
+    assert not [a for a, _ in env.docker_calls if a[0] == "C:/lms.exe"]

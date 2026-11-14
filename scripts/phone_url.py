@@ -33,7 +33,8 @@ def lan_ip(outgoing=_outgoing_ip) -> str | None:
 
 def phone_urls(ip: str, port: int = 8000, scheme: str = "http") -> dict[str, str]:
     base = f"{scheme}://{ip}:{port}"
-    return {"home": f"{base}/ui/index.html", "identify": f"{base}/ui/identify.html", "products": f"{base}/ui/products.html"}
+    return {"home": f"{base}/ui/index.html", "identify": f"{base}/ui/identify.html", "products": f"{base}/ui/products.html",
+            "shop": f"{base}/ui/shop.html"}
 
 
 def render_qr(url: str, *, invert: bool = True, qr_module=None) -> str | None:

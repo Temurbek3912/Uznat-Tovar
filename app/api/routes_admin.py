@@ -34,6 +34,8 @@ _admin = require_permission(Permission.STORE_MANAGE)
 
 
 def _queue_state() -> str:
+    if get_settings().lite_mode:      # облегчённый режим: очереди нет — задачи выполняются в процессе API
+        return "ok"
     try:
         import redis
         redis.Redis.from_url(get_settings().queue_broker_url, socket_connect_timeout=2, socket_timeout=2).ping()
@@ -45,6 +47,10 @@ def _queue_state() -> str:
 
 def _worker_state() -> dict:
     """Celery-воркер отвечает на ping по брокеру. Ответа нет за секунду — «не отвечает» (а не «упал»: он может грузить модель)."""
+    if get_settings().lite_mode:      # облегчённый режим: «воркер» — сам процесс API
+        from app.pipeline import ml_runtime
+        status = ml_runtime.read_status() or {}
+        return {"online": bool(status.get("ready")), "nodes": ["в процессе API (облегчённый режим)"]}
     try:
         from app.worker import celery_app
         replies = celery_app.control.ping(timeout=1.0) or []

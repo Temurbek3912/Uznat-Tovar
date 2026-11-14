@@ -69,6 +69,17 @@ class Settings(BaseSettings):
     queue_broker_url: str = "redis://127.0.0.1:6379/0"
     environment: str = "development"
 
+    # Облегчённый режим (документ 11, §10; scripts/start_demo.py --lite): один процесс без Docker — SQLite вместо PostgreSQL,
+    # задачи выполняются в процессе API (без Redis и отдельного воркера), кадры — в памяти этого процесса (D-10а соблюдается).
+    # Переменная LITE_MODE=1 ставится запуском; вручную её менять не нужно.
+    lite_mode: bool = False
+    # Где модель распознавания по виду считает: auto — видеокарта NVIDIA, если есть, иначе процессор; cpu — всегда процессор.
+    ml_device: str = "auto"
+    # Сколько потоков процессора отдать модели (0 — как решит torch). На слабом ноутбуке — по числу ядер.
+    ml_threads: int = 0
+    # Свой файл индекса каталога (облегчённый режим хранит данные отдельно: data/lite). Пусто — из config.yaml.
+    catalog_index_path: str = ""
+
     # Локальное хранилище снимков полок (см. app/api/routes_upload.py).
     # Относительный путь резолвится через resolve_project_path() относительно
     # корня проекта — общий для API и Celery-воркера, если оба работают на
@@ -172,6 +183,18 @@ def _load_yaml() -> dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
+def _matcher_config(models: dict) -> MatcherConfig | None:
+    """Настройки поиска из config.yaml; путь индекса можно заменить переменной CATALOG_INDEX_PATH (облегчённый режим)."""
+    import os
+    if "matcher" not in models:
+        return None
+    cfg = dict(models["matcher"])
+    override = os.environ.get("CATALOG_INDEX_PATH", "").strip()
+    if override:
+        cfg["index_path"] = override
+    return MatcherConfig(**cfg)
+
+
 @lru_cache
 def get_settings() -> Settings:
     raw = _load_yaml()
@@ -240,6 +263,6 @@ def get_settings() -> Settings:
     return _SettingsWithYamlDefaults(
         detector=DetectorConfig(**models["detector"]) if "detector" in models else None,
         embedder=EmbedderConfig(**models["embedder"]) if "embedder" in models else None,
-        matcher=MatcherConfig(**models["matcher"]) if "matcher" in models else None,
+        matcher=_matcher_config(models),
         osa=OSAConfig(**osa) if osa else None,
     )

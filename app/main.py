@@ -47,6 +47,12 @@ async def lifespan(_app):
     media_root = resolve_project_path(settings.media_root)
     sweeper = PeriodicSweeper(lambda: sweep_frames(media_root))
     sweeper.start()
+    if settings.lite_mode:
+        # облегчённый режим (документ 11, §10): отдельного воркера нет — модели грузятся здесь, в фоне (API отвечает сразу)
+        import threading
+
+        from app.worker import start_in_process
+        threading.Thread(target=start_in_process, name="lite-ml-init", daemon=True).start()
     try:
         yield
     finally:
@@ -195,6 +201,8 @@ def _check_schema() -> None:
 
 
 def _check_queue() -> None:
+    if settings.lite_mode:       # облегчённый режим: очереди нет, задачи выполняются в этом процессе
+        return
     import redis
 
     redis.Redis.from_url(settings.queue_broker_url, socket_connect_timeout=2, socket_timeout=2).ping()

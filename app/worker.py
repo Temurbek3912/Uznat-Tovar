@@ -12,10 +12,11 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import threading
 import time
 
 import numpy as np
-from celery import Celery
+from celery import Celery, Task
 from celery.signals import worker_init, worker_process_init, worker_ready
 from sqlalchemy.orm import Session
 
@@ -37,8 +38,26 @@ from app.services.catalog_upload import (IDENTIFY_REF_PREFIX, CatalogAddError, P
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-celery_app = Celery("shelf_audit", broker=settings.queue_broker_url, backend=settings.queue_broker_url)
-celery_app.conf.update(task_acks_late=True, worker_prefetch_multiplier=1)
+# Облегчённый режим (LITE_MODE=1, документ 11, §10): задачи выполняются прямо в процессе API (task_always_eager), без Redis и без
+# отдельного воркера; результаты для «ход добавления товара» — в памяти процесса. Задачи идут строго по одной (как --pool=solo
+# у воркера): одновременные снимки ждут друг друга, а не грузят модель параллельно.
+_serial = threading.RLock()
+
+
+class _SerialInLite(Task):
+    def __call__(self, *args, **kwargs):
+        if self.app.conf.task_always_eager:
+            with _serial:
+                return super().__call__(*args, **kwargs)
+        return super().__call__(*args, **kwargs)
+
+
+if settings.lite_mode:
+    celery_app = Celery("shelf_audit", broker="memory://", backend="cache+memory://", task_cls=_SerialInLite)
+    celery_app.conf.update(task_always_eager=True, task_store_eager_result=True, task_eager_propagates=False)
+else:
+    celery_app = Celery("shelf_audit", broker=settings.queue_broker_url, backend=settings.queue_broker_url, task_cls=_SerialInLite)
+    celery_app.conf.update(task_acks_late=True, worker_prefetch_multiplier=1)
 
 # Заполняется в _init_ml_components() один раз на процесс воркера.
 _detector: ProductDetector | None = None
@@ -522,3 +541,22 @@ def identify_product_task(self, ref: str) -> dict:
                 path.unlink()
             except OSError:
                 pass
+
+
+def start_in_process() -> None:
+    """Облегчённый режим: то, что делает отдельный воркер при запуске, — в процессе API (вызывается в фоновом потоке при старте
+    API, app/main.py). Модели грузятся под той же блокировкой, что и задачи: снимок, пришедший во время загрузки, подождёт её,
+    а не начнёт вторую загрузку. Ошибки — в журнал и в файл статуса (как у воркера); API продолжает работать (штрихкод)."""
+    with _serial:
+        ml_runtime.clear_status()
+        problems = ml_runtime.preflight(settings, os.environ)
+        if problems:
+            for problem in problems:
+                logger.critical("Распознавание по виду не может стать готовым: %s", problem)
+        _init_ml_components()
+    for job in (_sweep_stale_frames, _schedule_recovery):
+        try:
+            job()
+        except Exception:  # noqa: BLE001 — уборка и восстановление индекса не должны мешать работе
+            logger.exception("Облегчённый режим: шаг запуска %s не выполнен", job.__name__)
+

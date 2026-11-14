@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace as NS
 
+from app.core import hardware
 from scripts import make_shortcut
 from scripts import start_demo as sd
 from scripts.start_demo import Deps, Options, Service, run, service_commands
@@ -54,7 +55,7 @@ class FakeProc:
 class Env:
     def __init__(self, tmp_path, **over):
         self.lines, self.started, self.docker_calls, self.sleeps, self.opened = [], [], [], [], []
-        self.procs = {}
+        self.procs, self.applied = {}, {}
         self.exit_plan = over.pop("exit_plan", {})
         self.stop_after = over.pop("stop_after", 6)
         settings = over.pop("settings", NS(database_url="postgresql://u:p@dbhost:5432/x", queue_broker_url="redis://redishost:6379/0"))
@@ -64,7 +65,8 @@ class Env:
             sleep=self._sleep, clock=self._clock, load_settings=lambda: settings, preflight=lambda: 0,
             lan_ip=lambda: "192.168.1.57", render_qr=lambda url: f"[QR {url}]", open_browser=self.opened.append,
             out=self.lines.append, platform="win32", python="PY", root=tmp_path, worker_status=lambda p: {"ready": True},
-            migrate=lambda: "",
+            migrate=lambda: "", probe_hw=lambda: hardware.Hardware(ram_gb=32, cores=8, gpu_name="RTX", vram_gb=8.0),
+            apply_env=self.applied.update, hf_cache=lambda: tmp_path / "no-hf-cache",
         )
         kw.update(over)
         self.deps = Deps(**kw)
@@ -223,13 +225,15 @@ def test_detector_notice_covers_missing_config_and_unknown_settings(tmp_path):
 
 # ----------------------------------------------------------------------- Docker, Postgres, Redis
 
-def test_docker_missing_continues_with_a_notice_and_failed_docker_stops_everything(tmp_path):
+def test_docker_missing_switches_to_lite_mode_and_failed_docker_stops_everything(tmp_path):
     code, env = go(tmp_path, which=lambda n: None)
-    assert code == 0 and "Docker не найден" in env.text and env.docker_calls == []
+    assert code == 0 and "Docker не найден" in env.text and "облегчённый режим" in env.text
+    assert [argv for argv, _ in env.docker_calls if argv[0] == "docker"] == []          # Docker не вызывался
+    assert [n for n, _, _ in env.started] == ["api"] and env.applied.get("LITE_MODE") == "1"   # одна служба, без воркера
     env = Env(tmp_path)
     env.docker_rc = 1
     assert run(Options(no_browser=True), env.deps) == 1
-    assert "Docker Desktop" in env.text and "--no-docker" in env.text and env.started == []
+    assert "Docker Desktop" in env.text and "--no-docker" in env.text and "start_lite.bat" in env.text and env.started == []
 
 
 def test_no_docker_flag_never_touches_docker(tmp_path):
@@ -515,3 +519,80 @@ def test_no_lm_studio_or_a_remote_model_is_not_touched(tmp_path):
     remote = NS(**{**vars(settings), "naming_vision_url": "https://example.org/v1"})
     code, env = go(tmp_path, settings=remote, find_lms=lambda which: "C:/lms.exe")
     assert not [a for a, _ in env.docker_calls if a[0] == "C:/lms.exe"]
+
+
+# ----------------------------------------------------------------------- облегчённый режим (документ 11, §10)
+
+def lite(tmp_path, opts=None, **over):
+    return go(tmp_path, opts or Options(no_browser=True, lite=True), **over)
+
+
+def test_lite_mode_runs_one_process_without_docker_on_sqlite_in_data_lite(tmp_path):
+    code, env = lite(tmp_path)
+    assert code == 0
+    assert all(argv[0] != "docker" for argv, _ in env.docker_calls)
+    bootstrap = [argv for argv, _ in env.docker_calls if "scripts.bootstrap" in argv]
+    assert bootstrap == [["PY", "-m", "scripts.bootstrap", "--non-interactive", "--wait-timeout", "5"]]
+    (name, argv, kw), = env.started
+    assert "uvicorn" in argv and "celery" not in " ".join(argv)
+    child = kw["env"]
+    assert child["LITE_MODE"] == "1" and child["QUEUE_BROKER_URL"] == "memory://" and child["FRAMES_REDIS_URL"] == ""
+    assert child["DATABASE_URL"] == "sqlite:///" + (tmp_path / "data" / "lite" / "shop.db").as_posix()
+    assert child["CATALOG_INDEX_PATH"].endswith("data/lite/index/catalog.faiss") and child["MEDIA_ROOT"].endswith("data/lite")
+    assert child["ML_STATUS_FILE"].endswith("lite_status.json")                     # не путается с полным режимом
+    assert (tmp_path / "logs" / "lite.log").exists() and not (tmp_path / "logs" / "api.log").exists()
+    assert "ВСЁ ЗАПУЩЕНО" in env.text and env.applied["LITE_MODE"] == "1"
+
+
+def test_lite_mode_without_gpu_runs_on_cpu_and_turns_the_vision_model_off(tmp_path):
+    weak = hardware.Hardware(ram_gb=8, cores=4)
+    code, env = lite(tmp_path, probe_hw=lambda: weak)
+    child = env.started[0][2]["env"]
+    assert code == 0 and child["ML_DEVICE"] == "cpu" and child["NAMING_VISION_URL"] == ""
+    assert "процессор" in env.text and "зрение + текст" in env.text and "выключена" in env.text
+
+
+def test_lite_mode_with_a_good_gpu_keeps_the_vision_model_and_force_cpu_turns_it_off(tmp_path):
+    code, env = lite(tmp_path)
+    assert code == 0 and "NAMING_VISION_URL" not in env.started[0][2]["env"]
+    assert env.started[0][2]["env"]["ML_DEVICE"] == "auto"
+    code, env = lite(tmp_path, Options(no_browser=True, lite=True, cpu=True))
+    assert env.started[0][2]["env"]["ML_DEVICE"] == "cpu" and env.started[0][2]["env"]["NAMING_VISION_URL"] == ""
+
+
+def test_lite_mode_stops_with_the_bootstrap_message_when_the_database_cannot_be_prepared(tmp_path):
+    env = Env(tmp_path)
+    env.docker_rc = 1
+    assert run(Options(no_browser=True, lite=True), env.deps) == 1
+    assert env.started == [] and "data/lite/shop.db" in env.text
+
+
+def test_lite_environment_uses_offline_model_cache_only_when_it_exists(tmp_path):
+    plan = hardware.LitePlan(device="cpu", vision=True)
+    assert "HF_HUB_OFFLINE" not in sd.lite_environment(tmp_path, plan, tmp_path / "missing")
+    (tmp_path / "cache").mkdir()
+    assert sd.lite_environment(tmp_path, plan, tmp_path / "cache")["HF_HUB_OFFLINE"] == "1"
+    assert "NAMING_VISION_URL" not in sd.lite_environment(tmp_path, plan)
+
+
+def test_full_mode_on_a_small_ram_computer_suggests_the_lite_mode(tmp_path):
+    code, env = go(tmp_path, probe_hw=lambda: hardware.Hardware(ram_gb=8, cores=4))
+    assert code == 0 and "start_lite.bat" in env.text and [n for n, _, _ in env.started] == ["api", "worker"]
+
+
+def test_cli_flags_for_lite_mode(tmp_path):
+    seen = []
+    sd.run = lambda opts, deps=None: seen.append(opts) or 0        # noqa: E731 — подмена только в этом тесте
+    try:
+        sd.main(["--lite", "--vision", "off"])
+        sd.main(["--cpu"])
+    finally:
+        import importlib
+        importlib.reload(sd)
+    assert seen[0].lite and seen[0].vision == "off" and not seen[0].cpu
+    assert seen[1].lite and seen[1].cpu                                    # --cpu сам по себе = облегчённый режим на процессоре
+
+
+def test_start_lite_bat_runs_the_lite_mode():
+    text = (ROOT / "start_lite.bat").read_bytes().decode("utf-8")
+    assert "-m scripts.start_demo --lite" in text and text.count(chr(13) + chr(10)) >= 5 and "chcp 65001" in text

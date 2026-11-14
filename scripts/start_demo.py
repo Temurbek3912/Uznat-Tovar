@@ -7,6 +7,13 @@
     python -m scripts.start_demo --no-docker      # Postgres и Redis уже запущены без Docker
     python -m scripts.start_demo --no-browser     # не открывать дашборд на этом компьютере
     python -m scripts.start_demo --port 8080
+    python -m scripts.start_demo --lite           # облегчённый режим: без Docker, один процесс, SQLite (start_lite.bat)
+    python -m scripts.start_demo --lite --cpu     # то же, модель — только на процессоре (как на ноутбуке без видеокарты)
+
+Облегчённый режим (документ 11, §10) — для слабых компьютеров и ноутбуков: нет Docker (экономия около 2 ГБ ОЗУ), нет отдельного
+воркера (модель грузится один раз, в процессе API), база — файл SQLite в data/lite (свои товары и пользователи, отдельно от
+PostgreSQL полного режима; перенести товары: python -m scripts.lite_copy). Модель «зрение + текст» включается по железу
+(app/core/hardware.py). Если Docker на компьютере нет, обычный запуск сам выбирает облегчённый режим.
 
 Двойной щелчок: `start_demo.bat` в корне проекта; ярлык с иконкой на рабочем столе — `python -m scripts.make_shortcut`.
 Журналы служб — в папке logs/ (api.log, worker.log): при сбое последние строки показываются сразу.
@@ -26,10 +33,11 @@ import sys
 import time
 import urllib.request
 import webbrowser
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
+from app.core import hardware
 from scripts import phone_url
 from scripts.preflight import parse_host_port
 
@@ -48,6 +56,46 @@ def tls_files(root: Path) -> tuple[str, str] | None:
     """Сертификат HTTPS сети магазина (scripts/make_local_tls.py): есть — API запускается по HTTPS (документ 18, §14)."""
     cert, key = root / "secrets" / "tls" / "server.crt", root / "secrets" / "tls" / "server.key"
     return (str(cert), str(key)) if cert.is_file() and key.is_file() else None
+
+
+LITE_DIR = Path("data") / "lite"
+
+
+def lite_environment(root: Path, plan: "hardware.LitePlan", hf_cache: Path | None = None) -> dict[str, str]:
+    """Переменные облегчённого режима: всё своё — в data/lite (база, индекс, фото), без Redis и без отдельного воркера."""
+    lite = root / LITE_DIR
+    env = {
+        "LITE_MODE": "1",
+        "DATABASE_URL": "sqlite:///" + (lite / "shop.db").as_posix(),
+        "MEDIA_ROOT": lite.as_posix(),
+        "CATALOG_INDEX_PATH": (lite / "index" / "catalog.faiss").as_posix(),
+        "QUEUE_BROKER_URL": "memory://",
+        "FRAMES_REDIS_URL": "",                       # кадры — в памяти процесса API (D-10а: на диск не пишутся)
+        "AUTH_THROTTLE_BACKEND": "memory",
+        "ML_DEVICE": plan.device,
+    }
+    if not plan.vision:
+        env["NAMING_VISION_URL"] = ""                 # модель «зрение + текст» выключена: остаётся штрихкод -> открытые базы
+    if hf_cache is not None and hf_cache.is_dir():
+        env["HF_HUB_OFFLINE"] = "1"                   # модель уже скачана: не ходить в интернет при каждом запуске
+    return env
+
+
+def lite_commands(python: str, port: int, tls: tuple[str, str] | None = None) -> list[Service]:
+    """Облегчённый режим — одна служба: API, в котором выполняются и задачи (app/worker.py, LITE_MODE)."""
+    argv = [python, "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", str(port)]
+    if tls:
+        argv += ["--ssl-certfile", tls[0], "--ssl-keyfile", tls[1]]
+    return [Service("lite", argv)]
+
+
+def _hf_model_cache() -> Path:
+    base = Path(os.environ.get("HF_HOME") or (Path.home() / ".cache" / "huggingface"))
+    return base / "hub" / "models--facebook--dinov2-base"
+
+
+def _probe_hw():
+    return hardware.probe()
 
 
 def service_commands(python: str, port: int, platform: str, tls: tuple[str, str] | None = None) -> list[Service]:
@@ -177,6 +225,9 @@ class Deps:
     render_qr: Callable[[str], str | None] = phone_url.render_qr
     worker_status: Callable[[Path], dict | None] = _worker_status
     find_lms: Callable = _find_lms
+    probe_hw: Callable[[], object] = _probe_hw
+    apply_env: Callable[[dict], None] = os.environ.update
+    hf_cache: Callable[[], Path] = _hf_model_cache
     open_browser: Callable[[str], object] = webbrowser.open
     out: Callable[[str], None] = print
     platform: str = sys.platform
@@ -192,6 +243,9 @@ class Options:
     no_browser: bool = False
     check: bool = False
     timeout: float = 90.0
+    lite: bool = False
+    cpu: bool = False
+    vision: str = "auto"
 
 
 # ------------------------------------------------------------------ вспомогательное
@@ -307,13 +361,29 @@ def run(opts: Options, deps: Deps | None = None, services: list[Service] | None 
             out("Проверка нашла блокирующие проблемы (см. выше). Исправьте [FAIL] и запустите снова.")
             return 1
 
+    if not opts.lite and not opts.no_docker and not d.which("docker"):
+        out("Docker не найден — запускаю облегчённый режим (без Docker, база SQLite в data/lite). "
+            "Если PostgreSQL и Redis работают без Docker — запустите с --no-docker.")
+        opts = replace(opts, lite=True)
+    if opts.lite:
+        return run_lite(opts, d, services)
+
+    try:
+        hw = d.probe_hw()
+    except Exception:            # noqa: BLE001 — подсказка о железе не должна мешать запуску
+        hw = None
+    ram = getattr(hw, "ram_gb", 0) or 0
+    if ram and ram < hardware.LOW_RAM_GB:
+        out(f"Подсказка: на этом компьютере {ram:.0f} ГБ ОЗУ, а Docker занимает около 2 ГБ. Облегчённый режим: start_lite.bat.")
+
     if not opts.no_docker:
         if d.which("docker"):
             out("Запускаю Postgres и Redis (docker compose up -d db redis frames)...")
             res = d.run_cmd(["docker", "compose", "up", "-d", "db", "redis", "frames"], cwd=str(d.root))
             if res.returncode != 0:
                 out("Не удалось запустить Postgres/Redis. Запущен ли Docker Desktop? "
-                    "Если Postgres и Redis уже работают без Docker — запустите с --no-docker.")
+                    "Если Postgres и Redis уже работают без Docker — запустите с --no-docker. "
+                    "Без Docker работает облегчённый режим: start_lite.bat.")
                 return 1
         else:
             out("Docker не найден — считаю, что Postgres и Redis уже запущены.")
@@ -361,6 +431,12 @@ def run(opts: Options, deps: Deps | None = None, services: list[Service] | None 
 
     tls = tls_files(d.root)
     services = services if services is not None else service_commands(d.python, opts.port, d.platform, tls)
+    return _launch(opts, d, services, child_env, status_file, tls, notice)
+
+
+def _launch(opts: Options, d: Deps, services: list[Service], child_env: dict, status_file: Path, tls, notice=None) -> int:
+    """Запуск служб, ожидание готовности API и моделей, адреса и QR, остановка по Ctrl+C (общая часть обоих режимов)."""
+    out = d.out
     log_dir = d.root / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -420,6 +496,53 @@ def run(opts: Options, deps: Deps | None = None, services: list[Service] | None 
         _stop_all(procs, out)
 
 
+def run_lite(opts: Options, d: Deps, services: list[Service] | None = None) -> int:
+    """Облегчённый режим: без Docker, одна служба (API с моделями внутри), база SQLite в data/lite. Что включить — по железу."""
+    out = d.out
+    try:
+        hw = d.probe_hw()
+    except Exception:            # noqa: BLE001
+        hw = hardware.Hardware(ram_gb=0.0, cores=os.cpu_count() or 1)
+    plan = hardware.plan_lite(hw, force_cpu=opts.cpu, vision=opts.vision)
+    out("Облегчённый режим (без Docker). Компьютер: " + hw.describe())
+    out("  распознавание по виду: " + ("видеокарта" if plan.device == "auto" and hw.gpu_name else "процессор")
+        + "; модель «зрение + текст»: " + ("включена" if plan.vision else "выключена"))
+    for note in plan.notes:
+        out("  " + note)
+    (d.root / LITE_DIR / "index").mkdir(parents=True, exist_ok=True)
+    env = lite_environment(d.root, plan, d.hf_cache())
+    status_file = d.root / "logs" / "lite_status.json"     # свой файл и свой журнал (logs/lite.log): не путать с полным режимом
+    env["ML_STATUS_FILE"] = str(status_file)
+    d.apply_env(env)                                   # и этому процессу: настройки ниже (LM Studio) — облегчённого режима
+    child_env = {**d.environ, **env}
+
+    # база: миграции и первый администратор (ADMIN_USERNAME/ADMIN_PASSWORD из .env) — тем же bootstrap, что и в Docker
+    out("Готовлю базу облегчённого режима (data/lite/shop.db)...")
+    res = d.run_cmd([d.python, "-m", "scripts.bootstrap", "--non-interactive", "--wait-timeout", "5"], cwd=str(d.root),
+                    env=child_env, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if getattr(res, "returncode", 1) != 0:
+        out("Не удалось подготовить базу облегчённого режима (data/lite/shop.db):")
+        out(((getattr(res, "stdout", "") or "") + (getattr(res, "stderr", "") or "")).strip()[-3000:])
+        return 1
+    for line in (getattr(res, "stdout", "") or "").splitlines():
+        if line.startswith("[4/4]") and "уже есть" not in line:    # первый запуск: что с администратором (пароля в выводе нет)
+            out("  " + line.strip())
+
+    if plan.vision:
+        try:
+            start_local_vision(d, d.load_settings())
+        except Exception:        # noqa: BLE001 — без модели «зрение + текст» программа работает (штрихкод и база)
+            pass
+
+    if d.port_busy(opts.port):
+        out(f"Порт {opts.port} уже занят — возможно, программа уже запущена в другом окне. "
+            f"Закройте его или запустите с другим портом: --port 8001.")
+        return 1
+    tls = tls_files(d.root)
+    services = services if services is not None else lite_commands(d.python, opts.port, tls)
+    return _launch(opts, d, services, child_env, status_file, tls)
+
+
 def main(argv: list[str] | None = None, deps: Deps | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):      # окно без UTF-8 (вывод в файл, старая консоль): не падать на русских буквах журнала
         try:
@@ -432,8 +555,13 @@ def main(argv: list[str] | None = None, deps: Deps | None = None) -> int:
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--check", action="store_true", help="перед запуском выполнить scripts.preflight")
     ap.add_argument("--timeout", type=float, default=90.0, help="сколько ждать готовности API, с (по умолчанию 90)")
+    ap.add_argument("--lite", action="store_true", help="облегчённый режим: без Docker, один процесс, база SQLite (data/lite)")
+    ap.add_argument("--cpu", action="store_true", help="облегчённый режим, модель только на процессоре (даже если есть видеокарта)")
+    ap.add_argument("--vision", choices=["auto", "on", "off"], default="auto",
+                    help="модель «зрение + текст» в облегчённом режиме: auto — по железу (по умолчанию)")
     a = ap.parse_args(argv)
-    return run(Options(port=a.port, no_docker=a.no_docker, no_browser=a.no_browser, check=a.check, timeout=a.timeout), deps)
+    return run(Options(port=a.port, no_docker=a.no_docker, no_browser=a.no_browser, check=a.check, timeout=a.timeout,
+                       lite=a.lite or a.cpu, cpu=a.cpu, vision=a.vision), deps)
 
 
 if __name__ == "__main__":

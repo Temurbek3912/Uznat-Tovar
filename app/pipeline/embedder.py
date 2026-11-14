@@ -94,7 +94,11 @@ class ImageEmbedder(Protocol):
 class DinoV2Embedder:
     """Продакшн-реализация поверх HuggingFace transformers (DINOv2 или дообученный чекпоинт)."""
 
-    def __init__(self, weights_path: str, embedding_dim: int = 768, device: str = "cuda"):
+    def __init__(self, weights_path: str, embedding_dim: int = 768, device: str = "cuda", hub_model: str = DEFAULT_HUB_MODEL,
+                 int8: bool = False):
+        """device: "cuda" (или "auto") — видеокарта, если она есть, иначе процессор; "cpu" — всегда процессор (облегчённый режим,
+        документ 11, §10). hub_model — публичная модель, если дообученных весов нет (DINOv2-small для слабых компьютеров).
+        int8 — квантование линейных слоёв для процессора (быстрее, векторы немного другие: индекс строится той же моделью)."""
         try:
             import torch
             from transformers import AutoImageProcessor, AutoModel
@@ -104,9 +108,8 @@ class DinoV2Embedder:
             ) from exc
 
         self._torch = torch
-        self.device = device if torch.cuda.is_available() else "cpu"
-        self.embedding_dim = embedding_dim
-        source, from_hub = resolve_embedder_source(weights_path)
+        self.device = "cpu" if device == "cpu" or not torch.cuda.is_available() else "cuda"
+        source, from_hub = resolve_embedder_source(weights_path, hub_model)
         if from_hub:
             logger.warning(
                 "Дообученные веса эмбеддера не найдены (%s) — используется публичная модель %s "
@@ -115,14 +118,20 @@ class DinoV2Embedder:
             )
         self._processor = AutoImageProcessor.from_pretrained(source)
         self._model = AutoModel.from_pretrained(source).to(self.device).eval()
+        hidden = int(getattr(self._model.config, "hidden_size", 0) or 0)
+        self.embedding_dim = hidden or int(embedding_dim)      # размер вектора — по самой модели (small: 384, base: 768)
+        self.int8 = bool(int8) and self.device == "cpu"
+        if self.int8:
+            self._model = torch.ao.quantization.quantize_dynamic(self._model, {torch.nn.Linear}, dtype=torch.qint8)
         if from_hub:
             # ревизия (коммит) репозитория, из которого взяты веса; transformers записывает её и при чтении из кэша
             revision = getattr(self._model.config, "_commit_hash", None)
             weights = f"hub:{source}@{revision}" if revision else f"hub:{source}"
         else:
             weights = weights_fingerprint(Path(source))
-        self.model_signature = {"name": source if from_hub else Path(source).name, "weights": weights,
-                                "preprocess": DINOV2_PREPROCESS, "dim": int(embedding_dim), "normalization": L2}
+        name = source if from_hub else Path(source).name
+        self.model_signature = {"name": name + ("+int8" if self.int8 else ""), "weights": weights,
+                                "preprocess": DINOV2_PREPROCESS, "dim": int(self.embedding_dim), "normalization": L2}
 
     def embed(self, crops: list[np.ndarray]) -> np.ndarray:
         if not crops:

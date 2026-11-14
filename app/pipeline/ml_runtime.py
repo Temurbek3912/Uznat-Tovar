@@ -132,7 +132,11 @@ def default_factories() -> Factories:
 
     def embedder(cfg):
         from app.pipeline.embedder import DinoV2Embedder
-        return DinoV2Embedder(weights_path=cfg.weights_path, embedding_dim=cfg.embedding_dim)
+        device, threads = embedder_device(os.environ)
+        if threads:
+            import torch
+            torch.set_num_threads(threads)
+        return DinoV2Embedder(weights_path=cfg.weights_path, embedding_dim=cfg.embedding_dim, device=device)
 
     def debug_embedder():
         from app.pipeline.embedder import RandomDebugEmbedder
@@ -150,6 +154,18 @@ def default_factories() -> Factories:
         )
 
     return Factories(face_blurrer, detector, heuristic_detector, embedder, debug_embedder, index, matcher)
+
+
+def embedder_device(env: Mapping[str, str]) -> tuple[str, int]:
+    """(устройство, потоки) для модели по виду из ML_DEVICE (auto | cpu | cuda) и ML_THREADS. Неверное значение — auto / 0."""
+    device = str(env.get("ML_DEVICE", "auto")).strip().lower()
+    if device not in ("auto", "cpu", "cuda"):
+        device = "auto"
+    try:
+        threads = max(0, int(str(env.get("ML_THREADS", "0")).strip() or 0))
+    except ValueError:
+        threads = 0
+    return ("cuda" if device == "auto" else device), threads
 
 
 def _flag(env: Mapping[str, str], name: str) -> bool:
@@ -221,7 +237,10 @@ def build_runtime(settings, env: Mapping[str, str] | None = None, factories: Fac
         try:
             if cfg is None:
                 raise RuntimeError("models.embedder не задан в config.yaml")
-            return f.embedder(cfg), f"DINOv2: {cfg.weights_path}"
+            emb = f.embedder(cfg)
+            device = getattr(emb, "device", None)
+            return emb, f"DINOv2: {cfg.weights_path}" + (f" (считает: {'видеокарта' if device == 'cuda' else 'процессор'})"
+                                                         if isinstance(device, str) else "")
         except Exception as exc:  # noqa: BLE001
             if not _flag(env, ALLOW_DEBUG_EMBEDDER_ENV):
                 raise RuntimeError(

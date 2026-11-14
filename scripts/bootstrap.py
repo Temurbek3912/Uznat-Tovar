@@ -230,9 +230,10 @@ def create_admin(db, username: str, password: str, *, temporary: bool = False) -
 
     temporary=True — пароль из .env (лежит в файле открытым текстом): он годится только для первой смены пароля (документ 05,
     §12.2), обычного входа с ним нет; срок не ограничен, чтобы владелец не оказался заперт, если войдёт не в первые сутки."""
+    from app.services.audit import CONSOLE  # журнал: действие с консоли сервера
     from app.core.security import Role
     from app.services.auth_service import AuthService, UserAlreadyExistsError
-    service = AuthService(db)
+    service = AuthService(db, actor=CONSOLE)
     try:
         user = service.create_user(username, password, Role.ADMIN)
     except UserAlreadyExistsError:

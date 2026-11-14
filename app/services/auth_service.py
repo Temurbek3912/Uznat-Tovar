@@ -19,6 +19,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core import account_status, auth_secrets, recovery_codes, temp_password, totp
+from app.services import audit
+from app.services.audit import AuditActor
 from app.core.app_errors import AppError
 from app.core.mfa_policy import SCOPE_FULL, renewed_expiry, session_accepted
 from app.core.session_info import (
@@ -169,8 +171,21 @@ class LoginContext:
 
 
 class AuthService:
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, actor: AuditActor | None = None):
         self.db = db
+        # Кто действует — для журнала действий (документ 05, §16). Не задан — «система»; маршруты передают вошедшего сотрудника,
+        # консольные утилиты — audit.CONSOLE.
+        self.actor = actor
+
+    def _audit(self, action: str, target_id: str | None, *, before: dict | None = None, after: dict | None = None,
+               reason: str | None = None, target_type: str = "user", actor: AuditActor | None = None) -> None:
+        """Запись в журнал в ТЕКУЩЕЙ транзакции (до commit вызывающего метода): действие и запись сохраняются вместе."""
+        audit.record(self.db, action, actor=actor or self.actor, target_type=target_type, target_id=target_id,
+                     before=before, after=after, reason=reason)
+
+    def _profile(self, user: User) -> dict:
+        return {"role": user.role, "is_active": bool(user.is_active), "access_until": user.access_until,
+                "store_ids": sorted(a.store_id for a in user.store_access)}
 
     # ------------------------------------------------------------------ вход
 
@@ -200,6 +215,12 @@ class AuthService:
         пароля) пишутся в той же транзакции. Новый сеанс = только что подтверждённая личность (reauth_at = сейчас)."""
         result = self._add_session(user, ttl_minutes, context=context, mfa=mfa, secret_key=secret_key, scope=scope,
                                    listener=listener, auth_at=auth_at)
+        if scope == SCOPE_FULL:
+            ctx = context or LoginContext()
+            device = summarize_user_agent(ctx.user_agent)
+            self._audit("login.succeeded", user.id, after={"device": device["kind"], "os": device["os"], "source": ctx.source,
+                                                           "mfa": mfa, "listener": listener},
+                        actor=AuditActor(user.id, (self.actor.via if self.actor else "api"), self.actor.ip_hash if self.actor else None))
         self.db.commit()
         return result
 
@@ -304,6 +325,7 @@ class AuthService:
         self._end_all_sessions(user_id)
         raw, expires_at = self._add_session(user, ttl_minutes, context=context, mfa=mfa, secret_key=secret_key, scope=SCOPE_FULL,
                                             listener=listener, auth_at=None)
+        self._audit("user.password_changed", user_id, after={"mfa": mfa})
         self.db.commit()
         return raw, expires_at, mfa
 
@@ -328,6 +350,7 @@ class AuthService:
         security.temp_password_expires_at = temp_password.expires_at(utcnow(), hours)
         security.updated_at = utcnow()
         self._end_all_sessions(user_id)
+        self._audit("user.temp_password_issued", user_id, after={"expires_at": security.temp_password_expires_at})
         self.db.commit()
         return value, security.temp_password_expires_at
 
@@ -355,6 +378,7 @@ class AuthService:
         security.must_change_password, security.temp_password_expires_at = False, None
         security.updated_at = utcnow()
         self._end_all_sessions(user_id)
+        self._audit("user.first_password_set", user_id)
         self.db.commit()
         self.db.refresh(user)
         return user
@@ -426,6 +450,7 @@ class AuthService:
         target = self._security(user_id, create=True, lock=True)
         target.is_owner = True
         target.updated_at = utcnow()
+        self._audit("owner.granted", user_id, before={"owners": [x.user_id for x in current]}, after={"owner": user_id})
         self.db.commit()
 
     def revoke_token(self, raw_token: str) -> bool:
@@ -436,6 +461,7 @@ class AuthService:
     def revoke_all_tokens(self, user_id: str) -> None:
         """«Выйти везде»: новое поколение сеансов и удаление всех токенов — одной транзакцией (документ 05, §12.11)."""
         self._end_all_sessions(user_id)
+        self._audit("session.revoked_all", user_id)
         self.db.commit()
 
     def _end_all_sessions(self, user_id: str) -> None:
@@ -475,6 +501,8 @@ class AuthService:
     def revoke_session(self, user_id: str, session_id: str) -> None:
         """Завершить один свой сеанс (или сеанс пользователя — для администратора). Чужой id — «не найден», а не «запрещено»."""
         result = self.db.execute(delete(ApiToken).where(ApiToken.id == session_id, ApiToken.user_id == user_id))
+        if result.rowcount:
+            self._audit("session.revoked", user_id, after={"session_id": session_id})
         self.db.commit()
         if not result.rowcount:
             raise SessionNotFoundError("Сеанс не найден или уже завершён")
@@ -485,6 +513,7 @@ class AuthService:
         if current_session_id:
             query = query.where(ApiToken.id != current_session_id)
         result = self.db.execute(query)
+        self._audit("session.revoked_others", user_id, after={"kept_session_id": current_session_id})
         self.db.commit()
         return int(result.rowcount or 0)
 
@@ -538,6 +567,7 @@ class AuthService:
                 AuthSessionMeta.__table__.update().where(AuthSessionMeta.token_id == keep_session_id).values(mfa=True))
         ended = int(self.db.execute(query).rowcount or 0)
         codes = self._replace_recovery_codes(user_id, secret_key)
+        self._audit("user.2fa_enabled", user_id, after={"sessions_ended": ended})
         self.db.commit()
         return {"ended": ended, "recovery_codes": codes}
 
@@ -558,6 +588,7 @@ class AuthService:
         security.totp_secret_enc = security.totp_pending_enc = None
         security.totp_enabled_at, security.totp_last_step, security.updated_at = None, None, utcnow()
         self.db.execute(delete(AuthRecoveryCode).where(AuthRecoveryCode.user_id == user_id))
+        self._audit("user.2fa_disabled", user_id)
         self.db.commit()
 
     def reset_totp(self, user_id: str) -> None:
@@ -568,6 +599,7 @@ class AuthService:
         security.totp_enabled_at, security.totp_last_step = None, None
         self.db.execute(delete(AuthRecoveryCode).where(AuthRecoveryCode.user_id == user_id))
         self._end_all_sessions(user_id)
+        self._audit("user.2fa_reset", user_id)
         self.db.commit()
 
     # ------------------------------------------------- коды восстановления
@@ -735,6 +767,9 @@ class AuthService:
         )
         self.db.add(user)
         try:
+            self.db.flush()
+            self._audit("user.created", user.id, after={"username": canon, "role": role.value, "store_ids": sorted(wanted_stores),
+                                                        "access_until": access_until})
             self.db.commit()
         except IntegrityError:
             # Гонка: между проверкой _username_taken и INSERT другой запрос успел создать тот же логин
@@ -781,6 +816,7 @@ class AuthService:
         now = utcnow()
         if access_until is not None and account_status.access_expired(access_until, now):
             raise PolicyViolation("Дата «доступ до» уже прошла — укажите будущую дату или снимите срок", "access_until_past")
+        was = self._profile(user)
 
         # Сначала вся валидация, потом изменения: при ошибке в середине не остаётся
         # наполовину применённого обновления в сессии.
@@ -815,6 +851,16 @@ class AuthService:
 
         if revoke_tokens:
             self._end_all_sessions(user.id)       # в той же транзакции, что и новый пароль / отключение (документ 05, §12.11)
+        self.db.flush()
+        became = self._profile(user)
+        if was["is_active"] != became["is_active"]:
+            self._audit("user.blocked" if not became["is_active"] else "user.unblocked", user.id,
+                        reason=user.block_reason if not became["is_active"] else None)
+        old, new = audit.changes({k: v for k, v in was.items() if k != "is_active"}, {k: v for k, v in became.items() if k != "is_active"})
+        if new:
+            self._audit("user.updated", user.id, before=old, after=new)
+        if password is not None:
+            self._audit("user.password_reset", user.id)
         self.db.commit()
         self.db.refresh(user)
         return user
@@ -825,6 +871,7 @@ class AuthService:
         user = self.get_user(user_id)
         if user.archived_at is not None:
             return user
+        before = self._profile(user)
         now = utcnow()
         if user.is_active:
             user.blocked_at = now
@@ -832,6 +879,7 @@ class AuthService:
         user.archived_at = now
         user.block_reason = account_status.clean_reason(reason) or user.block_reason
         self._end_all_sessions(user.id)
+        self._audit("user.archived", user.id, before=before, after={"status": "archived"}, reason=user.block_reason)
         self.db.commit()
         self.db.refresh(user)
         return user

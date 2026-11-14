@@ -613,3 +613,61 @@ def test_access_until_ends_access_on_the_date_and_is_explained_only_after_the_ri
     lifted = env.client.patch(f"/api/v1/users/{uid}", headers=admin, json={"access_until": None})
     assert lifted.status_code == 200 and lifted.json()["access_until"] is None and lifted.json()["status"] == "active"
     assert login(env, "merch_a").status_code == 200
+
+
+# ------------------------------------------------- журнал действий (документ 05, §16)
+
+
+def _journal(env, admin, **params):
+    resp = env.client.get("/api/v1/audit", headers=admin, params=params)
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def test_journal_records_who_did_what_to_whom_without_secrets(env):
+    admin = headers_for(env, "admin")
+    created = env.client.post("/api/v1/users", headers=admin, json={"username": "kassir", "role": "merchandiser"}).json()
+    uid = created["id"]
+    env.client.patch(f"/api/v1/users/{uid}", headers=admin, json={"role": "analyst", "store_ids": [env.store_a]})
+    env.client.patch(f"/api/v1/users/{uid}", headers=admin, json={"is_active": False, "block_reason": "проверка"})
+    env.client.post(f"/api/v1/users/{uid}/archive", headers=admin, json={"reason": "уволился"})
+    rows = _journal(env, admin, target_id=uid)
+    actions = [r["action"] for r in rows][::-1]                         # по порядку
+    assert actions == ["user.created", "user.temp_password_issued", "user.updated", "user.blocked", "user.archived"], actions
+    assert all(r["actor"] == "admin" and r["target"] == "kassir" and r["via"] == "api" for r in rows)
+    updated = next(r for r in rows if r["action"] == "user.updated")
+    assert updated["before"]["role"] == "merchandiser" and updated["after"]["role"] == "analyst"
+    assert next(r for r in rows if r["action"] == "user.blocked")["reason"] == "проверка"
+    assert next(r for r in rows if r["action"] == "user.archived")["reason"] == "уволился"
+    text = str(rows)
+    assert created["temporary_password"] not in text and "password_hash" not in text and "$scrypt" not in text
+
+
+def test_journal_records_sign_in_and_is_admin_only(env):
+    admin = headers_for(env, "admin")
+    headers_for(env, "merch_a")
+    logins = _journal(env, admin, action="login.*")
+    assert {r["target"] for r in logins} >= {"admin", "merch_a"}
+    assert all(r["after"]["source"] and "token" not in str(r) for r in logins)
+    assert env.client.get("/api/v1/audit", headers=headers_for(env, "merch_a")).status_code == 403
+    assert env.client.get("/api/v1/audit").status_code == 401
+
+
+def test_journal_entries_cannot_be_changed_or_deleted(env):
+    from sqlalchemy import text
+    headers_for(env, "merch_a")
+    with env.Session() as db:
+        db.execute(text("""CREATE TRIGGER IF NOT EXISTS audit_events_no_update BEFORE UPDATE ON audit_events
+                           BEGIN SELECT RAISE(ABORT, 'append only'); END"""))
+        db.execute(text("""CREATE TRIGGER IF NOT EXISTS audit_events_no_delete BEFORE DELETE ON audit_events
+                           BEGIN SELECT RAISE(ABORT, 'append only'); END"""))
+        db.commit()
+    # Тестовая база создана create_all (как у всех API-тестов); триггеры — те же, что ставит миграция 0004 в SQLite.
+    with env.Session() as db:
+        import pytest as _pytest
+        from sqlalchemy.exc import DatabaseError
+        with _pytest.raises(DatabaseError):
+            db.execute(text("UPDATE audit_events SET action = 'x'"))
+        db.rollback()
+        with _pytest.raises(DatabaseError):
+            db.execute(text("DELETE FROM audit_events"))

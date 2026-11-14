@@ -276,6 +276,26 @@ class AuthMfaChallenge(Base):
     failed_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
+class AuditEvent(Base):
+    """Журнал действий (документ 05, §16; app/services/audit.py). Только добавление: изменение и удаление запрещены триггером
+    (миграция 0004). Секретов нет: записи собираются из структурированных полей без паролей, токенов и кодов."""
+
+    __tablename__ = "audit_events"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    store_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    actor_user_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)   # None — система или консоль сервера
+    via: Mapped[str] = mapped_column(String(16))                                         # ui | api | import | assistant | system | console
+    action: Mapped[str] = mapped_column(String(64), index=True)                          # user.blocked, login.succeeded, …
+    target_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    target_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    before_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    after_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    ip_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
 # --------------------------------------------------------------------------- камеры (только новые таблицы)
 # Эти три таблицы НОВЫЕ: create_all создаёт их в уже существующей базе, не трогая прежние таблицы и данные.
 # Поэтому связь «снимок <-> камера» хранится в camera_events (snapshot_id), а не колонкой в shelf_snapshots.

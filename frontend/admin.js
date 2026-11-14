@@ -342,6 +342,7 @@ async function renderUsers(main) {
       h("button", {class: "btn sec sm", type: "button", onclick: () => toggleUser(u)}, u.is_active ? tr("admin.disable") : tr("admin.enable")),
       u.username !== (state.me && state.me.username) ? h("button", {class: "btn sec sm", type: "button", "data-temppass": u.id, onclick: () => issueTempPassword(u)}, tr("admin.temp_password_issue")) : null,
       u.username !== (state.me && state.me.username) ? h("button", {class: "btn sec sm", type: "button", "data-reset2fa": u.id, onclick: () => resetUser2fa(u)}, tr("admin.reset_2fa")) : null,
+      h("button", {class: "btn sec sm", type: "button", "data-history": u.id, onclick: () => showUserHistory(u)}, tr("admin.history")),
       u.username !== (state.me && state.me.username) ? h("button", {class: "btn danger sm", type: "button", "data-archive": u.id, onclick: () => archiveUser(u)}, tr("admin.archive")) : null]}]),
     tr("admin.no_users"))));
 }
@@ -416,6 +417,20 @@ async function toggleUser(user) {
     if (answer.reason) body.block_reason = answer.reason;
   }
   try { await call(`/api/v1/users/${encodeURIComponent(user.id)}`, {method: "PATCH", body}); toast(tr("admin.saved"), "ok"); await route(); } catch (e) { fail(e); }
+}
+// Журнал действий по сотруднику (документ 05, §16): что с ним делали и его входы. Только чтение; секретов в журнале нет.
+function auditLabel(action) { return trHas("audit." + action) ? tr("audit." + action) : action; }
+function auditWho(row) { return row.actor || (row.via === "console" ? tr("audit.by_console") : tr("audit.by_system")); }
+async function showUserHistory(user) {
+  try {
+    const rows = await call(`/api/v1/audit?target_id=${encodeURIComponent(user.id)}&limit=100`);
+    const body = rows.length
+      ? table([tr("audit.col_time"), tr("audit.col_action"), tr("audit.col_who"), tr("audit.col_reason")],
+          rows.map((r) => [new Date(/Z$|[+-]\d\d:\d\d$/.test(r.at) ? r.at : r.at + "Z").toLocaleString(), auditLabel(r.action), auditWho(r), r.reason || ""]))
+      : h("div", {class: "empty"}, tr("audit.empty"));
+    openModal(tr("audit.title", {name: user.username}), h("div", {class: "scroll-400"}, body),
+      [{label: tr("admin.close"), id: "historyClose", onClick: (close) => close()}]);
+  } catch (e) { fail(e); }
 }
 async function archiveUser(user) {
   const answer = await reasonDialog(tr("admin.archive_confirm", {name: user.username}), tr("admin.archive"));

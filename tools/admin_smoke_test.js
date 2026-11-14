@@ -254,6 +254,25 @@ async function test(name, fn) {
     await e.el("usSave").click(); await sleep();
     assert.deepStrictEqual(JSON.parse(e.calls.find((c) => c.opts.method === "PATCH").opts.body), {role: "analyst"});
   });
+  await test("история сотрудника: журнал по нему, действия по-человечески, «кто» — логин или консоль; блокировка с причиной", async () => {
+    const users = [{id: "u2", username: "m.karimov", role: "merchandiser", is_active: true, store_ids: ["s1"], created_at: "x", status: "active"}];
+    const journal = [{at: "2026-11-14T10:00:00", action: "user.blocked", actor: "admin", via: "api", reason: "проверка"},
+                     {at: "2026-11-14T09:00:00", action: "user.created", actor: null, via: "console", reason: null},
+                     {at: "2026-11-14T08:00:00", action: "something.new", actor: null, via: "system", reason: null}];
+    const e = makeEnv({token: "t", hash: "#/users", fetchImpl: router(baseRoutes([[/\/audit\?target_id=u2/, () => json(200, journal)],
+      [/\/users\/u2$/, () => json(200, users[0])], [/\/api\/v1\/users$/, () => json(200, users)]]))});
+    await sleep(40);
+    const row = () => findAll(e.main, (n) => n.tag === "tr" && n.textContent.includes("m.karimov"))[0];
+    await button(row(), "История").click(); await sleep(20);
+    const text = e.el("modalRoot").textContent;
+    assert.ok(text.includes("История: m.karimov") && text.includes("Заблокирован") && text.includes("проверка"), text.slice(0, 400));
+    assert.ok(text.includes("консоль сервера") && text.includes("something.new"));        // неизвестное действие — как есть, не пропадает
+    await e.el("historyClose").click();
+    await button(row(), "Отключить").click(); await sleep(10);
+    e.el("reasonInput").value = "потерян телефон";
+    await e.el("confirmOk").click(); await sleep(20);
+    assert.deepStrictEqual(JSON.parse(e.calls.find((c) => c.opts.method === "PATCH").opts.body), {is_active: false, block_reason: "потерян телефон"});
+  });
   await test("временный пароль: создание показывает пароль сервера один раз; «ждёт первого входа»; выдача нового — с подтверждением", async () => {
     const users = [{id: "u1", username: "admin", role: "admin", is_active: true, store_ids: [], created_at: "x"},
                    {id: "u2", username: "m.karimov", role: "merchandiser", is_active: true, store_ids: ["s1"], created_at: "x",

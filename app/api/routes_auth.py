@@ -82,6 +82,7 @@ from app.core.security import (
 from app.core.throttle_redis import build_login_throttle
 from app.db.models import User
 from app.db.session import get_db
+from app.services.audit import AuditActor
 from app.services.auth_service import (
     AuthService,
     AuthServiceError,
@@ -99,6 +100,11 @@ _settings = get_settings()
 # Один счётчик на все входы программы (api, admin-api, admin-api-vpn) — в Redis; без Redis — в памяти процесса
 # (app/core/throttle_redis.py, настройка AUTH_THROTTLE_BACKEND).
 login_throttle = build_login_throttle(_settings)
+
+
+def _actor(user: CurrentUser) -> AuditActor:
+    """Кто действует — для журнала действий (документ 05, §16): вошедший сотрудник через API."""
+    return AuditActor(user.id, "api")
 
 
 class TokenResponse(BaseModel):
@@ -462,7 +468,7 @@ def refresh(user: CurrentUser = Depends(get_current_user), db: Session = Depends
     ttl = _ttl_minutes(user.role, session_listener)
     capped = user.role == Role.ADMIN or session_listener == LISTENER_ADMIN
     max_hours = settings.auth_admin_session_max_hours if capped else None
-    renewed = AuthService(db).refresh_session(user.session_id, ttl, max_hours=max_hours)
+    renewed = AuthService(db, actor=_actor(user)).refresh_session(user.session_id, ttl, max_hours=max_hours)
     if renewed is None:
         raise unauthorized("Сеанс достиг предельной длительности — войдите заново", code="session_max_age")
     token, expires_at = renewed
@@ -475,7 +481,7 @@ def reauth(body: ReauthRequest, request: Request, user: CurrentUser = Depends(ge
            db: Session = Depends(get_db)) -> dict:
     """Подтверждение личности для важных операций: пароль и код из приложения. Неверные — как неудачный вход (лимит попыток)."""
     _guarded(request, user.username,
-             lambda: AuthService(db).reauthenticate(user.id, user.session_id, body.password, body.code,
+             lambda: AuthService(db, actor=_actor(user)).reauthenticate(user.id, user.session_id, body.password, body.code,
                                                     get_settings().auth_secret_key))
     return {"status": "confirmed", "valid_minutes": get_settings().auth_reauth_minutes}
 
@@ -486,7 +492,7 @@ def change_password(body: PasswordChange, request: Request, user: CurrentUser = 
     """Смена пароля самим пользователем (документ 05, §12.11): текущий пароль и, если включён второй фактор, код из приложения.
     Все сеансы, включая этот, завершаются одной транзакцией с новым паролем; этому устройству выдаётся новый сеанс (в ответе).
     Неверный пароль или код — неудачная попытка входа (общее ограничение попыток)."""
-    service = AuthService(db)
+    service = AuthService(db, actor=_actor(user))
     listener = request_listener(request)
     ttl = _ttl_minutes(user.role, listener)
     token, expires_at, _mfa = _guarded(request, user.username, lambda: service.change_own_password(
@@ -503,7 +509,7 @@ def set_initial_password(body: InitialPassword, request: Request, user: CurrentU
     """Установка своего пароля вместо временного (документ 05, §12.3) — только с пропуском «смена пароля». Все сеансы и пропуски
     завершаются. Дальше — как после верного пароля при входе: если нужен второй фактор (или его настройка), сеанс здесь НЕ
     выдаётся — войти заново с новым паролем; иначе выдаётся обычный сеанс."""
-    service = AuthService(db)
+    service = AuthService(db, actor=_actor(user))
     settings = get_settings()
     updated = _guarded(request, user.username,
                        lambda: service.set_initial_password(user.id, body.new_password, body.code, settings.auth_secret_key))
@@ -529,7 +535,7 @@ def logout(
 @router.post("/auth/logout-all")
 def logout_all(user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
     """Выйти на всех устройствах, включая это: новое поколение сеансов и удаление токенов — одной транзакцией."""
-    AuthService(db).revoke_all_tokens(user.id)
+    AuthService(db, actor=_actor(user)).revoke_all_tokens(user.id)
     return {"status": "logged_out_everywhere"}
 
 
@@ -547,10 +553,10 @@ def me(request: Request, user: CurrentUser = Depends(get_current_user), db: Sess
         store_ids=sorted(user.store_ids),
         permissions=[p for p in role_perms if admin_here or p not in ADMIN_ONLY_PERMISSIONS],
         role_permissions=role_perms,
-        mfa_enabled=AuthService(db).totp_enabled(user.id),
+        mfa_enabled=AuthService(db, actor=_actor(user)).totp_enabled(user.id),
         is_owner=user.is_owner,
         admin_listener=admin_here,
-        language=AuthService(db).get_user(user.id).language,
+        language=AuthService(db, actor=_actor(user)).get_user(user.id).language,
     )
 
 
@@ -560,7 +566,7 @@ def set_my_language(body: LanguageIn, user: CurrentUser = Depends(get_current_us
     if body.language is not None and body.language not in LANGUAGES:
         raise ApiError(422, "language_unknown", "Такого языка в программе нет",
                        {"allowed": list(LANGUAGES)})
-    return {"language": AuthService(db).set_language(user.id, body.language)}
+    return {"language": AuthService(db, actor=_actor(user)).set_language(user.id, body.language)}
 
 
 # ------------------------------------------------------------------- мои сеансы
@@ -568,13 +574,13 @@ def set_my_language(body: LanguageIn, user: CurrentUser = Depends(get_current_us
 
 @router.get("/auth/sessions", response_model=list[SessionOut])
 def my_sessions(user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)) -> list[SessionOut]:
-    return [SessionOut(**s) for s in AuthService(db).list_sessions(user.id, current_session_id=user.session_id)]
+    return [SessionOut(**s) for s in AuthService(db, actor=_actor(user)).list_sessions(user.id, current_session_id=user.session_id)]
 
 
 @router.delete("/auth/sessions/{session_id}")
 def end_my_session(session_id: str, user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
     try:
-        AuthService(db).revoke_session(user.id, session_id)
+        AuthService(db, actor=_actor(user)).revoke_session(user.id, session_id)
     except AuthServiceError as exc:
         raise from_app_error(exc) from exc
     return {"status": "ended", "current": session_id == user.session_id}
@@ -582,7 +588,7 @@ def end_my_session(session_id: str, user: CurrentUser = Depends(get_current_user
 
 @router.post("/auth/sessions/revoke-others")
 def end_other_sessions(user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
-    return {"status": "ended", "count": AuthService(db).revoke_other_sessions(user.id, user.session_id)}
+    return {"status": "ended", "count": AuthService(db, actor=_actor(user)).revoke_other_sessions(user.id, user.session_id)}
 
 
 # --------------------------------------------------------------- второй фактор
@@ -594,7 +600,7 @@ def _required_for(user: CurrentUser) -> bool:
 
 @router.get("/auth/2fa")
 def mfa_status(user: CurrentUser = Depends(get_enrolling_user), db: Session = Depends(get_db)) -> dict:
-    status_ = AuthService(db).totp_status(user.id, get_settings().auth_secret_key, required=_required_for(user))
+    status_ = AuthService(db, actor=_actor(user)).totp_status(user.id, get_settings().auth_secret_key, required=_required_for(user))
     status_["enrolling"] = user.session_scope == SCOPE_ENROLL
     return status_
 
@@ -609,7 +615,7 @@ def mfa_setup(body: PasswordConfirm, request: Request, user: CurrentUser = Depen
     if enrolling and request_listener(request) != LISTENER_ADMIN:
         raise admin_listener_error()
     return _guarded(request, user.username,
-                    lambda: AuthService(db).begin_totp_setup(user.id, body.password, get_settings().auth_secret_key,
+                    lambda: AuthService(db, actor=_actor(user)).begin_totp_setup(user.id, body.password, get_settings().auth_secret_key,
                                                              password_verified=enrolling))
 
 
@@ -621,7 +627,7 @@ def mfa_confirm(body: CodeConfirm, request: Request, user: CurrentUser = Depends
     enrolling = user.session_scope == SCOPE_ENROLL
     if enrolling and request_listener(request) != LISTENER_ADMIN:
         raise admin_listener_error()
-    service = AuthService(db)
+    service = AuthService(db, actor=_actor(user))
     result = _guarded(request, user.username,
                       lambda: service.confirm_totp_setup(user.id, body.code, get_settings().auth_secret_key,
                                                          keep_session_id=None if enrolling else user.session_id))
@@ -637,7 +643,7 @@ def mfa_confirm(body: CodeConfirm, request: Request, user: CurrentUser = Depends
 def mfa_disable(body: PasswordAndCode, request: Request, user: CurrentUser = Depends(get_current_user),
                 db: Session = Depends(get_db)) -> dict:
     _guarded(request, user.username,
-             lambda: AuthService(db).disable_totp(user.id, body.password, body.code, get_settings().auth_secret_key,
+             lambda: AuthService(db, actor=_actor(user)).disable_totp(user.id, body.password, body.code, get_settings().auth_secret_key,
                                                   forbidden_for_admins=get_settings().auth_require_2fa_for_admins))
     return {"status": "disabled"}
 
@@ -647,7 +653,7 @@ def mfa_new_recovery_codes(body: PasswordAndCode, request: Request, user: Curren
                            db: Session = Depends(get_db)) -> dict:
     """Новые коды восстановления (старые перестают действовать): пароль и свежий код. Коды — в ответе ОДИН раз."""
     codes = _guarded(request, user.username,
-                     lambda: AuthService(db).regenerate_recovery_codes(user.id, body.password, body.code,
+                     lambda: AuthService(db, actor=_actor(user)).regenerate_recovery_codes(user.id, body.password, body.code,
                                                                        get_settings().auth_secret_key))
     return {"recovery_codes": codes}
 
@@ -677,7 +683,7 @@ def create_user(
     admin: CurrentUser = Depends(require_recent_auth(Permission.USER_MANAGE)),
 ) -> UserOut:
     """Новый сотрудник всегда начинает с временного пароля (документ 05, §12.1–§12.2)."""
-    service = AuthService(db)
+    service = AuthService(db, actor=_actor(admin))
     if body.role == Role.ADMIN:
         _guard_admin_grant(service, admin)
     generated = body.password is None
@@ -710,7 +716,7 @@ def update_user(
     db: Session = Depends(get_db),
     admin: CurrentUser = Depends(require_recent_auth(Permission.USER_MANAGE)),
 ) -> UserOut:
-    service = AuthService(db)
+    service = AuthService(db, actor=_actor(admin))
     _guard_target(service, admin, user_id)
     if body.role == Role.ADMIN:
         try:
@@ -758,7 +764,7 @@ def archive_user(
 ) -> UserOut:
     """«Отозвать доступ» (документ 05, §12.7): блокировка и архив одним действием, все сеансы завершаются сразу. Учётная запись
     и история не удаляются (на них ссылается журнал); вернуть из архива нельзя, логин повторно не используется."""
-    service = AuthService(db)
+    service = AuthService(db, actor=_actor(admin))
     _guard_target(service, admin, user_id)
     if user_id == admin.id:
         raise ApiError(400, "self_lockout", "Нельзя отозвать доступ у самого себя — попросите другого администратора")
@@ -779,7 +785,7 @@ def issue_temporary_password(
 ) -> TemporaryPasswordOut:
     """«Выдать новый временный пароль» (документ 05, §12.4): сервер генерирует, старый пароль перестаёт действовать сразу, все
     сеансы сотрудника завершаются. Пароль — в ответе ОДИН раз. Владельцу — только он сам с консоли; себе — нельзя."""
-    service = AuthService(db)
+    service = AuthService(db, actor=_actor(admin))
     try:
         target = service.get_user(user_id)
     except UserNotFoundError as exc:
@@ -800,7 +806,7 @@ def user_sessions(
     db: Session = Depends(get_db),
     admin: CurrentUser = Depends(require_permission(Permission.USER_MANAGE)),
 ) -> list[SessionOut]:
-    service = AuthService(db)
+    service = AuthService(db, actor=_actor(admin))
     try:
         service.get_user(user_id)
     except UserNotFoundError as exc:
@@ -816,7 +822,7 @@ def end_user_sessions(
     admin: CurrentUser = Depends(require_permission(Permission.USER_MANAGE)),
 ) -> dict:
     """Администратор завершает все сеансы пользователя (потерян телефон, подозрение на кражу пароля)."""
-    service = AuthService(db)
+    service = AuthService(db, actor=_actor(admin))
     try:
         service.get_user(user_id)
     except UserNotFoundError as exc:
@@ -835,7 +841,7 @@ def reset_user_2fa(
     """Восстановление доступа при потере телефона (документ 18, §4.1): второй фактор сотрудника сбрасывает администратор,
     администратора — только владелец; свой — нельзя (коды восстановления или консоль сервера). Все сеансы пользователя
     завершаются; администратор при следующем входе получит пропуск настройки (только на административном входе)."""
-    service = AuthService(db)
+    service = AuthService(db, actor=_actor(admin))
     try:
         target = service.get_user(user_id)
     except UserNotFoundError as exc:
@@ -849,3 +855,32 @@ def reset_user_2fa(
     service.reset_totp(user_id)
     logger.warning("Второй фактор пользователя %s сброшен администратором %s", target.username, admin.username)
     return {"status": "reset"}
+
+
+# ------------------------------------------------------------------- журнал действий (документ 05, §16)
+
+
+@router.get("/audit")
+def audit_journal(
+    target_id: str | None = None,
+    actor_user_id: str | None = None,
+    action: str | None = None,
+    before: datetime | None = None,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    _admin: CurrentUser = Depends(require_permission(Permission.USER_MANAGE)),
+) -> list[dict]:
+    """Журнал действий, новые сверху: по сотруднику (target_id — над кем, actor_user_id — кто), по виду (action, «user.*» — все
+    действия с учётными записями), по периоду (before — раньше этого момента, для «показать ещё»). Логины подставлены для чтения.
+    Секретов в журнале нет по построению (app/services/audit.py)."""
+    from app.services import audit
+    events = audit.query(db, target_id=target_id, actor_user_id=actor_user_id, action=action, before_at=before, limit=limit)
+    ids = {e.actor_user_id for e in events if e.actor_user_id} | {e.target_id for e in events if e.target_type == "user" and e.target_id}
+    names = {u.id: u.username for u in db.query(User).filter(User.id.in_(ids)).all()} if ids else {}
+    out = []
+    for event in events:
+        row = audit.as_dict(event)
+        row["actor"] = names.get(event.actor_user_id) if event.actor_user_id else None
+        row["target"] = names.get(event.target_id) if event.target_type == "user" else None
+        out.append(row)
+    return out

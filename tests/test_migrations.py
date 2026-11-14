@@ -178,3 +178,17 @@ def test_no_create_all_left_in_application_code():
                 if re.search(r"\.create_all\(", line) and not line.lstrip().startswith("#"):
                     offenders.append(f"{path.relative_to(ROOT)}:{n}")
     assert offenders == []
+
+
+def test_audit_journal_is_append_only_in_the_database_itself(engine):
+    """Миграция 0004: изменить или удалить запись журнала не может никто — отказывает сама база (документ 05, §16.3)."""
+    from sqlalchemy.exc import DBAPIError
+    migrate.upgrade_to_head(engine)
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO audit_events (id, at, via, action) VALUES ('e1', CURRENT_TIMESTAMP, 'api', 'user.created')"))
+    for sql in ("UPDATE audit_events SET action = 'forged'", "DELETE FROM audit_events"):
+        with pytest.raises(DBAPIError):
+            with engine.begin() as c:
+                c.execute(text(sql))
+    with engine.connect() as c:
+        assert c.execute(text("SELECT action FROM audit_events")).scalar_one() == "user.created"

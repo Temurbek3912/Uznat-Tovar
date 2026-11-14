@@ -101,6 +101,7 @@ def cmd_reset_password(db, username: str, *, getpass_fn=getpass.getpass, input_f
                        permanent: bool = False, out=print) -> int:
     """Новый пароль с консоли. По умолчанию — временный (документ 05, §12.4): при первом входе пользователь задаёт свой. --permanent —
     пароль вводит сам владелец учётной записи (например, владелец системы, забывший пароль)."""
+    from app.services.audit import CONSOLE  # журнал: действие с консоли сервера
     from app.services.auth_service import AuthService
 
     user = _find(db, username)
@@ -114,7 +115,7 @@ def cmd_reset_password(db, username: str, *, getpass_fn=getpass.getpass, input_f
     if password is None:
         out("Ошибка: не удалось ввести корректный пароль, пароль не изменён.")
         return 1
-    service = AuthService(db)
+    service = AuthService(db, actor=CONSOLE)
     if permanent:
         service.update_user(user.id, password=password)              # хеширует и отзывает все токены пользователя
         out(f"Пароль пользователя «{user.username}» изменён; все его активные сессии завершены.")
@@ -132,6 +133,7 @@ def cmd_reset_2fa(db, username: str, *, input_fn=input, assume_yes: bool = False
     """Потерян телефон. После сброса первый, кто войдёт с паролем на административном входе, настроит второй фактор на СВОЙ
     телефон — поэтому при краже телефона (или если пароль мог узнать кто-то ещё) меняйте и пароль: --new-password (аудит
     2026-11-08, документ 18, §12)."""
+    from app.services.audit import CONSOLE  # журнал: действие с консоли сервера
     from app.services.auth_service import AuthService
 
     user = _find(db, username)
@@ -147,7 +149,7 @@ def cmd_reset_2fa(db, username: str, *, input_fn=input, assume_yes: bool = False
         if password is None:
             out("Ошибка: не удалось ввести корректный пароль — ничего не изменено.")
             return 1
-    service = AuthService(db)
+    service = AuthService(db, actor=CONSOLE)
     if password is not None:
         service.update_user(user.id, password=password)
     service.reset_totp(user.id)
@@ -161,6 +163,7 @@ def cmd_reset_2fa(db, username: str, *, input_fn=input, assume_yes: bool = False
 
 def cmd_owner(db, username: str, *, transfer: bool = False, input_fn=input, assume_yes: bool = False, out=print) -> int:
     """Владелец назначается или передаётся ТОЛЬКО отсюда (консоль сервера): через сеть признака владельца не изменить."""
+    from app.services.audit import CONSOLE  # журнал: действие с консоли сервера
     from app.services.auth_service import AuthService, AuthServiceError
 
     user = _find(db, username)
@@ -171,7 +174,7 @@ def cmd_owner(db, username: str, *, transfer: bool = False, input_fn=input, assu
         out("Отменено: логин не совпал, владелец не изменён.")
         return 1
     try:
-        AuthService(db).set_owner(user.id, transfer=transfer)
+        AuthService(db, actor=CONSOLE).set_owner(user.id, transfer=transfer)
     except AuthServiceError as exc:
         out(f"Ошибка: {exc}")
         return 1
@@ -180,18 +183,20 @@ def cmd_owner(db, username: str, *, transfer: bool = False, input_fn=input, assu
 
 
 def cmd_logout_all(db, username: str, out=print) -> int:
+    from app.services.audit import CONSOLE  # журнал: действие с консоли сервера
     from app.services.auth_service import AuthService
 
     user = _find(db, username)
     if user is None:
         out(f"Ошибка: пользователь «{username}» не найден.")
         return 1
-    AuthService(db).revoke_all_tokens(user.id)
+    AuthService(db, actor=CONSOLE).revoke_all_tokens(user.id)
     out(f"Все сеансы пользователя «{user.username}» завершены.")
     return 0
 
 
 def cmd_set_active(db, username: str, active: bool, out=print) -> int:
+    from app.services.audit import CONSOLE  # журнал: действие с консоли сервера
     from sqlalchemy import select
 
     from app.db.models import User
@@ -201,7 +206,7 @@ def cmd_set_active(db, username: str, active: bool, out=print) -> int:
     if user is None:
         out(f"Ошибка: пользователь «{username}» не найден.")
         return 1
-    service = AuthService(db)
+    service = AuthService(db, actor=CONSOLE)
     if not active:
         rows = [(u.username, u.role, bool(u.is_active)) for u in db.execute(select(User)).scalars().all()]
         blocker = deactivate_blocker(rows, user.username)

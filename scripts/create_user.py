@@ -26,6 +26,7 @@ import sys
 from app.core.config import get_settings
 from app.core.security import PolicyViolation, Role
 from app.db.session import SessionLocal, engine
+from app.services.audit import CONSOLE  # журнал: действие с консоли сервера
 from app.services.auth_service import AuthService, UnknownStoreError, UserAlreadyExistsError
 
 
@@ -60,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     ensure_current(engine)          # миграции Alembic вместо create_all (шаг Р-2)
     db = SessionLocal()
     try:
-        service = AuthService(db)
+        service = AuthService(db, actor=CONSOLE)
         user = service.create_user(args.username, password, Role(args.role), args.store_id)
         if not args.permanent:                   # пароль знает тот, кто его ввёл, — временный (документ 05, §12.2)
             service.set_temporary_password(user.id, password, hours=get_settings().auth_temp_password_hours)

@@ -79,7 +79,7 @@ from app.core.security import (
     parse_role,
     utcnow,
 )
-from app.core.throttle import LoginThrottle
+from app.core.throttle_redis import build_login_throttle
 from app.db.models import User
 from app.db.session import get_db
 from app.services.auth_service import (
@@ -96,12 +96,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["auth"])
 
 _settings = get_settings()
-# Один экземпляр на процесс: счётчики живут в памяти (см. ограничения в app/core/throttle.py).
-login_throttle = LoginThrottle(
-    max_failures_per_user=_settings.auth_max_failed_logins_per_user,
-    max_failures_per_ip=_settings.auth_max_failed_logins_per_ip,
-    window_seconds=_settings.auth_lockout_window_minutes * 60,
-)
+# Один счётчик на все входы программы (api, admin-api, admin-api-vpn) — в Redis; без Redis — в памяти процесса
+# (app/core/throttle_redis.py, настройка AUTH_THROTTLE_BACKEND).
+login_throttle = build_login_throttle(_settings)
 
 
 class TokenResponse(BaseModel):

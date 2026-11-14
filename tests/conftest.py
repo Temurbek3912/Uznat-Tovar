@@ -7,6 +7,12 @@
 """
 from __future__ import annotations
 
+import os
+
+# Тесты не должны зависеть от того, запущен ли на этом компьютере Redis: счётчик попыток входа — в памяти. Общий счётчик в Redis
+# проверяется отдельно (tests/test_throttle_redis.py).
+os.environ.setdefault("AUTH_THROTTLE_BACKEND", "memory")
+
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "environment: проверка соответствия окружения требованиям проекта (не логики кода)")

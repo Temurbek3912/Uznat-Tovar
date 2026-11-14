@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     auth_max_failed_logins_per_user: int = 5
     auth_max_failed_logins_per_ip: int = 20
     auth_lockout_window_minutes: int = 15
+    # Где считать неудачные попытки входа: auto — в Redis очереди (один счётчик для всех входов программы), если адрес очереди
+    # redis://, иначе в памяти; memory — всегда в памяти процесса; redis — всегда Redis (при сбое — память, app/core/throttle_redis.py).
+    auth_throttle_backend: str = "auto"
 
     # Ключ шифрования секретов камер (RTSP-URL с паролем хранятся в БД только зашифрованными). Умолчания НЕТ намеренно:
     # без ключа камеры добавить нельзя. Создать: python -m scripts.generate_secret_key; положить в .env (CAMERA_SECRET_KEY=...).

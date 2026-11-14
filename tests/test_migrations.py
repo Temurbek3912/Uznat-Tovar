@@ -142,20 +142,23 @@ def _current(eng):
 
 
 def test_every_revision_after_the_baseline_goes_down_and_up_again(engine):
+    """С последней ревизии вниз: каждая откатывается к предыдущей и применяется снова; в конце — снова последняя и = модели."""
     migrate.upgrade_to_head(engine)
     script = ScriptDirectory.from_config(migrate.alembic_config())
-    revisions = [r.revision for r in script.walk_revisions() if r.revision != migrate.BASELINE_REVISION]   # от новой к старой
+    revisions = [r for r in script.walk_revisions() if r.revision != migrate.BASELINE_REVISION]   # от новой к старой
     for rev in revisions:
+        assert _current(engine) == rev.revision
         with engine.begin() as conn:
             command.downgrade(migrate.alembic_config(conn), "-1")
+        assert _current(engine) == rev.down_revision, rev.revision
         with engine.begin() as conn:
             command.upgrade(migrate.alembic_config(conn), "+1")
-        assert _current(engine) == migrate.head_revision(), rev
+        assert _current(engine) == rev.revision, rev.revision
         with engine.begin() as conn:
             command.downgrade(migrate.alembic_config(conn), "-1")
     assert _current(engine) == migrate.BASELINE_REVISION
     migrate.upgrade_to_head(engine)
-    assert _diff(engine) == []
+    assert _current(engine) == migrate.head_revision() and _diff(engine) == []
 
 
 def test_revision_chain_is_linear_and_files_are_named_by_revision():

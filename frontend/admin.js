@@ -47,11 +47,29 @@ function describeError(status, detail, body) {
 // Пользователь: проверка на клиенте повторяет серверную (сервер всё равно проверяет заново) — чтобы ошибки были видны сразу.
 // Пароль сотруднику задаёт не администратор, а сервер: временный, показывается один раз, при первом входе сотрудник задаёт свой
 // (документ 05, §12.1–§12.2). Поэтому в запросе создания пароля нет.
+// «Доступ до» (документ 05, §12.1): человек выбирает день; доступ действует ВЕСЬ этот день по часам компьютера, то есть до
+// полуночи следующего дня. Сервер хранит момент в UTC. "" — без срока.
+function accessUntilFromDate(day) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || ""));
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + 1).toISOString();
+}
+function dateFromAccessUntil(value) {
+  if (!value) return "";
+  const at = new Date(/Z$|[+-]\d\d:\d\d$/.test(value) ? value : value + "Z");
+  if (isNaN(at.getTime())) return "";
+  const last = new Date(at.getTime() - 1);                  // последний момент доступа -> его день
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${last.getFullYear()}-${pad(last.getMonth() + 1)}-${pad(last.getDate())}`;
+}
 function buildUserCreatePayload(f) {
   const username = String(f.username || "").trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9._@-]{2,63}$/.test(username)) return {error: tr("admin.v_username")};
   if (!ROLES.includes(f.role)) return {error: tr("admin.v_role")};
-  return {payload: {username, role: f.role, store_ids: [...(f.store_ids || [])]}};
+  const payload = {username, role: f.role, store_ids: [...(f.store_ids || [])]};
+  const until = accessUntilFromDate(f.access_until_date);
+  if (until) payload.access_until = until;
+  return {payload};
 }
 function buildUserUpdatePayload(f, original) {
   const payload = {};
@@ -59,7 +77,19 @@ function buildUserUpdatePayload(f, original) {
   if (!!f.is_active !== !!original.is_active) payload.is_active = !!f.is_active;
   const a = [...(f.store_ids || [])].sort().join(","), b = [...(original.store_ids || [])].sort().join(",");
   if (a !== b) payload.store_ids = [...(f.store_ids || [])];
+  if (f.access_until_date !== undefined && String(f.access_until_date || "") !== dateFromAccessUntil(original.access_until)) {
+    payload.access_until = accessUntilFromDate(f.access_until_date);   // null — снять срок
+  }
   return Object.keys(payload).length ? {payload} : {error: tr("admin.v_nothing")};
+}
+// Состояние учётной записи от сервера (app/core/account_status.py) -> значок. Прежний сервер без status — по is_active.
+function userStatusBadge(u) {
+  const st = u.status || (!u.is_active ? "blocked" : u.must_change_password ? "pending_first_login" : "active");
+  if (st === "archived") return badge(tr("admin.status_archived"), "");
+  if (st === "blocked") return badge(u.block_reason ? tr("admin.status_blocked_reason", {reason: u.block_reason}) : tr("admin.disabled"), "");
+  if (st === "expired") return badge(tr("admin.status_expired"), "warn");
+  if (st === "pending_first_login") return badge(tr("admin.awaiting_first_login"), "warn");
+  return badge(u.access_until ? tr("admin.status_active_until", {date: dateFromAccessUntil(u.access_until)}) : tr("admin.active"), "ok");
 }
 
 // ============================ Состояние, API, вспомогательный UI ============================
@@ -304,15 +334,15 @@ async function renderUsers(main) {
   main.appendChild(h("div", {class: "toolbar"}, h("button", {class: "btn", type: "button", id: "addUser", onclick: () => userModal(null)}, tr("admin.add_user")),
     h("div", {class: "grow"}), h("span", {class: "mute"}, tr("admin.users_server_note"))));
   main.appendChild(h("div", {class: "card"}, table([tr("login.user"), tr("admin.col_role"), tr("admin.col_status"), tr("admin.col_stores"), ""],
-    users.map((u) => [h("b", {}, u.username), roleLabel(u.role),
-    !u.is_active ? badge(tr("admin.disabled"), "")
-      : u.must_change_password ? badge(tr("admin.awaiting_first_login"), "warn") : badge(tr("admin.active"), "ok"),
+    users.map((u) => [h("b", {}, u.username), roleLabel(u.role), userStatusBadge(u),
     ["admin", "analyst"].includes(u.role) ? h("span", {class: "mute"}, tr("admin.whole_network"))
       : (u.store_ids.length ? u.store_ids.map(storeName).join(", ") : h("span", {class: "mute"}, tr("admin.no_access"))),
+    u.status === "archived" ? {actions: [h("span", {class: "mute"}, u.block_reason || "")]} :
     {actions: [h("button", {class: "btn sec sm", type: "button", onclick: () => userModal(u)}, tr("admin.edit")),
       h("button", {class: "btn sec sm", type: "button", onclick: () => toggleUser(u)}, u.is_active ? tr("admin.disable") : tr("admin.enable")),
       u.username !== (state.me && state.me.username) ? h("button", {class: "btn sec sm", type: "button", "data-temppass": u.id, onclick: () => issueTempPassword(u)}, tr("admin.temp_password_issue")) : null,
-      u.username !== (state.me && state.me.username) ? h("button", {class: "btn sec sm", type: "button", "data-reset2fa": u.id, onclick: () => resetUser2fa(u)}, tr("admin.reset_2fa")) : null]}]),
+      u.username !== (state.me && state.me.username) ? h("button", {class: "btn sec sm", type: "button", "data-reset2fa": u.id, onclick: () => resetUser2fa(u)}, tr("admin.reset_2fa")) : null,
+      u.username !== (state.me && state.me.username) ? h("button", {class: "btn danger sm", type: "button", "data-archive": u.id, onclick: () => archiveUser(u)}, tr("admin.archive")) : null]}]),
     tr("admin.no_users"))));
 }
 function storeChecks(selected) {
@@ -327,18 +357,20 @@ function userModal(user) {
   role.value = user ? user.role : "merchandiser";
   const active = h("input", {id: "usActive", type: "checkbox", checked: user ? user.is_active : true});
   const stores = storeChecks(user ? user.store_ids : []);
+  const until = h("input", {id: "usUntil", type: "date", value: user ? dateFromAccessUntil(user.access_until) : ""});
   openModal(editing ? tr("admin.user_title", {name: user.username}) : tr("admin.new_user"), h("div", {}, field(tr("admin.f_login"), username),
     editing ? null : h("div", {class: "hint"}, tr("admin.new_user_temp_hint")), field(tr("admin.f_role"), role),
     editing ? h("label", {class: "chk"}, active, tr("admin.f_active")) : null,
+    field(tr("admin.f_access_until"), until, tr("admin.access_until_hint")),
     h("div", {class: "hint"}, tr("admin.stores_hint")), stores.node),
     [{label: tr("admin.cancel"), kind: "sec", onClick: (close) => close()}, {label: tr("admin.save"), id: "usSave", onClick: async (close) => {
       try {
         if (editing) {
-          const built = buildUserUpdatePayload({role: role.value, is_active: active.checked, store_ids: stores.value()}, user);
+          const built = buildUserUpdatePayload({role: role.value, is_active: active.checked, store_ids: stores.value(), access_until_date: until.value}, user);
           if (built.error) { toast(built.error, "error"); return; }
           await call(`/api/v1/users/${encodeURIComponent(user.id)}`, {method: "PATCH", body: built.payload});
         } else {
-          const built = buildUserCreatePayload({username: username.value, role: role.value, store_ids: stores.value()});
+          const built = buildUserCreatePayload({username: username.value, role: role.value, store_ids: stores.value(), access_until_date: until.value});
           if (built.error) { toast(built.error, "error"); return; }
           const created = await call("/api/v1/users", {method: "POST", body: built.payload});
           close(); await route();
@@ -366,9 +398,32 @@ async function issueTempPassword(user) {
     showTempPassword(user.username, r.temporary_password, r.expires_at);
   } catch (e) { fail(e); }
 }
+// Подтверждение с необязательной причиной (блокировка, отзыв доступа — документ 05, §12.5, §12.7). -> {ok, reason}.
+function reasonDialog(text, okLabel) {
+  return new Promise((resolve) => {
+    const reason = h("input", {id: "reasonInput", type: "text", maxlength: "200", autocomplete: "off"});
+    openModal(tr("admin.confirm"), h("div", {}, h("div", {class: "pre-line"}, text), field(tr("admin.reason_optional"), reason)), [
+      {label: tr("admin.cancel"), kind: "sec", onClick: (close) => { close(); resolve({ok: false}); }},
+      {label: okLabel, kind: "danger", id: "confirmOk", onClick: (close) => { const value = reason.value.trim(); close(); resolve({ok: true, reason: value}); }},
+    ]);
+  });
+}
 async function toggleUser(user) {
-  if (user.is_active && !(await confirmDialog(tr("admin.disable_confirm", {name: user.username}), tr("admin.disable")))) return;
-  try { await call(`/api/v1/users/${encodeURIComponent(user.id)}`, {method: "PATCH", body: {is_active: !user.is_active}}); toast(tr("admin.saved"), "ok"); await route(); } catch (e) { fail(e); }
+  let body = {is_active: !user.is_active};
+  if (user.is_active) {
+    const answer = await reasonDialog(tr("admin.disable_confirm", {name: user.username}), tr("admin.disable"));
+    if (!answer.ok) return;
+    if (answer.reason) body.block_reason = answer.reason;
+  }
+  try { await call(`/api/v1/users/${encodeURIComponent(user.id)}`, {method: "PATCH", body}); toast(tr("admin.saved"), "ok"); await route(); } catch (e) { fail(e); }
+}
+async function archiveUser(user) {
+  const answer = await reasonDialog(tr("admin.archive_confirm", {name: user.username}), tr("admin.archive"));
+  if (!answer.ok) return;
+  try {
+    await call(`/api/v1/users/${encodeURIComponent(user.id)}/archive`, {method: "POST", body: answer.reason ? {reason: answer.reason} : {}});
+    toast(tr("admin.saved"), "ok"); await route();
+  } catch (e) { fail(e); }
 }
 
 // ============================ Система ============================

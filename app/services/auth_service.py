@@ -18,7 +18,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core import auth_secrets, recovery_codes, temp_password, totp
+from app.core import account_status, auth_secrets, recovery_codes, temp_password, totp
 from app.core.app_errors import AppError
 from app.core.mfa_policy import SCOPE_FULL, renewed_expiry, session_accepted
 from app.core.session_info import (
@@ -125,6 +125,20 @@ class MfaKeyError(AuthServiceError):
     default_code = "mfa_unavailable"
 
 
+class UserArchivedError(AuthServiceError):
+    """Учётная запись в архиве (доступ отозван, документ 05, §12.7): её нельзя включить или изменить, логин не используется снова."""
+
+    kind = "conflict"
+    default_code = "user_archived"
+
+
+class AccessExpiredError(AuthServiceError):
+    """Наступила дата «доступ до» (документ 05, §12.1). Сообщается только после ВЕРНОГО пароля, как истёкший временный пароль."""
+
+    kind = "forbidden"
+    default_code = "access_expired"
+
+
 class OwnerError(AuthServiceError):
     """Действие с владельцем системы запрещено (назначение — только с консоли сервера)."""
 
@@ -227,8 +241,9 @@ class AuthService:
             return None
 
         user = self.db.get(User, row.user_id)
-        if user is None or not user.is_active:
-            return None
+        if user is None or not account_status.can_sign_in(is_active=user.is_active, archived_at=user.archived_at,
+                                                          access_until=user.access_until, now=utcnow()):
+            return None                       # отключён, в архиве или наступил «доступ до» — со следующего же запроса
 
         role = parse_role(user.role)
         if role is None:
@@ -690,15 +705,22 @@ class AuthService:
     # ---------------------------------------------------------- пользователи
 
     def create_user(
-        self, username: str, password: str, role: Role, store_ids: list[str] | None = None
+        self, username: str, password: str, role: Role, store_ids: list[str] | None = None,
+        access_until: datetime | None = None,
     ) -> User:
-        """Создаёт пользователя. Бросает PolicyViolation (логин/пароль),
-        UserAlreadyExistsError, UnknownStoreError."""
+        """Создаёт пользователя. Бросает PolicyViolation (логин/пароль/срок), UserAlreadyExistsError, UserArchivedError (логин
+        архивного сотрудника), UnknownStoreError. access_until — «доступ до» (документ 05, §12.1), по желанию."""
         canon = validate_username(username)
         check_password_policy(password)
 
-        if self._username_taken(canon):
+        taken = self.db.execute(select(User.archived_at).where(User.username == canon)).first()
+        if taken is not None:
+            if taken[0] is not None:          # документ 05, §12.1 п. 1: логин архивных сотрудников повторно не используется
+                raise UserArchivedError(f"Логин «{canon}» был у сотрудника, который сейчас в архиве. Придумайте другой логин",
+                                        "username_archived", params={"username": canon})
             raise UserAlreadyExistsError(f"Пользователь «{canon}» уже существует", params={"username": canon})
+        if access_until is not None and account_status.access_expired(access_until, utcnow()):
+            raise PolicyViolation("Дата «доступ до» уже прошла — укажите будущую дату или оставьте поле пустым", "access_until_past")
 
         wanted_stores = set(store_ids or [])
         self._ensure_stores_exist(wanted_stores)
@@ -708,6 +730,7 @@ class AuthService:
             password_hash=hash_password(password),
             role=role.value,
             is_active=True,
+            access_until=access_until,
             store_access=[UserStoreAccess(store_id=s) for s in sorted(wanted_stores)],
         )
         self.db.add(user)
@@ -745,9 +768,19 @@ class AuthService:
         is_active: bool | None = None,
         store_ids: list[str] | None = None,
         password: str | None = None,
+        block_reason: str | None = None,
+        access_until: datetime | None = None,
+        clear_access_until: bool = False,
     ) -> User:
-        """Частичное обновление. Смена пароля и деактивация сразу отзывают все токены пользователя."""
+        """Частичное обновление. Смена пароля и блокировка сразу отзывают все токены пользователя.
+        is_active=False — блокировка (с необязательной причиной, документ 05, §12.5), True — разблокировка (сеансы не возвращаются).
+        access_until — «доступ до» (§12.1), clear_access_until — снять срок. Архивную учётную запись менять нельзя (§12.7)."""
         user = self.get_user(user_id)
+        if user.archived_at is not None:
+            raise UserArchivedError("Сотрудник в архиве: доступ отозван, учётную запись изменить нельзя")
+        now = utcnow()
+        if access_until is not None and account_status.access_expired(access_until, now):
+            raise PolicyViolation("Дата «доступ до» уже прошла — укажите будущую дату или снимите срок", "access_until_past")
 
         # Сначала вся валидация, потом изменения: при ошибке в середине не остаётся
         # наполовину применённого обновления в сессии.
@@ -762,8 +795,18 @@ class AuthService:
             revoke_tokens = role.value != user.role            # права меняются — сеансы открываются заново (с проверкой 2FA)
             user.role = role.value
         if is_active is not None:
+            if not is_active and user.is_active:
+                user.blocked_at = now
+            if not is_active:
+                user.block_reason = account_status.clean_reason(block_reason) or user.block_reason
+            else:
+                user.blocked_at, user.block_reason = None, None
             user.is_active = is_active
             revoke_tokens = revoke_tokens or not is_active
+        if access_until is not None:
+            user.access_until = access_until
+        elif clear_access_until:
+            user.access_until = None
         if password is not None:
             user.password_hash = hash_password(password)
             revoke_tokens = True
@@ -775,6 +818,31 @@ class AuthService:
         self.db.commit()
         self.db.refresh(user)
         return user
+
+    def archive_user(self, user_id: str, reason: str | None = None) -> User:
+        """«Отозвать доступ» (документ 05, §12.7): блокировка + архив одним действием. Запись не удаляется — на неё ссылается журнал;
+        все сеансы завершаются в той же транзакции. Повторный вызов для архивной записи — без изменений."""
+        user = self.get_user(user_id)
+        if user.archived_at is not None:
+            return user
+        now = utcnow()
+        if user.is_active:
+            user.blocked_at = now
+        user.is_active = False
+        user.archived_at = now
+        user.block_reason = account_status.clean_reason(reason) or user.block_reason
+        self._end_all_sessions(user.id)
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
+    def account_state(self, user: User) -> str:
+        must_change, _deadline = self.temporary_password_state(user.id)
+        return account_status.status_of(is_active=user.is_active, archived_at=user.archived_at, access_until=user.access_until,
+                                        must_change_password=must_change, now=utcnow())
+
+    def access_expired(self, user: User) -> bool:
+        return account_status.access_expired(user.access_until, utcnow())
 
     # ------------------------------------------------------------- внутреннее
 

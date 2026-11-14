@@ -92,7 +92,8 @@ def cmd_list(db, out=print) -> int:
         return 0
     out(f"{'логин':<24} {'роль':<18} {'статус':<10} магазинов")
     for u in users:
-        out(f"{u.username:<24} {u.role:<18} {'активен' if u.is_active else 'ОТКЛЮЧЁН':<10} {len(u.store_access)}")
+        state = "В АРХИВЕ" if u.archived_at is not None else ("активен" if u.is_active else "ОТКЛЮЧЁН")
+        out(f"{u.username:<24} {u.role:<18} {state:<10} {len(u.store_access)}")
     return 0
 
 
@@ -207,6 +208,10 @@ def cmd_set_active(db, username: str, active: bool, out=print) -> int:
         if blocker:
             out(f"Отказано: {blocker}.")
             return 1
+    if user.archived_at is not None:           # документ 05, §12.7: из архива не возвращают
+        out(f"Отказано: «{user.username}» в архиве (доступ отозван {user.archived_at:%Y-%m-%d}). Заведите новую учётную запись "
+            "с другим логином.")
+        return 1
     service.update_user(user.id, is_active=active)
     out(f"Пользователь «{user.username}»: {'включён' if active else 'отключён, его сессии завершены'}.")
     if not active and service.is_owner(user.id):

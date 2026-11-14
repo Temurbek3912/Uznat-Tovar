@@ -162,6 +162,11 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     # Язык интерфейса, выбранный сотрудником (ru | uz | uz-Cyrl | en; NULL — не выбран). Миграция 0002.
     language: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # Блокировка, архив и «доступ до» (документ 05, §12.1, §12.5, §12.7; app/core/account_status.py). Миграция 0003.
+    blocked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    block_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    access_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     store_access: Mapped[list["UserStoreAccess"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

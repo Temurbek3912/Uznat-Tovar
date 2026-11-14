@@ -172,6 +172,25 @@ async function test(name, fn) {
     assert.deepStrictEqual(upd({role: "analyst", is_active: false, store_ids: ["s1"], password: "new-long-pass"}).payload, {role: "analyst", is_active: false, store_ids: ["s1"]});
     assert.deepStrictEqual(upd({role: "merchandiser", is_active: true, store_ids: ["s1", "s2"], password: "typed-by-admin"}).error, "Ничего не изменено");
   });
+  await test("«доступ до»: выбранный день действует целиком, туда-обратно без сдвига; снять срок — null; значки состояния", () => {
+    const iso = run(`accessUntilFromDate("2026-12-31")`);
+    assert.strictEqual(new Date(iso).getTime(), new Date(2027, 0, 1).getTime());          // до полуночи следующего дня по часам компьютера
+    assert.strictEqual(run(`dateFromAccessUntil(${JSON.stringify(iso)})`), "2026-12-31");
+    assert.strictEqual(run(`dateFromAccessUntil(${JSON.stringify(iso.replace("Z", ""))})`), "2026-12-31");   // сервер отдаёт UTC без «Z»
+    assert.strictEqual(run(`accessUntilFromDate("")`), null);
+    assert.strictEqual(run(`dateFromAccessUntil(null)`), "");
+    const create = J(run(`buildUserCreatePayload({username: "temp.worker", role: "merchandiser", store_ids: [], access_until_date: "2026-12-31"})`));
+    assert.strictEqual(create.payload.access_until, iso);
+    const orig = {role: "merchandiser", is_active: true, store_ids: [], access_until: iso};
+    const upd = (f) => J(run(`buildUserUpdatePayload(${JSON.stringify(f)}, ${JSON.stringify(orig)})`));
+    assert.strictEqual(upd({role: "merchandiser", is_active: true, store_ids: [], access_until_date: "2026-12-31"}).error, "Ничего не изменено");
+    assert.deepStrictEqual(upd({role: "merchandiser", is_active: true, store_ids: [], access_until_date: ""}).payload, {access_until: null});
+    const badgeText = (u) => run(`userStatusBadge(${JSON.stringify(u)}).textContent`);
+    assert.strictEqual(badgeText({status: "archived", is_active: false}), "в архиве");
+    assert.strictEqual(badgeText({status: "blocked", is_active: false, block_reason: "потерян телефон"}), "заблокирован: потерян телефон");
+    assert.strictEqual(badgeText({status: "expired", is_active: true}), "срок доступа истёк");
+    assert.strictEqual(badgeText({is_active: false}), "отключён");                       // прежний сервер без status
+  });
   // ================================================================ вход и права
   await test("без токена — форма входа и ни одного запроса", async () => {
     const e = makeEnv({fetchImpl: router([])});

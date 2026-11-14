@@ -541,3 +541,75 @@ def test_unknown_language_is_refused_with_a_code_and_without_token_nothing_is_sa
     assert bad.status_code == 422 and bad.json()["code"] == "language_unknown" and "uz-Cyrl" in bad.json()["params"]["allowed"]
     assert env.client.put("/api/v1/auth/me/language", json={"language": "ru"}).status_code == 401
     assert env.client.get("/api/v1/auth/me", headers=merch).json()["language"] is None
+
+
+# ------------------------------------------------- блокировка с причиной, архив, «доступ до» (документ 05, §12.1, §12.5, §12.7)
+
+
+def _user_id(env, admin, username):
+    return {u["username"]: u for u in env.client.get("/api/v1/users", headers=admin).json()}[username]
+
+
+def test_block_with_reason_ends_sessions_and_unblock_clears_reason_without_restoring_sessions(env):
+    admin, merch = headers_for(env, "admin"), headers_for(env, "merch_a")
+    uid = _user_id(env, admin, "merch_a")["id"]
+    blocked = env.client.patch(f"/api/v1/users/{uid}", headers=admin, json={"is_active": False, "block_reason": "  потерян телефон \x07"})
+    assert blocked.status_code == 200, blocked.text
+    body = blocked.json()
+    assert body["status"] == "blocked" and body["block_reason"] == "потерян телефон" and body["blocked_at"]
+    assert env.client.get("/api/v1/auth/me", headers=merch).status_code == 401         # сеанс завершён сразу
+    assert login(env, "merch_a").status_code == 401                                      # вход невозможен (общий ответ)
+    unblocked = env.client.patch(f"/api/v1/users/{uid}", headers=admin, json={"is_active": True}).json()
+    assert unblocked["status"] == "active" and unblocked["block_reason"] is None and unblocked["blocked_at"] is None
+    assert env.client.get("/api/v1/auth/me", headers=merch).status_code == 401         # старый сеанс не вернулся
+    assert login(env, "merch_a").status_code == 200
+
+
+def test_archive_revokes_access_for_good_and_the_login_is_never_reused(env):
+    admin, merch = headers_for(env, "admin"), headers_for(env, "merch_a")
+    uid = _user_id(env, admin, "merch_a")["id"]
+    archived = env.client.post(f"/api/v1/users/{uid}/archive", headers=admin, json={"reason": "уволился"})
+    assert archived.status_code == 200 and archived.json()["status"] == "archived" and archived.json()["block_reason"] == "уволился"
+    assert env.client.get("/api/v1/auth/me", headers=merch).status_code == 401 and login(env, "merch_a").status_code == 401
+    assert "merch_a" in {u["username"] for u in env.client.get("/api/v1/users", headers=admin).json()}   # запись осталась (журнал)
+    back = env.client.patch(f"/api/v1/users/{uid}", headers=admin, json={"is_active": True})
+    assert back.status_code == 409 and back.json()["code"] == "user_archived"
+    again = env.client.post("/api/v1/users", headers=admin, json={"username": "MERCH_A", "role": "merchandiser"})
+    assert again.status_code == 409 and again.json()["code"] == "username_archived" and again.json()["params"]["username"] == "merch_a"
+    assert env.client.post(f"/api/v1/users/{uid}/archive", headers=admin, json={}).status_code == 200   # повтор — без изменений
+
+
+def test_nobody_archives_themselves_or_the_owner(env):
+    admin = headers_for(env, "admin")
+    me = _user_id(env, admin, "admin")["id"]
+    refused = env.client.post(f"/api/v1/users/{me}/archive", headers=admin, json={})
+    assert refused.status_code in (400, 403) and refused.json()["code"] in ("self_lockout", "owner_protected")
+    assert env.client.post("/api/v1/users/no-such-user/archive", headers=admin, json={}).status_code == 404
+    assert env.client.post(f"/api/v1/users/{me}/archive", headers=headers_for(env, "merch_a"), json={}).status_code == 403
+
+
+def test_access_until_ends_access_on_the_date_and_is_explained_only_after_the_right_password(env):
+    from datetime import datetime, timedelta, timezone
+    admin = headers_for(env, "admin")
+    future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    created = env.client.post("/api/v1/users", headers=admin, json={"username": "temp.worker", "role": "merchandiser",
+                                                                    "password": PASSWORD, "access_until": future})
+    assert created.status_code == 201 and created.json()["access_until"], created.text
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    refused = env.client.patch(f"/api/v1/users/{created.json()['id']}", headers=admin, json={"access_until": past})
+    assert refused.status_code == 422 and refused.json()["code"] == "access_until_past"
+    # Срок наступил (подменяем дату в базе, а не часы): действующий сеанс прекращается со следующего запроса
+    merch = headers_for(env, "merch_a")
+    uid = _user_id(env, admin, "merch_a")["id"]
+    from app.db.models import User
+    with env.Session() as db:
+        db.get(User, uid).access_until = datetime.utcnow() - timedelta(seconds=1)
+        db.commit()
+    assert env.client.get("/api/v1/auth/me", headers=merch).status_code == 401
+    assert _user_id(env, admin, "merch_a")["status"] == "expired"
+    expired = login(env, "merch_a")
+    assert expired.status_code == 403 and expired.json()["code"] == "access_expired"
+    assert login(env, "merch_a", "wrong-password-1").status_code == 401                 # с неверным паролем — общий ответ
+    lifted = env.client.patch(f"/api/v1/users/{uid}", headers=admin, json={"access_until": None})
+    assert lifted.status_code == 200 and lifted.json()["access_until"] is None and lifted.json()["status"] == "active"
+    assert login(env, "merch_a").status_code == 200

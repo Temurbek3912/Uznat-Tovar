@@ -89,6 +89,7 @@ from app.services.auth_service import (
     UnknownStoreError,
     UserAlreadyExistsError,
     UserNotFoundError,
+    UserArchivedError,
 )
 
 logger = logging.getLogger(__name__)
@@ -239,13 +240,28 @@ class UserCreate(BaseModel):
     password: str | None = None
     role: Role
     store_ids: list[str] = Field(default_factory=list)
+    access_until: datetime | None = None     # «доступ до» (документ 05, §12.1); без часового пояса — UTC
 
 
 class UserUpdate(BaseModel):
     role: Role | None = None
-    is_active: bool | None = None
+    is_active: bool | None = None            # False — заблокировать (сеансы завершаются сразу), True — разблокировать
     store_ids: list[str] | None = None   # передан список -> заменяет текущий набор магазинов целиком
     password: str | None = None
+    block_reason: str | None = Field(default=None, max_length=500)   # причина блокировки (по желанию, §12.5)
+    access_until: datetime | None = None     # передано null — снять срок; не передано — не менять
+
+
+class ArchiveIn(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
+
+
+def _utc_naive(value: datetime | None) -> datetime | None:
+    """Время из запроса -> UTC без часового пояса (так хранятся все времена в базе)."""
+    if value is None or value.tzinfo is None:
+        return value
+    from datetime import timezone
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 class UserOut(BaseModel):
@@ -258,6 +274,12 @@ class UserOut(BaseModel):
     must_change_password: bool = False            # «ждёт первого входа»: действует временный пароль
     temp_password_expires_at: datetime | None = None
     temporary_password: str | None = None         # только в ответе на создание, если пароль выдал сервер, — ОДИН раз
+    # Состояние учётной записи (app/core/account_status.py): active | pending_first_login | blocked | expired | archived
+    status: str = "active"
+    blocked_at: datetime | None = None
+    block_reason: str | None = None
+    archived_at: datetime | None = None
+    access_until: datetime | None = None
 
 
 def _user_out(user: User, service: AuthService | None = None) -> UserOut:
@@ -271,6 +293,11 @@ def _user_out(user: User, service: AuthService | None = None) -> UserOut:
         created_at=user.created_at,
         must_change_password=must_change,
         temp_password_expires_at=deadline,
+        status=service.account_state(user) if service is not None else ("active" if user.is_active else "blocked"),
+        blocked_at=user.blocked_at,
+        block_reason=user.block_reason,
+        archived_at=user.archived_at,
+        access_until=user.access_until,
     )
 
 
@@ -357,6 +384,9 @@ def login(
     role = parse_role(user.role)
     if role is None:
         raise ApiError(status.HTTP_403_FORBIDDEN, "role_unknown", "Роль пользователя не распознана — обратитесь к администратору")
+    if service.access_expired(user):          # документ 05, §12.1: срок доступа истёк — только после верного пароля
+        raise ApiError(status.HTTP_403_FORBIDDEN, "access_expired",
+                       "Срок доступа к программе закончился. Обратитесь к владельцу магазина")
 
     settings = get_settings()
     listener = request_listener(request)
@@ -656,9 +686,10 @@ def create_user(
     generated = body.password is None
     initial = body.password if body.password is not None else temp_password.generate()
     try:
-        user = service.create_user(body.username, initial, body.role, body.store_ids)
+        user = service.create_user(body.username, initial, body.role, body.store_ids,
+                                   access_until=_utc_naive(body.access_until))
         value, _deadline = service.set_temporary_password(user.id, initial, hours=get_settings().auth_temp_password_hours)
-    except (PolicyViolation, UserAlreadyExistsError, UnknownStoreError) as exc:
+    except (PolicyViolation, UserAlreadyExistsError, UserArchivedError, UnknownStoreError) as exc:
         raise from_app_error(exc) from exc          # статус по виду ошибки: 422 / 409 / 404, как раньше
     out = _user_out(user, service)
     if generated:
@@ -710,12 +741,37 @@ def update_user(
             role=body.role,
             is_active=body.is_active,
             store_ids=body.store_ids,
+            block_reason=body.block_reason,
+            access_until=_utc_naive(body.access_until),
+            clear_access_until="access_until" in body.model_fields_set and body.access_until is None,
         )
         if body.password is not None:            # пароль, заданный администратором, — временный (документ 05, §12.4)
             service.set_temporary_password(user_id, body.password, hours=get_settings().auth_temp_password_hours)
-    except (UserNotFoundError, UnknownStoreError, PolicyViolation) as exc:
-        raise from_app_error(exc) from exc          # 404 / 404 / 422, как раньше
+    except (UserNotFoundError, UnknownStoreError, PolicyViolation, UserArchivedError) as exc:
+        raise from_app_error(exc) from exc          # 404 / 404 / 422 / 409
     return _user_out(service.get_user(user_id), service)
+
+
+@router.post("/users/{user_id}/archive", response_model=UserOut)
+def archive_user(
+    user_id: str,
+    body: ArchiveIn,
+    db: Session = Depends(get_db),
+    admin: CurrentUser = Depends(require_recent_auth(Permission.USER_MANAGE)),
+) -> UserOut:
+    """«Отозвать доступ» (документ 05, §12.7): блокировка и архив одним действием, все сеансы завершаются сразу. Учётная запись
+    и история не удаляются (на них ссылается журнал); вернуть из архива нельзя, логин повторно не используется."""
+    service = AuthService(db)
+    _guard_target(service, admin, user_id)
+    if user_id == admin.id:
+        raise ApiError(400, "self_lockout", "Нельзя отозвать доступ у самого себя — попросите другого администратора")
+    try:
+        if service.is_owner(user_id):
+            raise ApiError(status.HTTP_403_FORBIDDEN, "owner_protected", "Владельца системы нельзя перевести в архив")
+        user = service.archive_user(user_id, body.reason)
+    except UserNotFoundError as exc:
+        raise from_app_error(exc) from exc
+    return _user_out(user, service)
 
 
 @router.post("/users/{user_id}/temporary-password", response_model=TemporaryPasswordOut)

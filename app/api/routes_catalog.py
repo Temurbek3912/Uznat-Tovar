@@ -40,7 +40,9 @@ from app.services.barcode import (
     decode_image,
     explain_invalid,
     normalize_code,
+    partial_digits,
     plan_links,
+    search_keys,
 )
 from app.services.catalog_upload import (
     DEFAULT_BRAND,
@@ -242,15 +244,30 @@ async def search_products(
     q="" (по умолчанию) возвращает первые limit товаров без фильтра. Поиск — «содержит» по sku/name/brand без учёта регистра
     (и кириллицы), «ё»/«е» и вариантов узбекского апострофа; % и _ — обычные символы (app/core/text_search.py). Без полнотекстового
     индекса: при каталоге в десятки-сотни SKU этого достаточно. offset — «показать ещё»; sort="new" — сначала недавно добавленные.
+
+    Цифры в запросе ищутся и по штрихкодам: полный код в любом написании (пробелы, UPC-A, GTIN-14, лишние ведущие нули —
+    barcode.search_keys) и часть кода от 4 цифр («содержит»). Товары с точным совпадением штрихкода — первыми.
     """
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
     query = db.query(Product)
     pattern = text_search.like_pattern(q)
+    exact_codes = search_keys(q)
     if pattern:
-        query = query.filter(or_(*(text_search.sql_normalized(col, func).like(pattern, escape=text_search.ESCAPE)
-                                   for col in (Product.sku, Product.name, Product.brand))))
+        conditions = [text_search.sql_normalized(col, func).like(pattern, escape=text_search.ESCAPE)
+                      for col in (Product.sku, Product.name, Product.brand)]
+        by_code = db.query(ProductBarcodeORM.product_id)
+        digits = partial_digits(q)
+        if exact_codes:
+            conditions.append(Product.id.in_(by_code.filter(ProductBarcodeORM.barcode.in_(exact_codes))))
+        if digits:
+            conditions.append(Product.id.in_(by_code.filter(
+                ProductBarcodeORM.barcode.like(f"%{text_search.escape_like(digits)}%", escape=text_search.ESCAPE))))
+        query = query.filter(or_(*conditions))
     order = (Product.created_at.desc(), Product.sku) if sort == "new" else (Product.sku,)
+    if exact_codes:                                   # точное совпадение штрихкода — первым
+        exact = Product.id.in_(db.query(ProductBarcodeORM.product_id).filter(ProductBarcodeORM.barcode.in_(exact_codes)))
+        order = (exact.desc(), *order)
     products = query.order_by(*order).offset(offset).limit(limit).all()
     codes = _barcodes_of(db, [p.id for p in products])
     return [_summary(p, codes.get(p.id)) for p in products]

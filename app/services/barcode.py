@@ -65,6 +65,37 @@ def normalize_code(raw: object) -> str | None:
     return "0" + digits if len(digits) == 12 else digits
 
 
+MIN_PARTIAL_DIGITS = 4          # «содержит» по цифрам штрихкода — только с 4 цифр (иначе «1» находило бы почти всё)
+
+
+def search_keys(raw: object) -> list[str]:
+    """Запрос поиска -> канонические штрихкоды, которые он может означать (этап 5 генерального плана).
+
+    Понимает пробелы и дефисы («4 780001 234562»), GTIN-14 и коды с лишними ведущими нулями от сканеров и учётных программ
+    («04780001234562», «0000012345670» — EAN-8, дополненный нулями до 13), UPC-A (12 цифр). Каждая версия проверяется контрольной
+    цифрой; неверные не возвращаются. Не штрихкод — пустой список."""
+    digits = re.sub(r"[\s\-]", "", "" if raw is None or isinstance(raw, bool) else str(raw))
+    if not digits.isdigit() or len(digits) > 14:
+        return []
+    keys: list[str] = []
+    variants = [digits]
+    trimmed = digits
+    while trimmed.startswith("0") and len(trimmed) > 8:
+        trimmed = trimmed[1:]
+        variants.append(trimmed)
+    for variant in variants:
+        code = normalize_code(variant)
+        if code is not None and code not in keys:
+            keys.append(code)
+    return keys
+
+
+def partial_digits(raw: object) -> str | None:
+    """Цифры запроса для поиска «содержит» по штрихкодам (сотрудник вводит часть кода с упаковки) или None."""
+    digits = re.sub(r"[\s\-]", "", "" if raw is None or isinstance(raw, bool) else str(raw))
+    return digits if digits.isdigit() and MIN_PARTIAL_DIGITS <= len(digits) <= 14 else None
+
+
 def explain_invalid(raw: object) -> str:
     """Понятное человеку объяснение, почему введённый штрих-код не принят."""
     digits = re.sub(r"[\s\-]", "", "" if raw is None else str(raw))

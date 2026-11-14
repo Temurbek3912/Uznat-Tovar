@@ -413,3 +413,17 @@ def test_identify_answers_from_a_known_barcode_without_the_queue(env):
     body = resp.json()
     assert body["by"] == "barcode" and body["status"] == "matched" and body["product"]["name"] == "Кола 0,5 л" and body["product"]["expected_price"] == 9900.0
     assert body["barcode"] == {"code": EAN_A, "known": True} and env.queued == []
+
+
+def test_search_finds_a_product_by_barcode_in_any_writing_and_by_part_of_the_code(env):
+    cola = add_product(env, sku="COLA", name="Кола")
+    add_product(env, sku="4780", name="Артикул из цифр")                     # совпадает «содержит» по артикулу
+    h = headers_for(env, "admin")
+    assert env.client.patch(f"/api/v1/catalog/products/{cola}", headers=h, json={"add_barcode": EAN_A}).status_code == 200
+    find = lambda q: [r["sku"] for r in env.client.get("/api/v1/catalog/products", params={"q": q}, headers=h).json()]
+    assert find("4780001234562") == ["COLA"]
+    assert find("4 780001 234562") == ["COLA"]
+    assert find("04780001234562") == ["COLA"]                                # GTIN-14
+    assert find("1234562") == ["COLA"]                                       # часть кода с упаковки
+    assert find("4780")[0] == "4780" and "COLA" in find("4780")             # и артикул, и часть штрихкода
+    assert find("4780001234563") == []                                       # опечатка в контрольной цифре: точного совпадения нет

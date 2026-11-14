@@ -191,3 +191,26 @@ def test_plan_links_separates_free_own_and_foreign_codes():
     assert bc.plan_links([], owners, "x") == bc.LinkPlan()
     upc = bc.plan_links([UPCA], {"0" + UPCA: ("p-1", "Печенье")}, "p-2")           # UPC-A и EAN-13 с нулём — один и тот же код
     assert upc.conflicts == [("0" + UPCA, "p-1", "Печенье")]
+
+
+# --------------------------------------------------------------------------- поиск по штрихкоду (этап 5)
+
+def test_search_keys_understand_spaces_gtin14_upc_and_padded_ean8():
+    assert bc.search_keys("4780001234562") == ["4780001234562"]
+    assert bc.search_keys("4 780001-234562") == ["4780001234562"]
+    assert bc.search_keys("04780001234562") == ["4780001234562"]             # GTIN-14 со сканера / из учётной программы
+    assert bc.search_keys("036000291452") == ["0036000291452"]               # UPC-A хранится как EAN-13 с нулём
+    assert bc.search_keys("0036000291452") == ["0036000291452"]
+    assert "12345670" in bc.search_keys("0000012345670")                     # EAN-8, дополненный нулями до 13
+    assert bc.search_keys("12345670") == ["12345670"]
+
+
+def test_search_keys_reject_typos_text_and_too_long_input():
+    assert bc.search_keys("4780001234563") == []                             # контрольная цифра не сходится
+    assert bc.search_keys("кола") == [] and bc.search_keys("") == [] and bc.search_keys(None) == []
+    assert bc.search_keys("1" * 15) == []
+
+
+def test_partial_digits_need_at_least_four_digits():
+    assert bc.partial_digits("2345") == "2345" and bc.partial_digits(" 23-45 ") == "2345"
+    assert bc.partial_digits("234") is None and bc.partial_digits("кола 2345") is None

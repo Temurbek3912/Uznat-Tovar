@@ -47,13 +47,56 @@ from app.pipeline.index_store import (REBUILD_HINT, IndexBusyError, IndexChanged
 
 __all__ = ["CatalogIndex", "FaissCatalogIndex", "IndexBusyError", "IndexChangedError", "IndexIntegrityError", "MatchResult",
            "NumpyCatalogIndex", "ProductMatcher", "decide_match", "index_size", "open_catalog_index", "rank_products",
-           "refresh_index_if_changed", "resync_index"]
+           "refresh_index_if_changed", "resync_index", "DEFAULT_NAMESPACE", "check_index_model", "index_manifest", "model_mismatch"]
 
 logger = logging.getLogger(__name__)
 
 IDS_FORMAT = 2                                   # формат JSON рядом с FAISS-индексом (1 — просто список id, до 2026-11-07)
 UNLOCKED_LOAD_ATTEMPTS = 5                       # без блокировки: повторы чтения, пока параллельная запись не закончит замену
 _NO_GUARD = object()                             # индекс создан напрямую (полная пересборка): первое сохранение может перезаписать файл
+
+# Манифест индекса (документ 07, §8 и §10.1): какой моделью построены векторы и для какого каталога. Векторы разных моделей
+# несовместимы, даже если размерность одна (DINOv2-base и дообученная версия — обе 768): поиск дал бы правдоподобные, но
+# неверные ответы. Поэтому индекс помнит модель, а загрузка с другой моделью — отказ с причиной.
+DEFAULT_NAMESPACE = "catalog"                    # пространство имён: один каталог магазина. Несколько каталогов — позже
+MODEL_FIELDS = ("name", "weights", "preprocess", "dim", "normalization")
+
+
+def model_mismatch(stored: dict | None, current: dict | None) -> str | None:
+    """Чем модель индекса отличается от загруженной (простыми словами) или None, если совпадает или сравнить не с чем."""
+    if not isinstance(stored, dict) or not isinstance(current, dict):
+        return None
+    labels = {"name": "модель", "weights": "веса", "preprocess": "обработка кадра", "dim": "размерность",
+              "normalization": "нормализация"}
+    diff = [f"{labels[k]}: в индексе {stored.get(k)!r}, сейчас {current.get(k)!r}"
+            for k in MODEL_FIELDS if stored.get(k) != current.get(k)]
+    return "; ".join(diff) or None
+
+
+def index_manifest(index) -> dict:
+    """Манифест индекса в памяти: модель, пространство имён, число векторов; verified=False — модель векторов не записана
+    (индекс построен до 2026-11-14), совместимость с текущей моделью не проверить."""
+    model = getattr(index, "model", None)
+    return {"model": model, "namespace": getattr(index, "namespace", None) or DEFAULT_NAMESPACE, "count": index_size(index),
+            "verified": model is not None}
+
+
+def _manifest_fields(index) -> dict:
+    return {"model": getattr(index, "model", None), "namespace": getattr(index, "namespace", None) or DEFAULT_NAMESPACE}
+
+
+def _read_manifest(raw) -> tuple[dict | None, str | None]:
+    """(модель, пространство имён) из сохранённого манифеста; неверный формат — повреждение, а не «модели нет»."""
+    if raw is None:
+        return None, None
+    if not isinstance(raw, dict):
+        raise ValueError("манифест индекса не словарь")
+    model, namespace = raw.get("model"), raw.get("namespace")
+    if model is not None and not (isinstance(model, dict) and all(k in model for k in MODEL_FIELDS)):
+        raise ValueError("в манифесте индекса неполное описание модели")
+    if namespace is not None and not isinstance(namespace, str):
+        raise ValueError("в манифесте индекса неверное пространство имён")
+    return model, namespace
 
 
 def _npz_path(path: str) -> str:
@@ -197,6 +240,8 @@ class NumpyCatalogIndex:
 
     _disk_gen: Any = _NO_GUARD     # поколение файла, которое этот процесс загрузил или записал сам
     _disk_probe: Any = None        # дешёвый признак изменения файла (размер, время, inode) — для refresh_index_if_changed
+    model: dict | None = None      # паспорт модели, которой построены векторы (None — не записан: индекс до 2026-11-14)
+    namespace: str | None = None
 
     def __init__(self):
         self._ids: list[str] = []
@@ -242,7 +287,8 @@ class NumpyCatalogIndex:
             try:
                 with open(tmp, "wb") as fh:                  # файловый объект: np.savez не дописывает своё «.npz» к имени
                     np.savez(fh, ids=np.array([str(i) for i in self._ids], dtype=str), vectors=vectors,
-                             generation=np.array(gen), sources=np.array([s or "" for s in self._sources], dtype=str))
+                             generation=np.array(gen), sources=np.array([s or "" for s in self._sources], dtype=str),
+                             manifest=np.array(json.dumps(_manifest_fields(self), ensure_ascii=False)))
                     fh.flush()
                     os.fsync(fh.fileno())
                 replace_with_retry(tmp, final)
@@ -268,6 +314,7 @@ class NumpyCatalogIndex:
                         ids, vectors = [str(i) for i in data["ids"]], data["vectors"]
                         gen = str(data["generation"]) if "generation" in data.files else None
                         sources = [str(x) or None for x in data["sources"]] if "sources" in data.files else None
+                        model, namespace = _read_manifest(json.loads(str(data["manifest"])) if "manifest" in data.files else None)
                 except ValueError as exc:
                     if "Object arrays cannot be loaded" not in str(exc):
                         raise
@@ -276,7 +323,7 @@ class NumpyCatalogIndex:
                     logger.warning("Индекс %s в старом формате (pickle); при следующем сохранении он будет переписан без pickle", final)
                     with np.load(final, allow_pickle=True) as data:
                         ids, vectors = [str(i) for i in data["ids"]], data["vectors"]
-                        sources = None
+                        sources, model, namespace = None, None, None
             except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as exc:
                 raise IndexIntegrityError(f"Индекс {final} не читается ({type(exc).__name__}: {exc}). {REBUILD_HINT}") from exc
         vectors = np.asarray(vectors)
@@ -291,6 +338,7 @@ class NumpyCatalogIndex:
         instance._sources = sources if sources is not None else [None] * len(ids)
         instance._disk_gen = gen if gen is not None else ("legacy", _sha256_file(final))
         instance._disk_probe = probe
+        instance.model, instance.namespace = model, namespace
         return instance
 
 
@@ -300,6 +348,8 @@ class FaissCatalogIndex:
     _disk_gen: Any = _NO_GUARD
     _disk_probe: Any = None
     _disk_sha: str | None = None   # SHA-256 файла индекса, который этот процесс загрузил или записал сам
+    model: dict | None = None      # паспорт модели векторов (см. NumpyCatalogIndex.model)
+    namespace: str | None = None
 
     def __init__(self, embedding_dim: int):
         self._faiss = _import_faiss()
@@ -352,7 +402,8 @@ class FaissCatalogIndex:
                 self._faiss.write_index(self._index, str(tmp_index))
                 fsync_file(tmp_index)
                 meta = {"format": IDS_FORMAT, "generation": gen, "count": len(self._ids), "dim": self.dimension,
-                        "index_sha256": _sha256_file(tmp_index), "ids": self._ids, "sources": self._sources}
+                        "index_sha256": _sha256_file(tmp_index), "ids": self._ids, "sources": self._sources,
+                        "manifest": _manifest_fields(self)}
                 with open(tmp_ids, "w", encoding="utf-8") as fh:
                     json.dump(meta, fh, ensure_ascii=False)
                     fh.flush()
@@ -411,13 +462,17 @@ class FaissCatalogIndex:
             meta = json.loads(sidecar_bytes.decode("utf-8"))
         except (OSError, ValueError) as exc:
             raise IndexIntegrityError(f"Файл id товаров {sidecar} не читается ({exc}). {REBUILD_HINT}") from exc
-        sources = None
+        sources, model, namespace = None, None, None
         if isinstance(meta, list):                              # формат 1 (до 2026-11-07): только список id
             ids, expected_sha, expected_count = meta, None, len(meta)
             gen = _legacy_generation(sidecar_bytes, index_sha)
         elif isinstance(meta, dict) and meta.get("format") == IDS_FORMAT and isinstance(meta.get("ids"), list):
             ids, expected_sha, expected_count = meta["ids"], meta.get("index_sha256"), meta.get("count")
             sources = meta.get("sources")
+            try:
+                model, namespace = _read_manifest(meta.get("manifest"))
+            except ValueError as exc:
+                raise IndexIntegrityError(f"Файл id товаров {sidecar}: {exc}. {REBUILD_HINT}") from exc
             gen = meta.get("generation") if isinstance(meta.get("generation"), str) else ("no-generation", file_probe(sidecar))
         else:
             raise IndexIntegrityError(f"Файл id товаров {sidecar} в неизвестном формате. {REBUILD_HINT}")
@@ -438,6 +493,7 @@ class FaissCatalogIndex:
         instance._disk_gen = gen
         instance._disk_probe = (file_probe(final), file_probe(sidecar))
         instance._disk_sha = index_sha
+        instance.model, instance.namespace = model, namespace
         return instance
 
 
@@ -517,7 +573,7 @@ def index_size(index) -> int:
     return len(getattr(index, "_ids", ()))
 
 
-def open_catalog_index(index_path: str | None, embedding_dim: int):
+def open_catalog_index(index_path: str | None, embedding_dim: int, model: dict | None = None, namespace: str | None = None):
     """Индекс каталога для работы — ОДНА реализация для воркера и скриптов импорта.
 
     - файла нет -> новый пустой индекс (FAISS, без него — numpy): нормальное состояние до первого товара;
@@ -525,7 +581,12 @@ def open_catalog_index(index_path: str | None, embedding_dim: int):
     - файл есть, но не читается или не сходится -> исключение. Пустой индекс вместо повреждённого НЕ создаётся: первое же
       добавление товара записало бы его поверх файла и стёрло все эталоны. Воркер в этом случае помечает компонент
       «matcher» как неготовый (build_runtime), скрипты останавливаются с причиной.
-    Открытый так индекс помнит поколение файла и при сохранении не перезапишет файл, записанный другим процессом."""
+    Открытый так индекс помнит поколение файла и при сохранении не перезапишет файл, записанный другим процессом.
+
+    model — паспорт загруженной модели эмбеддера (embedder.model_signature). Индекс другой модели или другого каталога
+    (namespace) — отказ с причиной. Индекс без записанной модели (до 2026-11-14) загружается с предупреждением и остаётся
+    «непроверенным» до полной пересборки: дописать ему текущую модель нельзя — неизвестно, какой построены старые векторы.
+    Без model (служебные скрипты без эмбеддера) модель не сверяется, а записанная в файле сохраняется как есть."""
     index = None
     if index_path:
         npz_path = _npz_path(index_path)
@@ -539,18 +600,50 @@ def open_catalog_index(index_path: str | None, embedding_dim: int):
                 raise IndexIntegrityError(
                     f"Индекс {index_path} построен для векторов размерности {dim}, а эмбеддер даёт {embedding_dim}: индекс от "
                     f"другой модели. {REBUILD_HINT}")
+            _check_manifest(index, index_path, model, namespace)
+            index._expected = (model, namespace)
             return index
     try:
         index = FaissCatalogIndex(embedding_dim=embedding_dim)
     except RuntimeError as exc:
         logger.warning("FAISS недоступен (%s), используется numpy-индекс", exc)
         index = NumpyCatalogIndex()
+    index.model, index.namespace = model, namespace or DEFAULT_NAMESPACE
+    index._expected = (model, namespace)
     if index_path:                                              # файла не было: появление чужого файла тоже обнаружится
         index._disk_gen = None
         index._disk_probe = _probe_files(index, index_path)
         if isinstance(index, FaissCatalogIndex):
             index._disk_sha = None
     return index
+
+
+def _check_manifest(index, index_path: str, model: dict | None, namespace: str | None) -> None:
+    if namespace and index.namespace and index.namespace != namespace:
+        raise IndexIntegrityError(f"Индекс {index_path} построен для каталога «{index.namespace}», а нужен «{namespace}». "
+                                  f"{REBUILD_HINT}")
+    index.namespace = index.namespace or namespace or DEFAULT_NAMESPACE
+    if model is None:
+        return
+    diff = model_mismatch(index.model, model)
+    if diff:
+        raise IndexIntegrityError(
+            f"Индекс {index_path} построен другой моделью распознавания ({diff}). Векторы разных моделей несравнимы: ответы "
+            f"были бы неверными. Пересоберите индекс текущей моделью или верните прежнюю модель. {REBUILD_HINT}")
+    if index.model is None:
+        if index_size(index) == 0:
+            index.model = dict(model)                       # пустой индекс: модель векторов — та, что будет их добавлять
+        else:
+            logger.warning("Индекс %s построен до записи версии модели (%d векторов): совместимость с моделью %s не проверить. "
+                           "Рекомендуется полная пересборка индекса.", index_path, index_size(index), model.get("name"))
+
+
+def check_index_model(index, index_path: str | None, model: dict | None) -> None:
+    """Сверка уже открытого индекса с моделью, загруженной позже (скрипт открыл индекс до загрузки модели): другая модель —
+    IndexIntegrityError; пустой индекс без модели получает её. Дальнейшие перечитывания сверяют с ней же."""
+    _check_manifest(index, index_path or "в памяти", model, None)
+    expected = getattr(index, "_expected", (None, None))
+    index._expected = (model if model is not None else expected[0], expected[1])
 
 
 def _probe_files(index, index_path: str):
@@ -582,7 +675,7 @@ def refresh_index_if_changed(matcher, index_path: str | None, embedding_dim: int
         index._disk_probe = probe                           # отпечаток сменился, содержимое — нет (копирование, общая папка)
         return "unchanged"
     try:
-        matcher.index = open_catalog_index(index_path, embedding_dim)
+        matcher.index = open_catalog_index(index_path, embedding_dim, *getattr(index, "_expected", (None, None)))
     except Exception as exc:  # noqa: BLE001 — прежняя копия продолжает работать; причина — в журнал
         logger.error("Индекс %s изменён другим процессом, но не загружается (%s); работаю с прежней копией", index_path, exc)
         return f"error: {type(exc).__name__}: {exc}"
@@ -594,7 +687,7 @@ def resync_index(matcher, index_path: str | None, embedding_dim: int) -> str | N
     """После сбоя добавления: векторы уже в памяти, а на диск (или в базу) не попали. Индекс в памяти заменяется
     сохранённым на диске — он и есть правда. None — успешно; иначе причина (тогда пользоваться индексом в памяти нельзя)."""
     try:
-        matcher.index = open_catalog_index(index_path, embedding_dim)
+        matcher.index = open_catalog_index(index_path, embedding_dim, *getattr(matcher.index, "_expected", (None, None)))
     except Exception as exc:  # noqa: BLE001
         return f"{type(exc).__name__}: {exc}"
     return None

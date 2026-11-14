@@ -329,7 +329,8 @@ def main(argv: list[str] | None = None, out=print) -> int:
         return 2
     id_to_sku = {pid: sku for sku, pid in manifest.products.items()}
     embedder = DinoV2Embedder(weights_path=settings.embedder.weights_path, embedding_dim=settings.embedder.embedding_dim)
-    index = _load_index(settings.matcher.index_path, settings.embedder.embedding_dim)
+    from app.pipeline.embedder import model_signature
+    index = _load_index(settings.matcher.index_path, settings.embedder.embedding_dim, model_signature(embedder))
     mcfg = settings.matcher
     matcher = ProductMatcher(index, top_k=mcfg.top_k, match_threshold=mcfg.match_threshold, unknown_threshold=mcfg.unknown_threshold,
                              margin_threshold=mcfg.margin_threshold)

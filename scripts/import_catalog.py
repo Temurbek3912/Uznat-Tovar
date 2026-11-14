@@ -168,7 +168,8 @@ def main(argv: list[str] | None = None, out=print) -> int:
             return 1
         out("Загружаю модель эмбеддера (при первом запуске скачает веса из интернета)...")
         embedder = DinoV2Embedder(weights_path=settings.embedder.weights_path, embedding_dim=settings.embedder.embedding_dim)
-        index = _load_index(settings.matcher.index_path, settings.embedder.embedding_dim)
+        from app.pipeline.embedder import model_signature  # noqa: PLC0415
+        index = _load_index(settings.matcher.index_path, settings.embedder.embedding_dim, model_signature(embedder))
         res = run_import(plan, repo, embedder, index, index_path=settings.matcher.index_path, manifest=manifest,
                          manifest_path=manifest_path, update_metadata=args.update_metadata, batch_size=args.batch,
                          checkpoint_every=args.checkpoint, out=out)

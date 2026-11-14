@@ -85,6 +85,13 @@ def main(argv: list[str] | None = None, out=print, load_products=None, settings=
         from app.pipeline.imageio import load_rgb as load_image                         # noqa: PLC0415
     out("Загружаю модель эмбеддера (при первом запуске скачает веса из интернета)...")
     embedder = (make_embedder or _load_embedder)(settings)
+    from app.pipeline.embedder import model_signature                                    # noqa: PLC0415
+    from app.pipeline.matcher import check_index_model                                   # noqa: PLC0415
+    try:
+        check_index_model(index, index_path, model_signature(embedder))
+    except Exception as exc:  # noqa: BLE001 — индекс другой модели: добавлять в него векторы нельзя
+        out(f"Индекс нельзя дополнить этой моделью: {exc}")
+        return 2
 
     def note(refs):
         manifest.add(refs)

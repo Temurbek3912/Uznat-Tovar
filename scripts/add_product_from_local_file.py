@@ -19,15 +19,16 @@ import argparse
 from app.core.config import get_settings
 from app.core.schemas import ProductIn
 from app.db.session import SessionLocal
-from app.pipeline.embedder import DinoV2Embedder
+from app.pipeline.embedder import DinoV2Embedder, model_signature
 from app.pipeline.imageio import load_rgb
 from app.pipeline.matcher import open_catalog_index
 from app.services.catalog_service import CatalogService
 
 
-def _load_index(index_path: str, embedding_dim: int):
-    """Тот же загрузчик, что у воркера: повреждённый индекс — остановка с причиной, а не пустой индекс поверх файла."""
-    return open_catalog_index(index_path, embedding_dim)
+def _load_index(index_path: str, embedding_dim: int, model: dict | None = None):
+    """Тот же загрузчик, что у воркера: повреждённый индекс или индекс другой модели — остановка с причиной, а не пустой
+    индекс поверх файла."""
+    return open_catalog_index(index_path, embedding_dim, model)
 
 
 def main() -> None:
@@ -48,7 +49,7 @@ def main() -> None:
     embedder = DinoV2Embedder(
         weights_path=settings.embedder.weights_path, embedding_dim=settings.embedder.embedding_dim,
     )
-    index = _load_index(settings.matcher.index_path, settings.embedder.embedding_dim)
+    index = _load_index(settings.matcher.index_path, settings.embedder.embedding_dim, model_signature(embedder))
 
     images = [load_rgb(p) for p in args.photo]
     product_in = ProductIn(

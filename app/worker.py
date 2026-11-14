@@ -104,13 +104,14 @@ def _ml_unavailable(exc: MLNotReadyError) -> CatalogAddError:
     return not_ready_error(exc.problems)
 
 
-def _load_or_create_index(index_path: str | None, embedding_dim: int):
+def _load_or_create_index(index_path: str | None, embedding_dim: int, model: dict | None = None):
     """Индекс каталога для воркера: app.pipeline.matcher.open_catalog_index (одна реализация со скриптами импорта).
 
     Файла нет — пустой индекс (нормально до первого товара). Файл есть, но повреждён или от другой модели — исключение:
     build_runtime помечает «matcher» неготовым с причиной, а пустой индекс поверх файла НЕ записывается (раньше так молча
-    стирались все эталоны при первом же добавлении товара)."""
-    index = open_catalog_index(index_path, embedding_dim)
+    стирались все эталоны при первом же добавлении товара). model — паспорт модели эмбеддера: индекс другой модели не
+    загружается (векторы несравнимы)."""
+    index = open_catalog_index(index_path, embedding_dim, model)
     logger.info("Индекс каталога: %s (%d векторов)", index_path or "в памяти", len(index._ids))
     return index
 

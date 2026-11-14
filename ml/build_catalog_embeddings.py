@@ -23,7 +23,7 @@ from pathlib import Path
 
 
 from app.core.config import get_settings
-from app.pipeline.embedder import DinoV2Embedder
+from app.pipeline.embedder import DinoV2Embedder, model_signature
 from app.pipeline.imageio import load_rgb
 from app.pipeline.matcher import FaissCatalogIndex
 
@@ -74,6 +74,7 @@ def main() -> None:
 
     embedder = DinoV2Embedder(weights_path=embedder_cfg.weights_path, embedding_dim=embedder_cfg.embedding_dim)
     index = FaissCatalogIndex(embedding_dim=embedder_cfg.embedding_dim)
+    index.model = model_signature(embedder)               # полная пересборка: все векторы — этой моделью (манифест индекса)
 
     layout = load_catalog_layout(args.catalog_dir)
     manifest: dict[str, int] = {}

@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 from typing import Protocol, Sequence
@@ -45,8 +46,32 @@ def resolve_embedder_source(
     return hub_model, True
 
 
+# Как из выхода модели получается вектор. Меняется вместе с кодом embed() — тогда индекс нужно пересобрать.
+DINOV2_PREPROCESS = "hf-auto-image-processor/cls-token/v1"
+L2 = "l2"
+
+
+def weights_fingerprint(folder: Path) -> str:
+    """SHA-256 всех файлов папки весов (имя + содержимое, по порядку имён): другие веса — другой отпечаток.
+    Для ~350 МБ DINOv2-base — около секунды при запуске; считается один раз на процесс."""
+    digest = hashlib.sha256()
+    for path in sorted(p for p in Path(folder).rglob("*") if p.is_file()):
+        digest.update(path.relative_to(folder).as_posix().encode("utf-8") + b"\0")
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+def model_signature(embedder) -> dict | None:
+    """Паспорт модели эмбеддера для манифеста индекса (документ 07, §8) или None, если эмбеддер его не сообщает."""
+    sig = getattr(embedder, "model_signature", None)
+    return dict(sig) if isinstance(sig, dict) else None
+
+
 class ImageEmbedder(Protocol):
     embedding_dim: int
+    model_signature: dict   # name, weights, preprocess, dim, normalization — индекс помнит, какой моделью построен
 
     def embed(self, crops: list[np.ndarray]) -> np.ndarray:
         """Возвращает L2-нормализованную матрицу эмбеддингов формы (N, embedding_dim)."""
@@ -77,6 +102,14 @@ class DinoV2Embedder:
             )
         self._processor = AutoImageProcessor.from_pretrained(source)
         self._model = AutoModel.from_pretrained(source).to(self.device).eval()
+        if from_hub:
+            # ревизия (коммит) репозитория, из которого взяты веса; transformers записывает её и при чтении из кэша
+            revision = getattr(self._model.config, "_commit_hash", None)
+            weights = f"hub:{source}@{revision}" if revision else f"hub:{source}"
+        else:
+            weights = weights_fingerprint(Path(source))
+        self.model_signature = {"name": source if from_hub else Path(source).name, "weights": weights,
+                                "preprocess": DINOV2_PREPROCESS, "dim": int(embedding_dim), "normalization": L2}
 
     def embed(self, crops: list[np.ndarray]) -> np.ndarray:
         if not crops:
@@ -102,6 +135,8 @@ class RandomDebugEmbedder:
 
     def __init__(self, embedding_dim: int = 64):
         self.embedding_dim = embedding_dim
+        self.model_signature = {"name": "random-debug", "weights": "none", "preprocess": "mean-seed/v1",
+                                "dim": int(embedding_dim), "normalization": L2}
 
     def embed(self, crops: list[np.ndarray]) -> np.ndarray:
         vectors = np.stack(

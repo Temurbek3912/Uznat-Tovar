@@ -124,7 +124,7 @@ def compact(index, keep: set[str]):
     sources = getattr(index, "_sources", None) or [None] * len(index._ids)
     for row in _kept_rows(index, keep):                     # без «призраков» и без повторов одного фото
         fresh.add(index._ids[row], np.asarray(vectors[row], dtype=np.float32)[None, :], [sources[row]])
-    for attr in ("_disk_gen", "_disk_probe", "_disk_sha"):
+    for attr in ("_disk_gen", "_disk_probe", "_disk_sha", "model", "namespace", "_expected"):
         if attr in vars(index):
             setattr(fresh, attr, getattr(index, attr))
     return fresh

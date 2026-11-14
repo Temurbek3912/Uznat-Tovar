@@ -112,7 +112,7 @@ class Factories:
     heuristic_detector: Callable[[], Any]
     embedder: Callable[[Any], Any]                       # EmbedderConfig -> эмбеддер
     debug_embedder: Callable[[], Any]
-    index: Callable[[str | None, int], Any]              # (index_path, размерность) -> индекс
+    index: Callable[..., Any]                            # (index_path, размерность, паспорт модели | None) -> индекс
     matcher: Callable[[Any, Any], Any]                   # (индекс, MatcherConfig|None) -> ProductMatcher
 
 
@@ -138,9 +138,9 @@ def default_factories() -> Factories:
         from app.pipeline.embedder import RandomDebugEmbedder
         return RandomDebugEmbedder()
 
-    def index(index_path, dim):
+    def index(index_path, dim, model=None):
         from app.worker import _load_or_create_index
-        return _load_or_create_index(index_path, dim)
+        return _load_or_create_index(index_path, dim, model)
 
     def matcher(idx, cfg):
         from app.pipeline.matcher import ProductMatcher
@@ -240,11 +240,23 @@ def build_runtime(settings, env: Mapping[str, str] | None = None, factories: Fac
             raise RuntimeError("не создан эмбеддер — размерность индекса неизвестна")
         cfg = settings.matcher
         index_path = cfg.index_path if cfg else None
-        index = f.index(index_path, getattr(rt.embedder, "embedding_dim", 64))
-        return f.matcher(index, cfg), f"индекс: {index_path or 'в памяти'}"
+        from app.pipeline.embedder import model_signature  # noqa: PLC0415 — лёгкий модуль, без torch
+        model = model_signature(rt.embedder)
+        index = f.index(index_path, getattr(rt.embedder, "embedding_dim", 64), model)
+        return f.matcher(index, cfg), f"индекс: {index_path or 'в памяти'}; {_model_note(index, model)}"
 
     rt.matcher = attempt("matcher", True, make_matcher)
     return rt
+
+
+def _model_note(index, model: dict | None) -> str:
+    """Строка для таблицы компонентов: какой моделью построен индекс (или что это не проверить)."""
+    stored = getattr(index, "model", None)
+    if isinstance(stored, dict):
+        return f"модель индекса: {stored.get('name')} ({stored.get('weights')})"
+    if model is None:
+        return "модель индекса не проверена: эмбеддер не сообщает свою версию"
+    return "модель индекса НЕ ЗАПИСАНА (индекс до 2026-11-14) — рекомендуется полная пересборка"
 
 
 # --------------------------------------------------------------------------- проверка до старта воркера

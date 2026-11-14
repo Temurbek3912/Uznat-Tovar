@@ -9,6 +9,7 @@ app/services/index_coverage.py). Поэтому скрипт находит и �
 Повторный запуск безопасен: уже проиндексированные фото пропускаются, дублей нет; обрыв не портит индекс. Воркер делает то же
 самое автоматически при каждом запуске (задача recover_index), так что скрипт нужен, когда воркер остановлен или для проверки.
 Журнал uploads_manifest.json учитывается только для товаров с векторами версий до 2026-11-07 (у них нет записи об источнике).
+С --apply добавленные фото записываются и в базу (product_images, кэш векторов image_embeddings) — до записи в индекс.
 
     python -m scripts.reindex_uploads            # только показать, что будет добавлено (ничего не меняет, модель не грузится)
     python -m scripts.reindex_uploads --apply    # добавить
@@ -35,8 +36,14 @@ def _load_embedder(settings):
     return DinoV2Embedder(weights_path=settings.embedder.weights_path, embedding_dim=settings.embedder.embedding_dim)
 
 
+def _open_registry():
+    from app.db.session import SessionLocal                       # noqa: PLC0415
+    from app.services.product_images import PhotoRegistry         # noqa: PLC0415
+    return PhotoRegistry(SessionLocal())
+
+
 def main(argv: list[str] | None = None, out=print, load_products=None, settings=None, resolve_path=None, make_embedder=None,
-         load_image=None) -> int:
+         load_image=None, make_registry=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="действительно добавить фото в индекс (без флага — только показать)")
     ap.add_argument("--yes", action="store_true", help="не спрашивать подтверждения")
@@ -97,9 +104,23 @@ def main(argv: list[str] | None = None, out=print, load_products=None, settings=
         manifest.add(refs)
         manifest.save()
 
-    res = C.recover_pending(index, products, root, embedder=embedder, index_path=index_path, folder_of=folder_name,
-                            list_photos=list_photo_files, upload_ref=upload_ref, load_image=load_image,
-                            manifest_keys=manifest.keys, note_indexed=note, limit=10 ** 9)
+    # записи о фото в базе: при настоящем запуске — всегда; тесты, подающие товары сами, подают и реестр (или обходятся без него)
+    registry = (make_registry or (_open_registry if load_products is None else lambda: None))()
+    remember = None
+    if registry is not None:
+        from app.services.product_images import upload_photo_info                       # noqa: PLC0415
+        signature = model_signature(embedder)
+
+        def remember(pid, refs, vectors):
+            registry.remember(pid, [upload_photo_info(root, r) for r in refs], vectors, signature)
+
+    try:
+        res = C.recover_pending(index, products, root, embedder=embedder, index_path=index_path, folder_of=folder_name,
+                                list_photos=list_photo_files, upload_ref=upload_ref, load_image=load_image,
+                                manifest_keys=manifest.keys, note_indexed=note, limit=10 ** 9, remember=remember)
+    finally:
+        if registry is not None:
+            registry.db.close()
     for pid, ref, why in res.failed:
         out(f"  СБОЙ {ref} (товар {pid}): {why}")
     out(f"\nГотово: добавлено фото {len(res.added)}, не прочитано {len(res.failed)}. Индекс: {index_path}")

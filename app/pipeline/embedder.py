@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from pathlib import Path
 from typing import Protocol, Sequence
@@ -67,6 +68,18 @@ def model_signature(embedder) -> dict | None:
     """Паспорт модели эмбеддера для манифеста индекса (документ 07, §8) или None, если эмбеддер его не сообщает."""
     sig = getattr(embedder, "model_signature", None)
     return dict(sig) if isinstance(sig, dict) else None
+
+
+SIGNATURE_FIELDS = ("name", "weights", "preprocess", "dim", "normalization")   # те же, что сверяет манифест индекса
+
+
+def model_version(signature: dict | None) -> str | None:
+    """Короткий номер версии модели для кэша эмбеддингов (image_embeddings.model_version): SHA-256 паспорта модели.
+    Одинаковый паспорт — одна версия; другие веса, обработка или размерность — другая. None — паспорта нет."""
+    if not isinstance(signature, dict) or not all(k in signature for k in SIGNATURE_FIELDS):
+        return None
+    canonical = json.dumps({k: signature[k] for k in SIGNATURE_FIELDS}, sort_keys=True, ensure_ascii=False)
+    return "m1-" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:40]
 
 
 class ImageEmbedder(Protocol):

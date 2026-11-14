@@ -149,7 +149,8 @@ class RecoveryResult:
 
 def recover_pending(index, products: Mapping[str, str], uploads_root: Path, *, embedder, index_path: str | None,
                     folder_of, list_photos, upload_ref, load_image, manifest_keys: set[str] | None = None,
-                    note_indexed: Callable[[list[str]], None] = lambda refs: None, limit: int = 200) -> RecoveryResult:
+                    note_indexed: Callable[[list[str]], None] = lambda refs: None, limit: int = 200,
+                    remember: Callable[[str, list[str], np.ndarray], None] | None = None) -> RecoveryResult:
     """Векторы для фото из браузера, которых нет в индексе, — по одному товару: векторы -> индекс -> сохранение -> журнал.
     Товары берутся только из базы. Повтор безопасен: что уже в индексе, решает сам индекс. Непригодное фото — в failed,
     остальные продолжаются. Не больше limit фото за запуск (remaining — сколько осталось)."""
@@ -178,6 +179,8 @@ def recover_pending(index, products: Mapping[str, str], uploads_root: Path, *, e
         if not images:
             continue
         vectors = np.atleast_2d(embedder.embed(images))
+        if remember is not None:                        # записи о фото и векторы — в базу до индекса (product_images)
+            remember(pid, refs, vectors)
         index.add(pid, vectors, refs)
         if index_path:
             index.save(index_path)

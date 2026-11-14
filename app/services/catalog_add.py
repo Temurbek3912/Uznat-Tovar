@@ -5,7 +5,8 @@
   1. фото -> векторы (до любых записей: непригодное фото или сбой модели не оставляют ничего);
   2. товар в базе — commit. Если товар с этим артикулом уже есть (повтор задачи после сбоя, одновременный запрос с тем же
      названием), используется он: операция идемпотентна;
-  3. только затем векторы — в индекс, сохранение индекса, отметка фото в журнале проиндексированных.
+  3. записи о фото и их векторы — в базу (product_images, кэш image_embeddings; callback remember, с 2026-11-14);
+  4. только затем векторы — в индекс, сохранение индекса, отметка фото в журнале проиндексированных.
 
 Следствия:
   - в индексе не появляются векторы товара, которого нет в базе (откат базы больше не оставляет «призраков» на диске);
@@ -62,10 +63,15 @@ def _select(refs: Sequence[str], not_indexed: Callable[[list[str]], list[str]]) 
     return [i for i, ref in enumerate(refs) if ref in todo], [ref for ref in refs if ref not in todo]
 
 
+Remember = Callable[[str, list[str], np.ndarray], None]      # (товар, ссылки фото, их векторы) -> записи в базе
+
+
 def _store_vectors(product_id: str, refs: Sequence[str], picked: list[int], vectors, *, index, index_path: str | None,
-                   note_indexed: Callable[[list[str]], None]) -> int:
+                   note_indexed: Callable[[list[str]], None], remember: Remember | None = None) -> int:
     if not picked:
         return 0
+    if remember is not None:                                        # база — до индекса: индекс восстановим из неё
+        remember(product_id, [refs[i] for i in picked], vectors)
     index.add(product_id, vectors, [refs[i] for i in picked])       # источник каждого вектора — его фото
     if index_path:
         index.save(index_path)
@@ -74,18 +80,20 @@ def _store_vectors(product_id: str, refs: Sequence[str], picked: list[int], vect
 
 
 def index_photos(product_id: str, refs: Sequence[str], images: Sequence[np.ndarray], *, embedder, index, index_path: str | None,
-                 not_indexed: Callable[[list[str]], list[str]], note_indexed: Callable[[list[str]], None]) -> tuple[int, list[str]]:
+                 not_indexed: Callable[[list[str]], list[str]], note_indexed: Callable[[list[str]], None],
+                 remember: Remember | None = None) -> tuple[int, list[str]]:
     """Векторы фото УЖЕ существующего в базе товара -> индекс -> сохранение -> журнал. Только фото, которых нет в журнале."""
     if len(refs) != len(images):
         raise ValueError("Количество фото не совпадает со списком ссылок")
     picked, skipped = _select(refs, not_indexed)
     vectors = np.atleast_2d(embedder.embed([images[i] for i in picked])) if picked else None
-    return _store_vectors(product_id, refs, picked, vectors, index=index, index_path=index_path, note_indexed=note_indexed), skipped
+    return _store_vectors(product_id, refs, picked, vectors, index=index, index_path=index_path, note_indexed=note_indexed,
+                          remember=remember), skipped
 
 
 def add_product(product_in, images: Sequence[np.ndarray], *, store: ProductStore, embedder, index, index_path: str | None,
                 not_indexed: Callable[[list[str]], list[str]] | None = None,
-                note_indexed: Callable[[list[str]], None] | None = None) -> AddOutcome:
+                note_indexed: Callable[[list[str]], None] | None = None, remember: Remember | None = None) -> AddOutcome:
     """Новый товар с эталонными фото (см. порядок в описании модуля)."""
     refs = list(product_in.reference_image_urls)
     if len(images) != len(refs):
@@ -96,5 +104,5 @@ def add_product(product_in, images: Sequence[np.ndarray], *, store: ProductStore
     vectors = np.atleast_2d(embedder.embed([images[i] for i in picked])) if picked else None   # 1) до записи в базу
     product_id, created = ensure_product(product_in, store)                                       # 2) товар — commit
     added = _store_vectors(product_id, refs, picked, vectors, index=index, index_path=index_path,  # 3) векторы
-                           note_indexed=note_indexed)
+                           note_indexed=note_indexed, remember=remember)
     return AddOutcome(product_id, created, added, skipped)

@@ -702,7 +702,8 @@ def test_identify_refreshes_the_index_before_searching():
 def test_photos_task_adds_only_photos_not_yet_in_the_index():
     src = _task_source("add_catalog_photos_task")
     assert "_not_indexed(index_path, product.id)(list(refs))" in src          # 2026-11-07, этап 4: решает сам индекс
-    assert "_download_image(ref) for ref in todo" in src and "index_photos(product.id, todo, images" in src
+    assert "_download_image(ref, digests) for ref in todo" in src and "index_photos(product.id, todo, images" in src
+    assert "remember=_remember_photos(db, digests)" in src                   # 2026-11-14: фото и векторы — в базу (Р-6)
 
 
 def test_resync_helper_marks_the_matcher_unready_when_the_disk_index_is_unusable():

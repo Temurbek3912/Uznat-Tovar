@@ -9,6 +9,7 @@ Celery worker: снимает тяжёлую ML-обработку с HTTP-за�
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import time
@@ -194,12 +195,13 @@ def _media_root():
     return resolve_project_path(settings.media_root)
 
 
-def _download_image(url: str) -> np.ndarray:
+def _download_image(url: str, digests: dict | None = None) -> np.ndarray:
     """Эталонное фото товара -> RGB-массив. Источник — одно из двух:
       * «upload:<папка>/<файл>» — фото, загруженное из браузера («Добавить товар»): читается ТОЛЬКО из data/catalog-uploads
         (путь проверяется — «../» и символьные ссылки наружу не пройдут);
       * http(s)-ссылка (прежний способ, POST /catalog/products с JSON) — скачивается.
-    Нечитаемое фото — PhotoError с понятным текстом (повтор задачи ему не поможет)."""
+    Нечитаемое фото — PhotoError с понятным текстом (повтор задачи ему не поможет). digests — сюда SHA-256 скачанного файла
+    (для записи о фото в product_images; файл по ссылке программа не хранит)."""
     if is_upload_ref(url):
         source = resolve_upload_ref(uploads_root(_media_root()), url)
         try:
@@ -212,10 +214,60 @@ def _download_image(url: str) -> np.ndarray:
     with httpx.Client(timeout=15.0) as client:
         response = client.get(url)
         response.raise_for_status()
+    if digests is not None:
+        digests[url] = hashlib.sha256(response.content).hexdigest()
     try:
         return load_rgb(response.content)
     except Exception as exc:  # noqa: BLE001
         raise PhotoError("По ссылке лежит не фото или файл повреждён.", code="photo_not_image") from exc
+
+
+def _photo_infos(refs: list[str], digests: dict):
+    """Записи о фото для product_images: фото из браузера — SHA-256 файла и путь; по ссылке — SHA-256 скачанного."""
+    from app.services.product_images import PhotoInfo, upload_photo_info
+    root = uploads_root(_media_root())
+    infos, keep = [], []
+    for i, ref in enumerate(refs):
+        if is_upload_ref(ref):
+            infos.append(upload_photo_info(root, ref))
+        elif ref in digests:
+            infos.append(PhotoInfo(sha256=digests[ref], source_ref=ref))
+        else:
+            continue
+        keep.append(i)
+    return infos, keep
+
+
+def _remember_photos(db: Session, digests: dict | None = None):
+    """Для app/services/catalog_add и index_coverage: записи о фото (product_images) и их векторы в кэш (image_embeddings,
+    версия — паспорт модели эмбеддера) — до записи в индекс: база — источник истины, индекс восстанавливается из неё."""
+    from app.pipeline.embedder import model_signature
+    from app.services.product_images import PhotoRegistry
+
+    def remember(product_id: str, refs: list[str], vectors) -> None:
+        infos, keep = _photo_infos(list(refs), digests or {})
+        if infos:
+            PhotoRegistry(db).remember(product_id, infos, np.atleast_2d(vectors)[keep], model_signature(_embedder))
+    return remember
+
+
+def _backfill_photos(db: Session, products: dict[str, str]) -> None:
+    """Перенос существующих фото в product_images (файлы не трогаются) и векторов индекса известной модели в кэш. Сбой не
+    мешает восстановлению индекса: повторится при следующем запуске воркера."""
+    from app.services.catalog_upload import folder_name, list_photo_files, upload_ref
+    from app.services.product_images import PhotoRegistry, backfill
+    try:
+        res = backfill(PhotoRegistry(db), products, uploads_root(_media_root()), index=_matcher.index, folder_of=folder_name,
+                       list_photos=list_photo_files, upload_ref=upload_ref)
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.exception("Записи о фото товаров не перенесены (повторится при следующем запуске воркера)")
+        return
+    if res.uploads_registered or res.import_registered or res.vectors_cached:
+        logger.info("Фото товаров в базе: записано из папки загрузок %d, из импорта %d; векторов в кэш %d",
+                    res.uploads_registered, res.import_registered, res.vectors_cached)
+    if res.index_model_unknown:
+        logger.warning("Модель векторов индекса не записана: векторы в кэш не перенесены (рекомендуется полная пересборка)")
 
 
 # БАГФИКС (вычитка после F12): декоратор был потерян при вставке соседней задачи выше, и
@@ -245,7 +297,8 @@ def add_catalog_product_task(self, product_in_dict: dict) -> str:
     size_before = index_size(_matcher.index)
     db = SessionLocal()
     try:
-        images = [_download_image(url) for url in product_in.reference_image_urls]
+        digests: dict[str, str] = {}
+        images = [_download_image(url, digests) for url in product_in.reference_image_urls]
 
         # База — источник истины: товар фиксируется в базе ДО записи векторов (app/services/catalog_add.py). Повтор задачи
         # находит уже созданный товар по артикулу и добавляет только фото, которых нет в журнале проиндексированных.
@@ -253,7 +306,8 @@ def add_catalog_product_task(self, product_in_dict: dict) -> str:
         outcome = add_product(product_in, images, store=SqlProductStore(db), embedder=_embedder, index=_matcher.index,
                               index_path=index_path,
                               not_indexed=_not_indexed(index_path, None),
-                              note_indexed=lambda refs: _note_indexed(index_path, refs))
+                              note_indexed=lambda refs: _note_indexed(index_path, refs),
+                              remember=_remember_photos(db, digests))
         _link_barcodes(db, outcome.product_id, product_in.barcodes)
 
         logger.info("%s SKU %s -> product_id=%s (векторов добавлено: %d, уже были: %d)",
@@ -297,9 +351,11 @@ def add_catalog_photos_task(self, product_id: str, refs: list[str]) -> str:
         if not todo:                     # повтор задачи после удачного сохранения или то же фото ещё раз: векторы уже есть
             logger.info("Фото товара %s уже в индексе — повторно не добавляются", product.sku)
             return product.id
-        images = [_download_image(ref) for ref in todo]
+        digests: dict[str, str] = {}
+        images = [_download_image(ref, digests) for ref in todo]
         added, _skipped = index_photos(product.id, todo, images, embedder=_embedder, index=_matcher.index, index_path=index_path,
-                                       not_indexed=lambda r: list(r), note_indexed=lambda r: _note_indexed(index_path, r))
+                                       not_indexed=lambda r: list(r), note_indexed=lambda r: _note_indexed(index_path, r),
+                                       remember=_remember_photos(db, digests))
         logger.info("К SKU %s добавлено %d эталонных фото (product_id=%s)", product.sku, added, product.id)
         return product.id
     except CatalogAddError as exc:
@@ -341,17 +397,28 @@ def recover_index_task(self) -> dict:
     db = SessionLocal()
     try:
         products = {pid: sku for pid, sku in db.query(Product.id, Product.sku).all()}
+        _backfill_photos(db, products)
+        remember_db = _remember_photos(db)
+
+        def remember(pid: str, refs: list[str], vectors) -> None:
+            try:
+                remember_db(pid, refs, vectors)
+            except Exception:  # noqa: BLE001 — запись о фото догонит перенос при следующем запуске; индекс важнее
+                db.rollback()
+                logger.exception("Записи о фото товара %s не сохранены в базе", pid)
+
+        try:
+            res = recover_pending(_matcher.index, products, uploads_root(_media_root()), embedder=_embedder,
+                                  index_path=index_path, folder_of=folder_name, list_photos=list_photo_files,
+                                  upload_ref=upload_ref, load_image=_load, manifest_keys=_manifest_keys(index_path),
+                                  note_indexed=lambda refs: _note_indexed(index_path, refs), limit=RECOVER_BATCH,
+                                  remember=remember)
+        except Exception as exc:
+            _resync_index_after_failure(size_before, exc)
+            logger.exception("Восстановление индекса прервано (повторится при следующем запуске воркера)")
+            raise
     finally:
         db.close()
-    try:
-        res = recover_pending(_matcher.index, products, uploads_root(_media_root()), embedder=_embedder, index_path=index_path,
-                              folder_of=folder_name, list_photos=list_photo_files, upload_ref=upload_ref, load_image=_load,
-                              manifest_keys=_manifest_keys(index_path), note_indexed=lambda refs: _note_indexed(index_path, refs),
-                              limit=RECOVER_BATCH)
-    except Exception as exc:
-        _resync_index_after_failure(size_before, exc)
-        logger.exception("Восстановление индекса прервано (повторится при следующем запуске воркера)")
-        raise
     for pid, ref, why in res.failed:
         logger.warning("Восстановление индекса: фото %s товара %s не читается: %s", ref, pid, why)
     if res.added:

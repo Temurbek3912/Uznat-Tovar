@@ -12,7 +12,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text,
+                        UniqueConstraint)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -294,6 +295,59 @@ class AuditEvent(Base):
     after_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
     ip_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+# --------------------------------------------------------------------------- фото товаров и кэш эмбеддингов (миграция 0005)
+
+
+class ProductImage(Base):
+    """Фото товара как сущность (документ 06, §4.1; документ 05, §13.3: sha256, UNIQUE (product_id, sha256)).
+
+    role: reference — эталон для распознавания, display — витринное (в индекс не входит). is_active=False — фото выведено из
+    эталонов; запись и файл остаются (фото пользователей не удаляются). source_ref — источник вектора в индексе
+    («upload:<папка>/<файл>», «import:<sha256>», «file:<папка>/<файл>», http-ссылка); storage_path — путь файла внутри
+    media_root или None (файл вне программы: папка импорта, ссылка). Связь с моделью товара (group_id, документ 06, §4.6) —
+    позже, вместе с product_groups."""
+
+    __tablename__ = "product_images"
+    __table_args__ = (UniqueConstraint("product_id", "sha256", name="uq_product_images_product_sha256"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    product_id: Mapped[str] = mapped_column(String, ForeignKey("products.id"), index=True)
+    sha256: Mapped[str] = mapped_column(String(64))
+    role: Mapped[str] = mapped_column(String(16), default="reference")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    source_ref: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    storage_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    original_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class EmbeddingModel(Base):
+    """Паспорт модели эмбеддера (app/pipeline/embedder.model_signature) под коротким номером версии model_version: по нему
+    индекс пересобирается из кэша без загрузки самой модели."""
+
+    __tablename__ = "embedding_models"
+
+    version: Mapped[str] = mapped_column(String(80), primary_key=True)
+    signature_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ImageEmbedding(Base):
+    """Кэш эмбеддингов (документ 07, §8): вектор фото, посчитанный моделью model_version. Ключ (image_id, model_version) —
+    ключ идемпотентности: одно фото одной моделью считается один раз. vector — float32, little-endian, dim чисел."""
+
+    __tablename__ = "image_embeddings"
+
+    image_id: Mapped[str] = mapped_column(String, ForeignKey("product_images.id"), primary_key=True)
+    model_version: Mapped[str] = mapped_column(String(80), ForeignKey("embedding_models.version"), primary_key=True)
+    dim: Mapped[int] = mapped_column(Integer)
+    vector: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 # --------------------------------------------------------------------------- камеры (только новые таблицы)

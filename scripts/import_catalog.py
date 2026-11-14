@@ -65,6 +65,18 @@ class SqlCatalogRepo:
             self.db.rollback()
             raise
 
+    def remember_photos(self, product_id: str, sku: str, photos, vectors, signature: dict | None) -> None:
+        """Записи о фото (product_images) и векторы в кэш (image_embeddings). Файлы импорта лежат вне программы: путь
+        хранения не записывается, только SHA-256, имя и размер; источник вектора — «import:<SHA-256>»."""
+        from app.services.product_images import PhotoInfo, PhotoRegistry
+        infos = [PhotoInfo(sha256=c.sha256, source_ref=f"import:{c.sha256}", original_name=f"{sku}/{c.path.name}",
+                           width=c.width or None, height=c.height or None) for c in photos]
+        try:
+            PhotoRegistry(self.db).remember(product_id, infos, vectors, signature)
+        except Exception:
+            self.db.rollback()                      # сессия должна остаться пригодной для следующих товаров
+            raise
+
 
 def _print_limited(out, title: str, items: list[str]) -> None:
     if not items:
@@ -172,7 +184,9 @@ def main(argv: list[str] | None = None, out=print) -> int:
         index = _load_index(settings.matcher.index_path, settings.embedder.embedding_dim, model_signature(embedder))
         res = run_import(plan, repo, embedder, index, index_path=settings.matcher.index_path, manifest=manifest,
                          manifest_path=manifest_path, update_metadata=args.update_metadata, batch_size=args.batch,
-                         checkpoint_every=args.checkpoint, out=out)
+                         checkpoint_every=args.checkpoint, out=out,
+                         remember=lambda pid, sku, photos, emb: repo.remember_photos(pid, sku, photos, emb,
+                                                                                     model_signature(embedder)))
     finally:
         db.close()
 

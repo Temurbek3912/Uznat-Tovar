@@ -417,7 +417,9 @@ def _batches(items: list, n: int) -> Iterable[list]:
 
 def run_import(plan: ImportPlan, repo: CatalogRepo, embedder, index, *, index_path: str, manifest: Manifest, manifest_path: Path,
                load: Callable[[Path], np.ndarray] | None = None, update_metadata: bool = False, batch_size: int = 16,
-               checkpoint_every: int = 25, out: Callable[[str], None] = print) -> ImportResult:
+               checkpoint_every: int = 25, out: Callable[[str], None] = print,
+               remember: Callable[[str, str, list[PhotoCheck], np.ndarray], None] | None = None) -> ImportResult:
+    """remember(товар, артикул, фото, векторы) — записи о фото и кэш векторов в базе (product_images), до индекса."""
     if load is None:
         from app.pipeline.imageio import load_rgb as load
     res = ImportResult()
@@ -457,6 +459,8 @@ def run_import(plan: ImportPlan, repo: CatalogRepo, embedder, index, *, index_pa
                     if sp.meta_changed and update_metadata:
                         repo.update_product(product_id, sp.meta)
                         res.metadata_updated += 1
+                if remember is not None:
+                    remember(product_id, sp.sku, sp.new_photos, emb)
                 index.add(product_id, emb, [f"import:{c.sha256}" for c in sp.new_photos])   # источник — фото по SHA-256
                 res.created += sp.action == "create"          # счётчики — только после успешного добавления в индекс
                 res.extended += sp.action != "create"

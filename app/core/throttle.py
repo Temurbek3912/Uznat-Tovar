@@ -100,25 +100,27 @@ class LoginThrottle:
 
     # -------------------------------------------------------------- публичный API
 
-    def check(self, username: str, ip: str | None) -> int:
-        """Сколько секунд ждать до следующей попытки; 0 — попытка разрешена."""
+    def check(self, username: str, ip: str | None, *, skip_ip: bool = False) -> int:
+        """Сколько секунд ждать до следующей попытки; 0 — попытка разрешена. skip_ip — адрес клиента неизвестен по устройству
+        (вход покупателя через туннель без заголовка адреса): считается только общий предел, а не «все — один адрес»."""
         now = self._clock()
         with self._lock:
             wait = max(
                 self._retry_after(
                     self._fresh(self._users, self._user_key(username), now), self.max_failures_per_user, now
                 ),
-                self._retry_after(
+                0 if skip_ip else self._retry_after(
                     self._fresh(self._ips, self._ip_key(ip), now), self.max_failures_per_ip, now
                 ),
             )
         return math.ceil(wait) if wait > 0 else 0
 
-    def record_failure(self, username: str, ip: str | None) -> None:
+    def record_failure(self, username: str, ip: str | None, *, skip_ip: bool = False) -> None:
         now = self._clock()
         with self._lock:
             self._add(self._users, self._user_key(username), now)
-            self._add(self._ips, self._ip_key(ip), now)
+            if not skip_ip:
+                self._add(self._ips, self._ip_key(ip), now)
 
     def record_success(self, username: str) -> None:
         with self._lock:

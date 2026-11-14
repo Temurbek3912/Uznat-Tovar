@@ -9,6 +9,7 @@
     python -m scripts.start_demo --port 8080
     python -m scripts.start_demo --lite           # облегчённый режим: без Docker, один процесс, SQLite (start_lite.bat)
     python -m scripts.start_demo --lite --cpu     # то же, модель — только на процессоре (как на ноутбуке без видеокарты)
+    python -m scripts.start_demo --public tailscale   # покупатели заходят из интернета (docs/PUBLIC_ACCESS.md; или PUBLIC_ACCESS в .env)
 
 Облегчённый режим (документ 11, §10) — для слабых компьютеров и ноутбуков: нет Docker (экономия около 2 ГБ ОЗУ), нет отдельного
 воркера (модель грузится один раз, в процессе API), база — файл SQLite в data/lite (свои товары и пользователи, отдельно от
@@ -38,7 +39,7 @@ from pathlib import Path
 from typing import Callable
 
 from app.core import hardware
-from scripts import phone_url
+from scripts import phone_url, public_access
 from scripts.preflight import parse_host_port
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -50,6 +51,7 @@ STOP_TIMEOUT = 8.0
 class Service:
     name: str
     argv: list[str]
+    optional: bool = False          # остановилась — программа работает дальше (туннель входа из интернета)
 
 
 def tls_files(root: Path) -> tuple[str, str] | None:
@@ -81,12 +83,20 @@ def lite_environment(root: Path, plan: "hardware.LitePlan", hf_cache: Path | Non
     return env
 
 
-def lite_commands(python: str, port: int, tls: tuple[str, str] | None = None) -> list[Service]:
-    """Облегчённый режим — одна служба: API, в котором выполняются и задачи (app/worker.py, LITE_MODE)."""
-    argv = [python, "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", str(port)]
+def api_argv(python: str, port: int, tls: tuple[str, str] | None = None, customer_port: int | None = None) -> list[str]:
+    """Команда API. customer_port — ещё и вход покупателя из интернета на 127.0.0.1 (scripts/serve.py, docs/PUBLIC_ACCESS.md)."""
+    if customer_port:
+        argv = [python, "-m", "scripts.serve", "--host", "0.0.0.0", "--port", str(port), "--customer-port", str(customer_port)]
+    else:
+        argv = [python, "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", str(port)]
     if tls:
         argv += ["--ssl-certfile", tls[0], "--ssl-keyfile", tls[1]]
-    return [Service("lite", argv)]
+    return argv
+
+
+def lite_commands(python: str, port: int, tls: tuple[str, str] | None = None, customer_port: int | None = None) -> list[Service]:
+    """Облегчённый режим — одна служба: API, в котором выполняются и задачи (app/worker.py, LITE_MODE)."""
+    return [Service("lite", api_argv(python, port, tls, customer_port))]
 
 
 def _hf_model_cache() -> Path:
@@ -98,11 +108,9 @@ def _probe_hw():
     return hardware.probe()
 
 
-def service_commands(python: str, port: int, platform: str, tls: tuple[str, str] | None = None) -> list[Service]:
-    api_argv = [python, "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", str(port)]
-    if tls:
-        api_argv += ["--ssl-certfile", tls[0], "--ssl-keyfile", tls[1]]
-    api = Service("api", api_argv)
+def service_commands(python: str, port: int, platform: str, tls: tuple[str, str] | None = None,
+                     customer_port: int | None = None) -> list[Service]:
+    api = Service("api", api_argv(python, port, tls, customer_port))
     pool = ["--pool=solo"] if platform.startswith("win") else ["--concurrency=1"]
     worker = Service("worker", [python, "-m", "celery", "-A", "app.worker.celery_app", "worker", "--loglevel=info", *pool])
     return [api, worker]
@@ -246,6 +254,7 @@ class Options:
     lite: bool = False
     cpu: bool = False
     vision: str = "auto"
+    public: str | None = None        # вход покупателя из интернета: None — PUBLIC_ACCESS из .env (docs/PUBLIC_ACCESS.md)
 
 
 # ------------------------------------------------------------------ вспомогательное
@@ -289,10 +298,78 @@ def _dead(procs: list) -> list:
     процесса не меняется, так что дело не в корректности — просто дешевле и проще для подставных процессов в тестах)."""
     dead = []
     for svc, proc, _ in procs:
+        if svc.optional:
+            continue
         code = proc.poll()
         if code is not None:
             dead.append((svc, code))
     return dead
+
+
+def _check_optional(procs: list, reported: set, root: Path, out) -> None:
+    """Необязательная служба (туннель) остановилась: сказать один раз, программа работает дальше в сети магазина."""
+    for svc, proc, _ in procs:
+        if svc.optional and svc.name not in reported:
+            code = proc.poll()
+            if code is not None:
+                reported.add(svc.name)
+                out(f"\nВход покупателя из интернета остановился (код {code}): QR из интернета не работает, сеть магазина — "
+                    f"работает. Последние строки logs/{svc.name}.log:")
+                out(_tail(root / "logs" / f"{svc.name}.log"))
+
+
+def _customer_port(settings) -> int:
+    from app.core.customer_gate import DEFAULT_CUSTOMER_PORT
+    return int(getattr(settings, "customer_port", 0) or DEFAULT_CUSTOMER_PORT)
+
+
+def public_access_plan(opts: "Options", d: "Deps", settings):
+    """Вход покупателя из интернета: что запускать (ошибки — понятным текстом; программа всё равно запускается)."""
+    try:
+        return public_access.plan(settings, customer_port=_customer_port(settings), mode=opts.public, which=d.which,
+                                  run_cmd=d.run_cmd)
+    except Exception as exc:      # noqa: BLE001 — вход из интернета не должен мешать работе в сети магазина
+        mode = public_access.normalize_mode(opts.public if opts.public is not None else getattr(settings, "public_access", "off"))
+        return public_access.PublicPlan(mode=mode, problems=[f"не удалось подготовить ({exc.__class__.__name__}: {exc})"])
+
+
+def apply_public_plan(plan, d: "Deps", opts: "Options", settings, child_env: dict) -> int | None:
+    """Сообщает о входе из интернета; возвращает порт входа покупателя, если вход включается (иначе None)."""
+    if plan.mode == "off":
+        return None
+    if plan.problems:
+        d.out("Вход покупателя из интернета НЕ включён — программа работает только в сети магазина:")
+        for problem in plan.problems:
+            d.out("  - " + problem)
+        d.out("  Настройка: docs/PUBLIC_ACCESS.md")
+        return None
+    port = _customer_port(settings)
+    if port == opts.port:
+        d.out(f"Вход покупателя из интернета НЕ включён: CUSTOMER_PORT={port} совпадает с основным портом.")
+        return None
+    if d.port_busy(port):
+        d.out(f"Вход покупателя из интернета НЕ включён: порт {port} (CUSTOMER_PORT) уже занят.")
+        return None
+    child_env.update(plan.env)
+    child_env["CUSTOMER_PORT"] = str(port)
+    d.out(f"Вход покупателя из интернета ({plan.mode}): {plan.shop_url}")
+    return port
+
+
+def with_tunnel(services: list[Service], plan, customer_port: int | None) -> list[Service]:
+    """Туннель — последней службой и необязательной: его сбой не останавливает работу в сети магазина."""
+    if customer_port and plan.argv:
+        return [*services, Service("tunnel", list(plan.argv), optional=True)]
+    return services
+
+
+def _tunnel_hints(root: Path) -> list[str]:
+    """Строки журнала туннеля со ссылкой, которую надо открыть (например, Tailscale просит включить Funnel)."""
+    try:
+        text = (root / "logs" / "tunnel.log").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return [ln.strip() for ln in text.splitlines() if "login.tailscale.com" in ln][:3]
 
 
 def detector_notice(settings, root: Path) -> str | None:
@@ -309,7 +386,19 @@ def detector_notice(settings, root: Path) -> str | None:
     return f"ВНИМАНИЕ: нет файла весов детектора ({path}) — будет работать грубая эвристика, годная только для простого макета. {hint}"
 
 
-def _show_addresses(d: Deps, port: int, no_browser: bool, notice: str | None = None, tls: bool = False) -> None:
+def _print_qr(d: Deps, url: str) -> None:
+    qr = d.render_qr(url)
+    if qr:
+        try:
+            d.out(qr)
+        except UnicodeEncodeError:
+            d.out("(консоль не показывает QR-код — откройте адрес на телефоне вручную)")
+    else:
+        d.out("(QR-код не показан: pip install qrcode)")
+
+
+def _show_addresses(d: Deps, port: int, no_browser: bool, notice: str | None = None, tls: bool = False,
+                    public_url: str = "") -> None:
     out = d.out
     scheme = "https" if tls else "http"
     local = f"{scheme}://localhost:{port}/ui/"
@@ -317,7 +406,15 @@ def _show_addresses(d: Deps, port: int, no_browser: bool, notice: str | None = N
     out("\n" + "=" * 60)
     out("  ВСЁ ЗАПУЩЕНО")
     out("=" * 60)
-    if ip:
+    if public_url:
+        # Вход покупателя из интернета (docs/PUBLIC_ACCESS.md): в QR — этот адрес; телефону не нужен Wi-Fi магазина
+        out(f"Покупатели (из интернета, без Wi-Fi магазина) — этот адрес в QR-коде:\n\n    {public_url}\n")
+        _print_qr(d, public_url)
+        for hint in _tunnel_hints(d.root):
+            out("Туннель просит действие: " + hint)
+        if ip:
+            out(f"Сотрудники (в сети магазина): {phone_url.phone_urls(ip, port, scheme)['home']}")
+    elif ip:
         urls = phone_url.phone_urls(ip, port, scheme)
         out(f"Телефон (в той же Wi-Fi сети):\n\n    {urls['home']}\n")
         if not tls:
@@ -430,11 +527,15 @@ def run(opts: Options, deps: Deps | None = None, services: list[Service] | None 
         return 1
 
     tls = tls_files(d.root)
-    services = services if services is not None else service_commands(d.python, opts.port, d.platform, tls)
-    return _launch(opts, d, services, child_env, status_file, tls, notice)
+    plan = public_access_plan(opts, d, settings)
+    customer_port = apply_public_plan(plan, d, opts, settings, child_env)
+    services = services if services is not None else service_commands(d.python, opts.port, d.platform, tls, customer_port)
+    services = with_tunnel(services, plan, customer_port)
+    return _launch(opts, d, services, child_env, status_file, tls, notice, public_url=plan.shop_url if customer_port else "")
 
 
-def _launch(opts: Options, d: Deps, services: list[Service], child_env: dict, status_file: Path, tls, notice=None) -> int:
+def _launch(opts: Options, d: Deps, services: list[Service], child_env: dict, status_file: Path, tls, notice=None,
+            public_url: str = "") -> int:
     """Запуск служб, ожидание готовности API и моделей, адреса и QR, остановка по Ctrl+C (общая часть обоих режимов)."""
     out = d.out
     log_dir = d.root / "logs"
@@ -482,9 +583,11 @@ def _launch(opts: Options, d: Deps, services: list[Service], child_env: dict, st
             out("ВНИМАНИЕ: распознавание по виду не готово (работает только штрихкод): "
                 + "; ".join(str(p) for p in status.get("problems") or []) + ". Журнал: logs/worker.log")
 
-        _show_addresses(d, opts.port, opts.no_browser, notice, tls=bool(tls))
+        _show_addresses(d, opts.port, opts.no_browser, notice, tls=bool(tls), public_url=public_url)
+        reported: set = set()
         while True:
             d.sleep(1.0)
+            _check_optional(procs, reported, d.root, out)
             dead = _dead(procs)
             if dead:
                 _report_dead(dead, d.root, out)
@@ -539,8 +642,15 @@ def run_lite(opts: Options, d: Deps, services: list[Service] | None = None) -> i
             f"Закройте его или запустите с другим портом: --port 8001.")
         return 1
     tls = tls_files(d.root)
-    services = services if services is not None else lite_commands(d.python, opts.port, tls)
-    return _launch(opts, d, services, child_env, status_file, tls)
+    try:
+        settings = d.load_settings()
+    except Exception:            # noqa: BLE001 — без настроек вход из интернета просто не включается
+        settings = None
+    plan = public_access_plan(opts, d, settings)
+    customer_port = apply_public_plan(plan, d, opts, settings, child_env)
+    services = services if services is not None else lite_commands(d.python, opts.port, tls, customer_port)
+    services = with_tunnel(services, plan, customer_port)
+    return _launch(opts, d, services, child_env, status_file, tls, public_url=plan.shop_url if customer_port else "")
 
 
 def main(argv: list[str] | None = None, deps: Deps | None = None) -> int:
@@ -559,9 +669,11 @@ def main(argv: list[str] | None = None, deps: Deps | None = None) -> int:
     ap.add_argument("--cpu", action="store_true", help="облегчённый режим, модель только на процессоре (даже если есть видеокарта)")
     ap.add_argument("--vision", choices=["auto", "on", "off"], default="auto",
                     help="модель «зрение + текст» в облегчённом режиме: auto — по железу (по умолчанию)")
+    ap.add_argument("--public", choices=list(public_access.MODES), default=None,
+                    help="вход покупателя из интернета (docs/PUBLIC_ACCESS.md); по умолчанию — PUBLIC_ACCESS из .env")
     a = ap.parse_args(argv)
     return run(Options(port=a.port, no_docker=a.no_docker, no_browser=a.no_browser, check=a.check, timeout=a.timeout,
-                       lite=a.lite or a.cpu, cpu=a.cpu, vision=a.vision), deps)
+                       lite=a.lite or a.cpu, cpu=a.cpu, vision=a.vision, public=a.public), deps)
 
 
 if __name__ == "__main__":

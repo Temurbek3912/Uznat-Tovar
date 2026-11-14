@@ -48,16 +48,23 @@ UNAVAILABLE = ("Сейчас не получается узнать товар. 
 
 
 def _client_ip(request: Request) -> str | None:
+    """Адрес телефона для «12 снимков в минуту с устройства». На входе покупателя из интернета (app/core/customer_gate.py) все
+    запросы приходят от туннеля с 127.0.0.1 — там адрес берётся из заголовка туннеля; нет заголовка — None (действует только
+    общий предел входа, а не «12 в минуту на весь магазин»)."""
+    state = request.scope.get("state") or {}
+    if state.get("customer_entrance"):
+        return state.get("customer_ip")
     return request.client.host if request.client else None
 
 
 def _check_rate(request: Request) -> None:
     ip = _client_ip(request)
-    wait = rate_limit.check(_ALL, ip)
+    unknown = ip is None and bool((request.scope.get("state") or {}).get("customer_entrance"))
+    wait = rate_limit.check(_ALL, ip, skip_ip=unknown)
     if wait > 0:
         raise ApiError(429, "public_rate_limited", "Слишком много снимков подряд. Подождите немного и попробуйте снова",
                        {"retry_after": wait}, headers={"Retry-After": str(math.ceil(wait))})
-    rate_limit.record_failure(_ALL, ip)
+    rate_limit.record_failure(_ALL, ip, skip_ip=unknown)
 
 
 def _price(value) -> float | None:

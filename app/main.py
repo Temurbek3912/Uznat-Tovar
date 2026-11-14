@@ -20,6 +20,7 @@ from app.core.cors import describe_cors, is_production, resolve_cors_origins
 from app.core import auth_secrets
 from app.core.mfa_policy import LISTENER_ADMIN, normalize_listener, startup_warnings
 from app.core.secure_transport import SecureTransportMiddleware
+from app.core.customer_gate import CUSTOMER_FILES, CustomerGateMiddleware
 from app.core.readiness import CheckFailed, run_checks
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.core.error_handlers import install_error_handlers
@@ -111,6 +112,10 @@ if _cors_origins:
 # Wi-Fi магазина отклоняется. Внутри заголовков безопасности: ответ 403 получает и их.
 app.add_middleware(SecureTransportMiddleware, settings_fn=get_settings)
 
+# Вход покупателя из интернета (app/core/customer_gate.py, docs/PUBLIC_ACCESS.md): на сокете CUSTOMER_PORT (127.0.0.1, к нему
+# подключён туннель) — только страница покупателя и публичный API; служебное — 404. Снаружи SecureTransport: до него не доходит.
+app.add_middleware(CustomerGateMiddleware, port_fn=lambda: get_settings().customer_port)
+
 # Заголовки безопасности на всех ответах (app/core/security_headers.py): nosniff, запрет встраивания в чужие сайты и др.
 app.add_middleware(SecurityHeadersMiddleware)
 
@@ -139,10 +144,7 @@ else:
 # доступ к ним по-прежнему закрыт токеном.
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 # Вход покупателя раздаёт ТОЛЬКО страницу покупателя и то, что она подключает: страниц сотрудников и управления на нём нет.
-CUSTOMER_FILES = frozenset({
-    "shop.html", "shop.js", "shop.css", "tokens.css", "ui.css", "theme.js", "theme-apply.js", "i18n.js", "i18n.ru.js", "i18n.uz.js",
-    "i18n.uz-cyrl.js", "i18n.en.js", "icons.js", "ticket.js", "boot.js", "icons/favicon-32.png", "icons/apple-touch-icon.png",
-})
+# CUSTOMER_FILES — app/core/customer_gate.py (тот же список для входа покупателя из интернета).
 
 
 class _CustomerStaticFiles(StaticFiles):

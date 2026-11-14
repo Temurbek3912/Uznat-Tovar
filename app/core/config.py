@@ -139,6 +139,16 @@ class Settings(BaseSettings):
     # управления на нём НЕ действуют; admin — административный порт (публикуется только на 127.0.0.1 и адресе VPN);
     # all — один процесс без разделения (запуск без Docker). docker-compose.yml задаёт public для api и admin для admin-api.
     app_listener: str = "all"
+
+    # Вход покупателя из интернета (docs/PUBLIC_ACCESS.md, app/core/customer_gate.py, scripts/public_access.py): покупатель
+    # открывает страницу по QR через свой мобильный интернет, без Wi-Fi магазина. PUBLIC_ACCESS: off — только сеть магазина (как
+    # раньше); tailscale — Tailscale Funnel (адрес *.ts.net определяется сам); cloudflare — Cloudflare Tunnel (нужны
+    # CLOUDFLARE_TUNNEL_TOKEN и PUBLIC_BASE_URL); manual — свой туннель или прокси программиста магазина к 127.0.0.1:CUSTOMER_PORT
+    # (нужен PUBLIC_BASE_URL). Через этот вход открыта только страница покупателя.
+    public_access: str = "off"
+    public_base_url: str = ""                     # постоянный адрес магазина в интернете (в QR), например https://shop1.example.com/
+    customer_port: int = 8100                     # внутренний порт входа покупателя: только 127.0.0.1, к нему подключён туннель
+    cloudflare_tunnel_token: str = ""             # секрет туннеля Cloudflare (из панели Cloudflare Zero Trust); только в .env
     # Хранилище кадров «Узнать товар» (D-10а, app/core/frame_store.py): отдельный Redis БЕЗ сохранения на диск. Пусто — кадры в
     # памяти этого процесса (запуск одним процессом). В docker-compose.yml — служба frames.
     frames_redis_url: str = ""

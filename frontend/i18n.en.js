@@ -738,6 +738,12 @@
     "pin.reauth_hint": "This is an important action. Confirm it’s you: enter your PIN.",
     "system.all_ok": "Everything works. Customers can identify products.",
     "system.problem": "Something is wrong — see the cards below. If restarting the program doesn’t help, contact a specialist.",
+    "pinpw.title": "Password for signing in from other devices",
+    "pinpw.hint": "The PIN works only on this computer. To sign in from a phone or another computer, set a password. It will be asked there when you sign in.",
+    "pinpw.open": "Set password",
+    "pinpw.pin": "Your PIN (to confirm)",
+    "pinpw.save": "Save password",
+    "pinpw.saved": "Password saved. On other devices, sign in with your username and this password. You have been signed out on other devices.",
   };
   if (root.I18N) root.I18N.add("en", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

@@ -584,6 +584,30 @@ class AuthService:
         meta.reauth_at = utcnow()
         self.db.commit()
 
+    def set_password_with_pin(self, user_id: str, pin: str, new_password: str, secret_key: str, *, ttl_minutes: int,
+                              context: LoginContext | None, listener: str) -> tuple[str, datetime]:
+        """Задать пароль для входа с других устройств, подтвердив личность ПИН-кодом (только на этом компьютере — проверяет
+        маршрут). Нужен после «Придумайте ПИН»: прежний пароль там заменён случайным, и «текущего пароля» человек не знает
+        (решение владельца 2026-11-15). ПИН на этом компьютере — то же, что пароль и код (вход по ПИН считается прошедшим
+        второй фактор), поэтому кода из приложения не спрашиваем. Как и обычная смена пароля — ОДНОЙ транзакцией: новый хеш,
+        все сеансы завершены, этому устройству — новый сеанс по ПИН. -> (токен, срок)."""
+        user = self.get_user(user_id)
+        security = self._security(user_id, lock=True)
+        if security is None or not security.pin_hash or not verify_password(pin or "", security.pin_hash):
+            raise WrongPasswordError("ПИН неверный", "pin_wrong")
+        check_password_policy(new_password)
+        if verify_password(new_password, user.password_hash):
+            raise PolicyViolation("Новый пароль совпадает с прежним", "password_same")
+        user.password_hash = hash_password(new_password)
+        security.must_change_password, security.temp_password_expires_at = False, None
+        security.updated_at = utcnow()
+        self._end_all_sessions(user_id)
+        raw, expires_at = self._add_session(user, ttl_minutes, context=context, mfa=True, secret_key=secret_key, scope=SCOPE_FULL,
+                                            listener=listener, auth_at=None, method=local_pin.METHOD_PIN)
+        self._audit("user.password_changed", user_id, reason="pin")
+        self.db.commit()
+        return raw, expires_at
+
     # ---------------------------------------------------------------- владелец (документ 05, §8)
 
     def is_owner(self, user_id: str) -> bool:

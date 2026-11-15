@@ -152,7 +152,7 @@ def test_settings_page_works_without_signing_in_and_offers_the_pin():
     assert 'id="accountInfo"' in html and 'id="logoutBtn"' in html
     assert 'id="pinGroup"' in html and 'id="pinForm"' in html
     # «новый пароль» — только в формах смены пароля; «новый ПИН» — в форме ПИН-кода
-    forms = re.findall(r'<form id="(?:passwordForm|initialPanel|pinForm)"[\s\S]*?</form>', html)
+    forms = re.findall(r'<form id="(?:passwordForm|initialPanel|pinForm|pinPwForm)"[\s\S]*?</form>', html)
     assert sum(f.count('autocomplete="new-password"') for f in forms) == html.count('autocomplete="new-password"')
 
 

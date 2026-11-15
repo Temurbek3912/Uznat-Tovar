@@ -117,7 +117,7 @@
       return Promise.resolve(null);
     }
     // ПИН-код для входа на этом компьютере (сервер принимает его только отсюда — app/core/local_pin.py).
-    var pinState = { shown: false, has: false, msg: null };
+    var pinState = { shown: false, has: false, msg: null, pwOpen: false, pwMsg: null };
     function renderPin() {
       setHidden($("pinGroup"), !pinState.shown);
       if (!pinState.shown) return;
@@ -127,6 +127,40 @@
       m.textContent = pinState.msg ? t(pinState.msg.key, pinState.msg.params || {}) : "";
       m.className = pinState.msg && pinState.msg.ok ? "notice" : "notice notice--danger";
       setHidden(m, !pinState.msg);
+      // Пароль для входа с других устройств — подтверждается ПИН-кодом (после «Придумайте ПИН» прежний пароль случайный).
+      setHidden($("pinPwBox"), !pinState.has);
+      setHidden($("pinPwButtons"), pinState.pwOpen);
+      setHidden($("pinPwForm"), !pinState.pwOpen);
+      $("pinPwNewLabel").textContent = t("security.password_new", { min: MIN_PASSWORD });
+      var pm = $("pinPwMsg");
+      pm.textContent = pinState.pwMsg ? t(pinState.pwMsg.key, pinState.pwMsg.params || {}) : "";
+      pm.className = pinState.pwMsg && pinState.pwMsg.ok ? "notice" : "notice notice--danger";
+      setHidden(pm, !pinState.pwMsg);
+    }
+    function openPinPassword() {
+      pinState.pwOpen = true; pinState.pwMsg = null; renderPin();
+      var p = $("pinPwPin"); if (p && p.focus) p.focus();
+    }
+    // Сервер проверяет ПИН, задаёт пароль, завершает все сеансы и выдаёт этому устройству новый — его токен заменяет прежний.
+    function savePinPassword(evt) {
+      if (evt && evt.preventDefault) evt.preventDefault();
+      var pin = String($("pinPwPin").value || "").replace(/\D+/g, ""), next = $("pinPwNew").value, again = $("pinPwRepeat").value;
+      $("pinPwPin").value = ""; $("pinPwNew").value = ""; $("pinPwRepeat").value = "";
+      if (next !== again) { pinState.pwMsg = { key: "security.password_mismatch" }; renderPin(); return Promise.resolve(null); }
+      if (next.length < MIN_PASSWORD) { pinState.pwMsg = { key: "server.password_too_short", params: { min: MIN_PASSWORD } }; renderPin(); return Promise.resolve(null); }
+      var btn = $("pinPwSaveBtn"); btn.disabled = true;
+      return api("/api/v1/auth/password/by-pin", "POST", { pin: pin, new_password: next }).then(function (r) {
+        if (r.res.ok && r.data && typeof r.data.access_token === "string" && r.data.access_token) {
+          auth.setToken(r.data.access_token);
+          pinState.pwOpen = false; pinState.pwMsg = { key: "pinpw.saved", ok: true };
+        } else if (r.res.status === 401) {
+          auth.setToken(null); renderPin(); return refreshAccount();
+        } else {
+          pinState.pwMsg = r.res.status === 429 ? { key: "login.throttled" } : problemOf(r);
+        }
+        renderPin(); return r;
+      }, function () { pinState.pwMsg = { key: "error.network" }; renderPin(); })
+        .then(function (x) { btn.disabled = false; return x; }, function (e) { btn.disabled = false; throw e; });
     }
     function loadPin() {
       if (account.name === null || typeof auth.localInfo !== "function") { pinState.shown = false; renderPin(); return Promise.resolve(null); }
@@ -385,6 +419,8 @@
     $("loginPanel").addEventListener("submit", guard(doLogin));
     $("initialPanel").addEventListener("submit", guard(setInitial));
     $("pinForm").addEventListener("submit", guard(savePin));
+    $("pinPwOpenBtn").addEventListener("click", openPinPassword);
+    $("pinPwForm").addEventListener("submit", guard(savePinPassword));
     $("logoutBtn").addEventListener("click", guard(doLogout));
     $("mfaEnableBtn").addEventListener("click", function () { securityStep("setup"); var p = $("mfaSetupPass"); if (p && p.focus) p.focus(); });
     $("mfaDisableBtn").addEventListener("click", function () { securityStep("disable"); var p = $("mfaDisablePass"); if (p && p.focus) p.focus(); });

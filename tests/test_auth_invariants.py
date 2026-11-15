@@ -26,7 +26,7 @@ PUBLIC_ROUTES = {("post", "/auth/login"), ("post", "/auth/login/2fa"), ("post", 
                  # вход ПИН-кодом и ссылка «Придумайте ПИН» (решение владельца 2026-11-15): только с самого компьютера программы —
                  # каждый проверяет это первой строкой (test_pin_routes_check_this_computer_first, tests/test_local_pin.py)
                  ("get", "/auth/local"), ("post", "/auth/pin"), ("post", "/auth/setup/check"), ("post", "/auth/setup")}
-LOCAL_ONLY_ROUTES = ("def login_pin(", "def setup_check(", "def setup_pin(")
+LOCAL_ONLY_ROUTES = ("def login_pin(", "def setup_check(", "def setup_pin(", "def set_password_by_pin(")
 AUTH_DEPS = {"get_current_user", "require_permission", "require_recent_auth", "get_enrolling_user", "get_password_changing_user"}
 ENROLL_ROUTES = {("get", "/auth/2fa"), ("post", "/auth/2fa/setup"), ("post", "/auth/2fa/confirm")}
 
@@ -94,12 +94,18 @@ def test_own_password_change_is_the_only_other_place_that_opens_a_session():
     """Кроме входа (_issue и пропуск настройки), сеанс открывает только смена своего пароля — после текущего пароля и кода
     (если включён второй фактор), в одной транзакции с новым поколением сеансов (документ 05, §12.11)."""
     service = (ROOT / "app/services/auth_service.py").read_text(encoding="utf-8")
-    assert service.count("self._add_session(") == 2                  # issue_token и change_own_password
+    assert service.count("self._add_session(") == 3      # issue_token, change_own_password и set_password_with_pin (ниже)
     body = service[service.index("    def change_own_password("):service.index("    def temporary_password_state(")]
     order = [body.index(x) for x in ("self._require_password(", "totp.verify(", "self._end_all_sessions(", "self._add_session(",
                                        "self.db.commit()")]
     assert order == sorted(order) and body.count("self.db.commit()") == 1
     assert "mfa = bool(security is not None and security.totp_secret_enc and security.totp_enabled_at)" in body
+    # пароль по ПИН-коду (2026-11-15): сначала ПИН, потом завершение всех сеансов и новый сеанс — одной транзакцией;
+    # маршрут — только на этом компьютере (test_pin_routes_check_this_computer_first)
+    by_pin = service[service.index("    def set_password_with_pin("):service.index("    # ---------------------------------------------------------------- владелец")]
+    order = [by_pin.index(x) for x in ("verify_password(pin", "check_password_policy(", "self._end_all_sessions(",
+                                         "self._add_session(", "self.db.commit()")]
+    assert order == sorted(order) and by_pin.count("self.db.commit()") == 1
 
 
 def test_tokens_are_issued_and_checked_in_one_place_each():

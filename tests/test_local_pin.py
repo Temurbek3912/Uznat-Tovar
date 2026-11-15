@@ -203,3 +203,27 @@ def test_setup_link_target_prefers_owner_then_admin(env):
         service.set_owner(owner.id)
         assert service.setup_link_target().username == "boss"
         assert db.query(User).count() == 3
+
+
+def test_set_password_with_pin_for_other_devices(env):
+    """После «Придумайте ПИН» пароля человек не знает: на этом компьютере его можно задать, подтвердив ПИН-кодом (2026-11-15)."""
+    token = env.local.post("/api/v1/auth/setup", json={"token": _link(env), "pin": PIN}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    url = "/api/v1/auth/password/by-pin"
+    bad = env.local.post(url, json={"pin": "905113", "new_password": "my-new-password-1"}, headers=h)
+    assert bad.status_code == 422 and bad.json()["code"] == "pin_wrong"
+    short = env.local.post(url, json={"pin": PIN, "new_password": "short"}, headers=h)
+    assert short.status_code == 422 and short.json()["code"] == "password_too_short"
+    # с другого устройства (и через туннель) — нельзя, даже с верным ПИН
+    far = env.local.post(url, json={"pin": PIN, "new_password": "my-new-password-1"}, headers={**h, "X-Forwarded-For": "8.8.8.8"})
+    assert far.status_code == 403 and far.json()["code"] == "pin_local_only"
+    ok = env.local.post(url, json={"pin": PIN, "new_password": "my-new-password-1"}, headers=h)
+    assert ok.status_code == 200, ok.text
+    assert _me(env.local, token).status_code == 401                         # прежние сеансы завершены
+    assert _me(env.local, ok.json()["access_token"]).status_code == 200     # этому устройству — новый
+    with env.Session() as db:
+        assert {m.method for m in db.query(AuthSessionMeta)} == {"pin"}          # и новый сеанс — тоже по ПИН
+    # новым паролем входят с другого устройства (дальше — как обычно: администратору нужен код из приложения)
+    resp = env.phone.post("/api/v1/auth/login", data={"username": "admin", "password": "my-new-password-1"})
+    assert resp.status_code == 200 and "access_token" not in resp.json(), resp.text
+    assert env.local.post("/api/v1/auth/pin", json={"username": "admin", "pin": PIN}).status_code == 200   # ПИН не тронут

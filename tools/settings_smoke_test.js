@@ -453,5 +453,36 @@ function boot(opts) {
     assert.ok(!far.shown("pinGroup"), "с другого устройства раздела ПИН нет");
   });
 
+  await test("Пароль для других устройств по ПИН-коду (2026-11-15): только когда ПИН есть; несовпадение — строкой; верно — новый токен", async () => {
+    const log = []; let reply = json(422, { code: "pin_wrong" });
+    const s = boot({ token: "tok", fetch: async (url, o) => {
+      const p = url.replace(/^.*\/api\/v1/, ""), method = (o && o.method) || "GET";
+      log.push(method + " " + p + " " + ((o && o.body) || ""));
+      if (p === "/auth/me") return json(200, ADMIN);
+      if (p === "/auth/local") return json(200, { this_computer: true, users: [{ username: ADMIN.username }] });
+      if (p === "/auth/password/by-pin") return reply;
+      if (p === "/auth/2fa") return json(200, { enabled: false, available: true });
+      if (p === "/auth/sessions") return json(200, []);
+      return json(404, {});
+    } });
+    await s.ready(); await flush();
+    assert.ok(s.shown("pinPwBox") && s.shown("pinPwButtons") && !s.shown("pinPwForm"));
+    s.$("pinPwOpenBtn").dispatch("click"); await flush();
+    assert.ok(s.shown("pinPwForm") && !s.shown("pinPwButtons"));
+    const fill = (pin, a, b) => { s.$("pinPwPin").value = pin; s.$("pinPwNew").value = a; s.$("pinPwRepeat").value = b; };
+    fill("482917", "my-new-password-1", "my-new-password-2"); s.$("pinPwForm").dispatch("submit", { preventDefault() {} }); await flush();
+    assert.strictEqual(s.$("pinPwMsg").textContent, DICTS.ru["security.password_mismatch"]);
+    assert.ok(!log.some((l) => l.includes("by-pin")), "несовпадение — без запроса");
+    fill("482917", "my-new-password-1", "my-new-password-1"); s.$("pinPwForm").dispatch("submit", { preventDefault() {} }); await sleep(5); await flush();
+    assert.strictEqual(s.$("pinPwMsg").textContent, DICTS.ru["server.pin_wrong"]);
+    reply = json(200, { access_token: "tok2", expires_in: 1800, username: ADMIN.username, role: "admin" });
+    fill("482917", "my-new-password-1", "my-new-password-1"); s.$("pinPwForm").dispatch("submit", { preventDefault() {} }); await sleep(5); await flush();
+    assert.ok(log.includes('POST /auth/password/by-pin {"pin":"482917","new_password":"my-new-password-1"}'));
+    assert.strictEqual(s.$("pinPwMsg").textContent, DICTS.ru["pinpw.saved"]);
+    assert.strictEqual(s.session.getItem("shelf_audit_token"), "tok2", "новый сеанс заменил прежний");
+    assert.ok(!s.shown("pinPwForm"));
+    for (const id of ["pinPwPin", "pinPwNew", "pinPwRepeat"]) assert.strictEqual(s.$(id).value, "", id);
+  });
+
   console.log(`\n${passed} passed`);
 })().catch((err) => { console.error("FAIL:", err && err.stack || err); process.exit(1); });

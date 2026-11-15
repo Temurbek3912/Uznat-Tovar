@@ -193,6 +193,11 @@ class PinSetRequest(BaseModel):
     current_pin: str | None = Field(default=None, max_length=12)
 
 
+class PasswordByPinRequest(BaseModel):
+    pin: str = Field(max_length=12)
+    new_password: str = Field(max_length=200)
+
+
 class SetupCheckRequest(BaseModel):
     token: str = Field(max_length=200)
 
@@ -973,6 +978,23 @@ def set_pin(body: PinSetRequest, request: Request, user: CurrentUser = Depends(g
 def delete_pin(user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
     AuthService(db, actor=_actor(user)).remove_pin(user.id)
     return {"status": "pin_removed"}
+
+
+@router.post("/auth/password/by-pin", response_model=TokenResponse)
+def set_password_by_pin(body: PasswordByPinRequest, request: Request, user: CurrentUser = Depends(get_current_user),
+                        db: Session = Depends(get_db)) -> TokenResponse:
+    """Задать пароль для входа с других устройств, подтвердив ПИН-кодом (после «Придумайте ПИН» прежний пароль случайный).
+    Только на этом компьютере. Неверный ПИН — неудачная попытка (общий счётчик «pin:логин»). Все сеансы завершаются,
+    этому устройству — новый сеанс по ПИН (в ответе)."""
+    _require_this_computer(request)
+    listener = request_listener(request)
+    ttl = _ttl_minutes(user.role, listener)
+    token, expires_at = _guarded(request, "pin:" + user.username, lambda: AuthService(db, actor=_actor(user)).set_password_with_pin(
+        user.id, body.pin, body.new_password, get_settings().auth_secret_key, ttl_minutes=ttl, context=_login_context(request),
+        listener=listener))
+    logger.info("Пользователь %s задал пароль для входа с других устройств (подтверждено ПИН-кодом)", user.username)
+    seconds = max(60, int((expires_at - utcnow()).total_seconds()))
+    return TokenResponse(access_token=token, expires_in=seconds, username=user.username, role=user.role)
 
 
 @router.post("/auth/setup/check")

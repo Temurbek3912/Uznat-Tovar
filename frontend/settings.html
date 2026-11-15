@@ -72,6 +72,18 @@
             <p class="notice" id="pinMsg" role="status" hidden></p>
             <button class="btn btn--primary" id="pinSaveBtn" type="submit" data-i18n="pin.save">Сохранить ПИН-код</button>
           </form>
+          <div id="pinPwBox" class="settings__form" hidden>
+            <h3 class="ticket__title" data-i18n="pinpw.title">Пароль для входа с других устройств</h3>
+            <p class="hint" data-i18n="pinpw.hint">ПИН-код работает только на этом компьютере. Чтобы входить с телефона или другого компьютера, задайте пароль. Его спросят там при входе.</p>
+            <p class="notice" id="pinPwMsg" role="status" hidden></p>
+            <div id="pinPwButtons"><button class="btn btn--secondary" id="pinPwOpenBtn" type="button" data-i18n="pinpw.open">Задать пароль</button></div>
+            <form id="pinPwForm" class="settings__form" novalidate hidden>
+              <label class="field"><span class="field__label" data-i18n="pinpw.pin">Ваш ПИН-код (для подтверждения)</span><input class="input" id="pinPwPin" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></label>
+              <label class="field"><span class="field__label" id="pinPwNewLabel">Новый пароль</span><input class="input" id="pinPwNew" type="password" autocomplete="new-password" minlength="8"></label>
+              <label class="field"><span class="field__label" data-i18n="security.password_repeat">Новый пароль ещё раз</span><input class="input" id="pinPwRepeat" type="password" autocomplete="new-password" minlength="8"></label>
+              <button class="btn btn--primary" id="pinPwSaveBtn" type="submit" data-i18n="pinpw.save">Сохранить пароль</button>
+            </form>
+          </div>
         </div>
         <div class="settings__group" id="securityGroup" hidden>
           <h2 class="ticket__title" data-i18n="security.title">Безопасность входа</h2>

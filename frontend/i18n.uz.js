@@ -738,6 +738,12 @@
     "pin.reauth_hint": "Bu muhim amal. Bu siz ekaningizni tasdiqlang: PIN-kodni kiriting.",
     "system.all_ok": "Hammasi ishlayapti. Xaridorlar mahsulotlarni aniqlay oladi.",
     "system.problem": "Nosozlik bor — quyidagi kartochkalarga qarang. Dasturni qayta ishga tushirish yordam bermasa, mutaxassisga yozing.",
+    "pinpw.title": "Boshqa qurilmalardan kirish uchun parol",
+    "pinpw.hint": "PIN-kod faqat shu kompyuterda ishlaydi. Telefon yoki boshqa kompyuterdan kirish uchun parol oʻrnating. Kirishda oʻsha yerda soʻraladi.",
+    "pinpw.open": "Parol oʻrnatish",
+    "pinpw.pin": "PIN-kodingiz (tasdiqlash uchun)",
+    "pinpw.save": "Parolni saqlash",
+    "pinpw.saved": "Parol saqlandi. Boshqa qurilmalardan login va shu parol bilan kiring. Boshqa qurilmalarda dasturdan chiqildi.",
   };
   if (root.I18N) root.I18N.add("uz", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

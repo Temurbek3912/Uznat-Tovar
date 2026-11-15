@@ -5,6 +5,7 @@
     python -m scripts.fetch_open_catalog --country uzbekistan --barcode-prefix 478 --out data/test-catalog-uz
     python -m scripts.import_catalog --dir data/test-catalog-uz
     python -m scripts.fetch_open_catalog --link-barcodes --out data/test-catalog-uz      # штрихкоды -> товары в базе
+    python -m scripts.fetch_open_catalog --more russia,kazakhstan,turkey --total 200 --out data/test-catalog-more  # ещё, разных видов
 
 Только для проверки: фото в открытых базах сняты покупателями, по 1–5 на товар, 400 px. Цен в открытых базах почти нет — цена пустая.
 Артикул каждого товара — «UZ-<штрихкод>» (по приставке тестовые товары легко найти и убрать). Повторный запуск докачивает недостающее.
@@ -185,36 +186,32 @@ def download(url: str, path: Path) -> bool:
     return True
 
 
-def fetch(out: Path, country: str, prefix: str) -> None:
-    out.mkdir(parents=True, exist_ok=True)
-    print(f"Ищу товары: страна {country}" + (f", штрихкоды {prefix}…" if prefix else ""))
-    products = collect(country, prefix)
-    print(f"Найдено товаров: {len(products)}")
-    rows, photos = [], 0
-    for n, p in enumerate(products, 1):
-        code, name = str(p["code"]), product_name(p)
-        ids = photo_ids(p.get("images") or {})
-        if not name or not ids:
-            continue
-        sku = f"UZ-{code}"
-        folder = out / sku
-        folder.mkdir(exist_ok=True)
-        got = 0
-        for i in ids:
-            url = f"{IMAGE_HOSTS[p['_src']]}/images/products/{_image_dir(code)}/{i}.400.jpg"
-            if download(url, folder / f"{i}.jpg"):
-                got += 1
-            time.sleep(0.15)
-        if not got:
-            folder.rmdir()
-            continue
-        photos += got
-        barcode = "0" + code if len(code) == 12 else code          # UPC-A хранится как EAN-13 с нулём (app/services/barcode.py)
-        first = folder / f"{ids[0]}.jpg"
-        rows.append({"sku": sku, "name": name[:200], "brand": brand_of(p), "category": category_of(p, first if first.is_file() else None),
-                     "price": "", "barcode": barcode})
-        if n % 50 == 0:
-            print(f"  {n}/{len(products)}: товаров с фото {len(rows)}, фото {photos}")
+def _download_product(out: Path, p: dict, category: str | None = None) -> tuple[dict | None, int]:
+    """Фото товара в папку out/UZ-<код>; строка для products.csv (или None — ни одного фото) и число фото."""
+    code, name = str(p["code"]), product_name(p)
+    ids = photo_ids(p.get("images") or {})
+    if not name or not ids:
+        return None, 0
+    sku = f"UZ-{code}"
+    folder = out / sku
+    folder.mkdir(exist_ok=True)
+    got = 0
+    for i in ids:
+        url = f"{IMAGE_HOSTS[p['_src']]}/images/products/{_image_dir(code)}/{i}.400.jpg"
+        if download(url, folder / f"{i}.jpg"):
+            got += 1
+        time.sleep(0.15)
+    if not got:
+        folder.rmdir()
+        return None, 0
+    barcode = "0" + code if len(code) == 12 else code          # UPC-A хранится как EAN-13 с нулём (app/services/barcode.py)
+    first = folder / f"{ids[0]}.jpg"
+    if category is None:
+        category = category_of(p, first if first.is_file() else None)
+    return {"sku": sku, "name": name[:200], "brand": brand_of(p), "category": category, "price": "", "barcode": barcode}, got
+
+
+def _write_lists(out: Path, rows: list[dict]) -> None:
     with (out / "products.csv").open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["sku", "name", "brand", "category", "price"], delimiter=";", extrasaction="ignore")
         w.writeheader()
@@ -223,6 +220,84 @@ def fetch(out: Path, country: str, prefix: str) -> None:
         w = csv.writer(f, delimiter=";")
         w.writerow(["sku", "barcode"])
         w.writerows([(r["sku"], r["barcode"]) for r in rows])
+
+
+def pick_varied(candidates: list[tuple[str, dict]], total: int, per_kind: int) -> list[tuple[str, dict]]:
+    """Разнообразный набор: по кругу по категориям (каждая не больше per_kind), всего не больше total; порядок внутри — как пришёл."""
+    groups: dict[str, list[dict]] = {}
+    for category, p in candidates:
+        groups.setdefault(category, []).append(p)
+    picked: list[tuple[str, dict]] = []
+    rnd = 0
+    while len(picked) < total and rnd < per_kind:
+        added = False
+        for category, items in groups.items():
+            if rnd < len(items) and len(picked) < total:
+                picked.append((category, items[rnd]))
+                added = True
+        if not added:
+            break
+        rnd += 1
+    return picked
+
+
+def fetch_more(out: Path, countries: list[str], total: int, per_kind: int, skip_codes: set[str]) -> None:
+    """Ещё товары для тестового каталога: страны, где продаются, только с заполненным составом и проверенными фото,
+    разных категорий. Уже загруженные штрихкоды (skip_codes) пропускаются."""
+    from app.services.open_product_details import category_from_name  # noqa: PLC0415
+    out.mkdir(parents=True, exist_ok=True)
+    found: dict[str, dict] = {}
+    for country in countries:
+        q = f'countries_tags:"en:{country}" AND states_tags:"en:ingredients-completed" AND states_tags:"en:photos-validated"'
+        batches = [search_off(q)]
+        for base, src in zip(OTHER_BASES, ("obf", "opf")):
+            try:
+                batches.append(search_other(base, country, src))
+            except Exception as exc:  # noqa: BLE001
+                print(f"  {base}: недоступна ({type(exc).__name__}) — пропускаю")
+        for batch in batches:
+            for p in batch:
+                code = str(p.get("code") or "").strip()
+                norm = "0" + code if len(code) == 12 else code
+                if code.isdigit() and len(code) in (8, 12, 13) and norm not in skip_codes and code not in found:
+                    found[code] = p
+        print(f"  {country}: всего кандидатов {len(found)}")
+    candidates = []
+    for p in found.values():
+        name = product_name(p)
+        if not name or not p.get("quantity") or not photo_ids(p.get("images") or {}):
+            continue
+        category = category_of(p, None) or category_from_name(name)
+        if category:
+            candidates.append((category, p))
+    picked = pick_varied(candidates, total, per_kind)
+    print(f"Подходящих {len(candidates)}, беру {len(picked)} разных категорий")
+    rows, photos = [], 0
+    for n, (category, p) in enumerate(picked, 1):
+        row, got = _download_product(out, p, category)
+        if row:
+            rows.append(row)
+            photos += got
+        if n % 25 == 0:
+            print(f"  {n}/{len(picked)}: товаров с фото {len(rows)}, фото {photos}")
+    _write_lists(out, rows)
+    print(f"Готово: {len(rows)} товаров, {photos} фото -> {out}")
+
+
+def fetch(out: Path, country: str, prefix: str) -> None:
+    out.mkdir(parents=True, exist_ok=True)
+    print(f"Ищу товары: страна {country}" + (f", штрихкоды {prefix}…" if prefix else ""))
+    products = collect(country, prefix)
+    print(f"Найдено товаров: {len(products)}")
+    rows, photos = [], 0
+    for n, p in enumerate(products, 1):
+        row, got = _download_product(out, p)
+        if row:
+            rows.append(row)
+            photos += got
+        if n % 50 == 0:
+            print(f"  {n}/{len(products)}: товаров с фото {len(rows)}, фото {photos}")
+    _write_lists(out, rows)
     print(f"Готово: {len(rows)} товаров, {photos} фото -> {out}")
 
 
@@ -255,9 +330,22 @@ def main() -> None:
     ap.add_argument("--country", default="uzbekistan")
     ap.add_argument("--barcode-prefix", default="478", help="штрихкоды производителей страны (Узбекистан — 478); пусто — не искать")
     ap.add_argument("--link-barcodes", action="store_true", help="только привязать штрихкоды уже загруженных товаров")
+    ap.add_argument("--more", default="", help="ещё товары из этих стран через запятую (russia,kazakhstan,turkey): только с "
+                                               "составом и проверенными фото, разных категорий; уже загруженные пропускаются")
+    ap.add_argument("--total", type=int, default=200, help="--more: сколько товаров взять")
+    ap.add_argument("--per-category", type=int, default=20, help="--more: не больше стольких товаров одной категории")
     args = ap.parse_args()
     if args.link_barcodes:
         link_barcodes(Path(args.out))
+    elif args.more:
+        from app.db.models import ProductBarcodeORM  # noqa: PLC0415
+        from app.db.session import SessionLocal  # noqa: PLC0415
+        db = SessionLocal()
+        try:
+            skip = {b for (b,) in db.query(ProductBarcodeORM.barcode).all()}
+        finally:
+            db.close()
+        fetch_more(Path(args.out), [c.strip() for c in args.more.split(",") if c.strip()], args.total, args.per_category, skip)
     else:
         fetch(Path(args.out), args.country, args.barcode_prefix)
 

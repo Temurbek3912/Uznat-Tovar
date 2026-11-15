@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
+from app.services.product_kinds import is_kind
 from app.core.errors import ApiError
 from app.core.memory_upload import read_frame
 from app.core.throttle import LoginThrottle
@@ -86,10 +87,16 @@ def public_result(db: Session, result: dict) -> dict:
     if status == "empty_catalog":
         status = "unknown"
     if status == "not_in_catalog" and isinstance(result.get("guess"), dict):
-        # товара нет в базе магазина, но программа его назвала (документ 07, §10.6): только название и бренд, без источника
+        # товара нет в базе магазина, но программа его назвала (документ 07, §10.6) или назвала хотя бы вид (§10.7):
+        # только название, бренд и код вида — без источника
         guess = result["guess"]
-        return {"status": "not_in_catalog", "by": None, "product": None, "candidates": [],
-                "guess": {"name": str(guess.get("name") or ""), "brand": str(guess.get("brand") or "")}}
+        kind = str(guess.get("kind") or "")
+        name = str(guess.get("name") or "")
+        if name or is_kind(kind):
+            return {"status": "not_in_catalog", "by": None, "product": None, "candidates": [],
+                    "guess": {"name": name, "brand": str(guess.get("brand") or "") if name else "",
+                              "kind": kind if is_kind(kind) else ""}}
+        return {"status": "unknown", "by": None, "product": None, "candidates": []}
     product = db.get(Product, result["product"]["id"]) if result.get("product") else None
     if product is not None and product.status == PRODUCT_ARCHIVED:
         product = None

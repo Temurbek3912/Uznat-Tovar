@@ -177,6 +177,13 @@ class Settings(BaseSettings):
     # Ниже какой уверенности модели ответ считается «не удалось определить»: "high" или "medium". Замер 2026-11-14 (документ 07,
     # §10.6, docs/benchmark/naming_report_2026-11-14.md): ответы «medium» были неверны в 4 случаях из 4 — принимаем только «high».
     naming_min_confidence: str = "high"
+    # Вид товара (документ 07, §10.7): «это напиток», «это обувь». naming_kind_model — малая модель HuggingFace «картинка + текст»
+    # (пусто — выключена). Есть большая модель — вид показывается, только если обе модели назвали один вид (замер 2026-11-15:
+    # ошибок 1–2 %); большой нет — малая с уверенностью не ниже naming_kind_min_score (0,6: ошибок 3–4 %).
+    # naming_kind_cache_dir — где хранятся векторы описаний видов (считаются один раз).
+    naming_kind_model: str = "google/siglip2-base-patch16-224"
+    naming_kind_min_score: float = 0.6
+    naming_kind_cache_dir: str = "data/models"
 
     # ML-конфиги подтягиваются из YAML (см. load_yaml_config), но могут быть
     # переопределены через ENV вида MODELS__DETECTOR__CONFIDENCE_THRESHOLD=0.4
@@ -269,6 +276,8 @@ def get_settings() -> Settings:
             "vision_timeout_seconds", Settings.model_fields["naming_vision_timeout_seconds"].default
         )
         naming_min_confidence: str = naming.get("min_confidence", Settings.model_fields["naming_min_confidence"].default)
+        naming_kind_model: str = naming.get("kind_model", Settings.model_fields["naming_kind_model"].default) or ""
+        naming_kind_min_score: float = naming.get("kind_min_score", Settings.model_fields["naming_kind_min_score"].default)
 
     return _SettingsWithYamlDefaults(
         detector=DetectorConfig(**models["detector"]) if "detector" in models else None,

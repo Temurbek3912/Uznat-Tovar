@@ -109,5 +109,5 @@ def plan_lite(hw: Hardware, *, force_cpu: bool = False, vision: str = "auto") ->
             why = ("нет видеокарты NVIDIA на 6 ГБ и больше" if not (has_gpu and (hw.vram_gb or 0) >= VISION_MIN_VRAM_GB)
                    else f"ОЗУ меньше {VISION_MIN_RAM_GB:.0f} ГБ")
             notes.append(f"Модель «зрение + текст» выключена ({why}): товар вне базы называется только по штрихкоду, "
-                         "иначе — «не удалось определить». Включить: --vision on.")
+                         "иначе — только вид товара («это напиток») малой моделью. Включить: --vision on.")
     return LitePlan(device=device, vision=use_vision, notes=notes)

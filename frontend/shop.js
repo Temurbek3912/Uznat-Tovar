@@ -30,8 +30,9 @@
       var list = (Array.isArray(body.candidates) && body.candidates.length ? body.candidates : [body.product]).map(card);
       return { state: "uncertain", product: card(body.product), candidates: list };
     }
-    if (status === "not_in_catalog" && body.guess && body.guess.name) {
-      return { state: "not_in_catalog", guess: { name: String(body.guess.name), brand: String(body.guess.brand || "") } };
+    if (status === "not_in_catalog" && body.guess && (body.guess.name || body.guess.kind)) {
+      // название товара вне базы или хотя бы его вид («Это напиток», документ 07, §10.7)
+      return { state: "not_in_catalog", guess: { name: String(body.guess.name || ""), brand: String(body.guess.brand || ""), kind: String(body.guess.kind || "") } };
     }
     return { state: "unknown" };
   }

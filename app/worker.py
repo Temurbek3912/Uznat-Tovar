@@ -543,6 +543,18 @@ def identify_product_task(self, ref: str) -> dict:
                 pass
 
 
+def _preload_kind_model() -> None:
+    """Облегчённый режим без модели «зрение + текст»: малая модель «вид товара» грузится заранее, а не на первом снимке покупателя
+    (документ 07, §10.7)."""
+    if not getattr(settings, "naming_enabled", False) or getattr(settings, "naming_vision_url", "")             or not getattr(settings, "naming_kind_model", ""):
+        return
+    try:
+        from app.pipeline.kind_classifier import get_classifier  # noqa: PLC0415
+        get_classifier(settings)
+    except Exception:  # noqa: BLE001 — вид товара необязателен
+        logger.exception("Облегчённый режим: модель «вид товара» не загружена")
+
+
 def start_in_process() -> None:
     """Облегчённый режим: то, что делает отдельный воркер при запуске, — в процессе API (вызывается в фоновом потоке при старте
     API, app/main.py). Модели грузятся под той же блокировкой, что и задачи: снимок, пришедший во время загрузки, подождёт её,
@@ -554,6 +566,7 @@ def start_in_process() -> None:
             for problem in problems:
                 logger.critical("Распознавание по виду не может стать готовым: %s", problem)
         _init_ml_components()
+    _preload_kind_model()
     for job in (_sweep_stale_frames, _schedule_recovery):
         try:
             job()

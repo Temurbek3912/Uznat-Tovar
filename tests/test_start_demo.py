@@ -570,8 +570,12 @@ def test_lite_mode_stops_with_the_bootstrap_message_when_the_database_cannot_be_
 def test_lite_environment_uses_offline_model_cache_only_when_it_exists(tmp_path):
     plan = hardware.LitePlan(device="cpu", vision=True)
     assert "HF_HUB_OFFLINE" not in sd.lite_environment(tmp_path, plan, tmp_path / "missing")
-    (tmp_path / "cache").mkdir()
-    assert sd.lite_environment(tmp_path, plan, tmp_path / "cache")["HF_HUB_OFFLINE"] == "1"
+    (tmp_path / "hub" / "models--facebook--dinov2-base").mkdir(parents=True)
+    dino = tmp_path / "hub" / "models--facebook--dinov2-base"
+    # малая модель «вид товара» ещё не скачана — первый запуск с интернетом скачает её (документ 07, §10.7)
+    assert "HF_HUB_OFFLINE" not in sd.lite_environment(tmp_path, plan, dino)
+    (tmp_path / "hub" / "models--google--siglip2-base-patch16-224").mkdir()
+    assert sd.lite_environment(tmp_path, plan, dino)["HF_HUB_OFFLINE"] == "1"
     assert "NAMING_VISION_URL" not in sd.lite_environment(tmp_path, plan)
 
 

@@ -172,6 +172,22 @@ const byText = (host, text) => buttons(host).find((b) => b.textContent.includes(
     assert.strictEqual(Ticket.speechSummary, undefined, "озвучки нет: speechSummary удалён");
   });
 
+  await test("нет в базе, известен только вид: «Что это» + «Напиток» + «название определить не удалось»; на узбекском — свой текст", async () => {
+    const s = setup("ru"); s.render({ state: "not_in_catalog", guess: { name: "", brand: "", kind: "drink" } }, { onAdd: undefined });
+    assert.strictEqual(s.host.byClass("ticket__name")[0].textContent, "Напиток");
+    assert.ok(s.text().includes("Что это") && s.text().includes("Точное название определить не удалось"));
+    const u = setup("uz"); u.render({ state: "not_in_catalog", guess: { name: "", kind: "footwear" } }, { onAdd: undefined });
+    assert.strictEqual(u.host.byClass("ticket__name")[0].textContent, "Poyabzal");
+  });
+
+  await test("нет в базе с названием: название крупно и строка «Вид товара: …»; неизвестный код вида не показывается", async () => {
+    const s = setup("ru"); s.render({ state: "not_in_catalog", guess: { name: "Santal Artesian Water", brand: "Santal", kind: "drink" } });
+    assert.strictEqual(s.host.byClass("ticket__name")[0].textContent, "Santal Artesian Water");
+    assert.ok(s.text().includes("Вид товара: Напиток"));
+    const x = setup("ru"); x.render({ state: "not_in_catalog", guess: { name: "Снек", kind: "weapons" } });
+    assert.ok(!x.text().includes("Вид товара") && !x.text().includes("kind."));
+  });
+
   await test("в ticket.js нет innerHTML/outerHTML/insertAdjacentHTML/eval", async () => {
     const src = fs.readFileSync(path.join(FRONT, "ticket.js"), "utf-8");
     for (const bad of ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function"]) assert.ok(!src.includes(bad), bad);

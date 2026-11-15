@@ -78,8 +78,8 @@ def lite_environment(root: Path, plan: "hardware.LitePlan", hf_cache: Path | Non
     }
     if not plan.vision:
         env["NAMING_VISION_URL"] = ""                 # модель «зрение + текст» выключена: остаётся штрихкод -> открытые базы
-    if hf_cache is not None and hf_cache.is_dir():
-        env["HF_HUB_OFFLINE"] = "1"                   # модель уже скачана: не ходить в интернет при каждом запуске
+    if hf_cache is not None and hf_cache.is_dir() and _kind_model_cached(hf_cache):
+        env["HF_HUB_OFFLINE"] = "1"                   # модели уже скачаны: не ходить в интернет при каждом запуске
     return env
 
 
@@ -97,6 +97,16 @@ def api_argv(python: str, port: int, tls: tuple[str, str] | None = None, custome
 def lite_commands(python: str, port: int, tls: tuple[str, str] | None = None, customer_port: int | None = None) -> list[Service]:
     """Облегчённый режим — одна служба: API, в котором выполняются и задачи (app/worker.py, LITE_MODE)."""
     return [Service("lite", api_argv(python, port, tls, customer_port))]
+
+
+def _kind_model_cached(hf_cache: Path) -> bool:
+    """Скачана ли малая модель «вид товара» (документ 07, §10.7) рядом с моделью распознавания. Нет — первый запуск с интернетом
+    скачает её сам (HF_HUB_OFFLINE не ставится); выключена (NAMING_KIND_MODEL пусто) — не нужна."""
+    from app.core.config import Settings  # noqa: PLC0415
+    repo = os.environ.get("NAMING_KIND_MODEL", Settings.model_fields["naming_kind_model"].default)
+    if not repo:
+        return True
+    return (hf_cache.parent / ("models--" + repo.replace("/", "--"))).is_dir()
 
 
 def _hf_model_cache() -> Path:

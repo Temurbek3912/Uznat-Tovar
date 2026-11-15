@@ -132,7 +132,8 @@ def _with_guess(monkeypatch, guess):
 def test_unknown_with_a_name_becomes_not_in_catalog(monkeypatch):
     _with_guess(monkeypatch, pn.Guess("Snickers", "Snickers", "vision", sure=False))
     out = routes_catalog.add_outside_name({"status": "unknown", "product": None, "candidates": []}, b"j", [], "ru")
-    assert out["status"] == "not_in_catalog" and out["guess"] == {"name": "Snickers", "brand": "Snickers", "source": "vision"}
+    assert out["status"] == "not_in_catalog" and out["guess"] == {"name": "Snickers", "brand": "Snickers", "source": "vision",
+                                                                    "kind": ""}
 
 
 def test_unknown_without_a_name_stays_unknown_and_found_products_are_untouched(monkeypatch):
@@ -161,7 +162,7 @@ def test_public_answer_shows_only_name_and_brand_of_the_outside_product():
     answer = public_result(None, {"status": "not_in_catalog", "guess": {"name": "Snickers", "brand": "Mars", "source": "barcode_db"},
                                   "barcode": {"code": "5000159461122"}, "score": 0.3})
     assert answer == {"status": "not_in_catalog", "by": None, "product": None, "candidates": [],
-                      "guess": {"name": "Snickers", "brand": "Mars"}}
+                      "guess": {"name": "Snickers", "brand": "Mars", "kind": ""}}
 
 
 @pytest.mark.parametrize("floor,confidence,named", [

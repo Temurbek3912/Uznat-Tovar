@@ -60,8 +60,9 @@
       return { state: "uncertain", product: list[0], candidates: list };
     }
     if (status === "empty_catalog") return { state: "empty_catalog" };
-    if (status === "not_in_catalog" && result.guess && result.guess.name) {
-      return { state: "not_in_catalog", guess: { name: String(result.guess.name), brand: String(result.guess.brand || "") } };
+    if (status === "not_in_catalog" && result.guess && (result.guess.name || result.guess.kind)) {
+      // название товара вне базы или хотя бы его вид («Это напиток», документ 07, §10.7)
+      return { state: "not_in_catalog", guess: { name: String(result.guess.name || ""), brand: String(result.guess.brand || ""), kind: String(result.guess.kind || "") } };
     }
     return { state: "unknown" };
   }

@@ -54,6 +54,12 @@ async def lifespan(_app):
 
         from app.worker import start_in_process
         threading.Thread(target=start_in_process, name="lite-ml-init", daemon=True).start()
+    elif settings.naming_enabled and settings.naming_kind_model:
+        # полный режим: малая модель «вид товара» (документ 07, §10.7) — в фоне, чтобы первый снимок покупателя её не ждал
+        import threading
+
+        from app.pipeline.kind_classifier import preload
+        threading.Thread(target=preload, args=(settings,), name="kind-model-init", daemon=True).start()
     try:
         yield
     finally:

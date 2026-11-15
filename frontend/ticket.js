@@ -118,11 +118,21 @@
       card.appendChild(list);
     } else if (state === "not_in_catalog") {
       // Товара нет в базе, но программа его назвала (документ 07, §10.6): «Это похоже на …» + просьба обратиться к сотруднику.
+      // Название не определено, но известен вид (документ 07, §10.7): «Что это: Напиток» + «название определить не удалось».
       var guess = view.guess || {};
+      var kindText = guess.kind ? t("kind." + guess.kind) : "";
+      if (kindText === "kind." + guess.kind) kindText = "";          // неизвестный код вида — не показываем
       card.appendChild(node(doc, "div", "ticket__head")).appendChild(chip("notice", "search-off", t("ticket.outside_chip")));
-      card.appendChild(node(doc, "p", "ticket__hint", t("ticket.outside_title")));
-      if (guess.brand) card.appendChild(node(doc, "span", "ticket__brand", guess.brand));
-      card.appendChild(node(doc, "h2", "ticket__name", guess.name || ""));
+      if (guess.name) {
+        card.appendChild(node(doc, "p", "ticket__hint", t("ticket.outside_title")));
+        if (guess.brand) card.appendChild(node(doc, "span", "ticket__brand", guess.brand));
+        card.appendChild(node(doc, "h2", "ticket__name", guess.name));
+        if (kindText) card.appendChild(node(doc, "p", "ticket__hint", t("ticket.kind_label", { kind: kindText })));
+      } else {
+        card.appendChild(node(doc, "p", "ticket__hint", t("ticket.kind_title")));
+        card.appendChild(node(doc, "h2", "ticket__name", kindText));
+        card.appendChild(node(doc, "p", "ticket__hint", t("ticket.kind_no_name")));
+      }
       var canAddGuess = typeof deps.onAdd === "function";
       card.appendChild(node(doc, "p", "ticket__hint", t(canAddGuess ? "ticket.outside_hint" : "ticket.outside_hint_readonly")));
       var a0 = node(doc, "div", "ticket__actions");

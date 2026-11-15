@@ -25,8 +25,10 @@ import unicodedata
 import urllib.error
 import urllib.request
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
+
+from app.services.product_kinds import KIND_IDS, VISION_HINTS, is_kind
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +54,10 @@ class Guess:
     brand: str = ""
     source: str = "vision"       # barcode_db | vision
     sure: bool = False           # штрихкод из открытой базы или модель ответила «high»: можно спорить с поиском по виду
+    kind: str = ""               # вид товара (app/services/product_kinds.py); name пустое — известен только вид
 
     def as_dict(self) -> dict:
-        return {"name": self.name, "brand": self.brand, "source": self.source}
+        return {"name": self.name, "brand": self.brand, "source": self.source, "kind": self.kind}
 
 
 def _http_get_json(url: str, timeout: float) -> dict | None:
@@ -185,8 +188,9 @@ VISION_SCHEMA = {
         "name": {"type": "string"},
         "brand": {"type": "string"},
         "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "kind": {"type": "string", "enum": [*KIND_IDS, "other"]},
     },
-    "required": ["is_product", "name", "brand", "confidence"],
+    "required": ["is_product", "name", "brand", "confidence", "kind"],
 }
 
 
@@ -199,7 +203,11 @@ def _prompt(lang: str) -> str:
         "variant/size if visible (keep brand names as printed). 'brand' is the brand as printed, or empty. "
         "Set 'confidence' to 'high' only if you can clearly read or recognise the product; 'medium' if you know the product type "
         "but not exactly; 'low' if unsure. If there is no product in the photo (person, floor, blur), set is_product=false. "
-        "Never invent a brand you cannot see. Reply with JSON only."
+        "Never invent a brand you cannot see. "
+        "'kind' is the type of the product by what it is and what it is for (use the name you read), even if you cannot "
+        "read the name, one of: "
+        + "; ".join(f"{k} = {VISION_HINTS[k]}" for k in KIND_IDS)
+        + "; other = none of these or no product. Reply with JSON only."
     )
 
 
@@ -234,7 +242,7 @@ CONFIDENCE_LEVELS = ("low", "medium", "high")
 
 def ask_vision(jpeg: bytes, lang: str, url: str, model: str, timeout: float,
                http_post: HttpPost | None = None) -> dict | None:
-    """Кадр -> сырой ответ модели {is_product, name, brand, confidence} или None (модель недоступна, ответ не разобран).
+    """Кадр -> сырой ответ модели {is_product, name, brand, confidence, kind} или None (модель недоступна, ответ не разобран).
     Отдельно от решения «принять или нет» — чтобы замер (ml/benchmark_naming.py) видел и отвергнутые ответы."""
     if not url:
         return None
@@ -265,19 +273,27 @@ def ask_vision(jpeg: bytes, lang: str, url: str, model: str, timeout: float,
     return _parse_answer(content if isinstance(content, str) else "")
 
 
-def accept_answer(answer: dict | None, min_confidence: str = "medium") -> Guess | None:
+def answer_kind(answer: dict | None) -> str:
+    """Вид товара из сырого ответа модели ("" — «не товар», «other», неизвестный код)."""
+    if not answer or answer.get("is_product") is False:
+        return ""
+    kind = str(answer.get("kind") or "").strip()
+    return kind if is_kind(kind) else ""
+
+
+def accept_answer(answer: dict | None, min_confidence: str = "medium", with_kind: bool = False) -> Guess | None:
     """Сырой ответ модели -> догадка или None («не удалось определить»). Ниже порога уверенности, «не товар», пустое название — None.
-    Порог — naming.min_confidence в config.yaml; выбран по замеру (документ 07, §10.6)."""
+    Порог — naming.min_confidence в config.yaml; выбран по замеру (документ 07, §10.6).
+    with_kind: название не принято, но вид товара назван — догадка только с видом (name пустое; документ 07, §10.7)."""
     if not answer or answer.get("is_product") is False:
         return None
+    kind = answer_kind(answer)
     confidence = str(answer.get("confidence", "")).lower()
     floor = min_confidence if min_confidence in CONFIDENCE_LEVELS else "medium"
-    if confidence not in CONFIDENCE_LEVELS or CONFIDENCE_LEVELS.index(confidence) < CONFIDENCE_LEVELS.index(floor)             or confidence == "low":
-        return None
     name = _clean(answer.get("name"))
-    if not name:
-        return None
-    return Guess(name=name, brand=_clean(answer.get("brand")), source="vision", sure=confidence == "high")
+    if confidence not in CONFIDENCE_LEVELS or CONFIDENCE_LEVELS.index(confidence) < CONFIDENCE_LEVELS.index(floor)             or confidence == "low" or not name:
+        return Guess(name="", source="vision", kind=kind) if with_kind and kind else None
+    return Guess(name=name, brand=_clean(answer.get("brand")), source="vision", sure=confidence == "high", kind=kind)
 
 
 def name_by_vision(jpeg: bytes, lang: str, url: str, model: str, timeout: float,
@@ -286,9 +302,55 @@ def name_by_vision(jpeg: bytes, lang: str, url: str, model: str, timeout: float,
     return accept_answer(ask_vision(jpeg, lang, url, model, timeout, http_post=http_post), min_confidence)
 
 
+KindFn = Callable[..., object]
+
+
+def _small_kind(jpeg: bytes, settings, classify: KindFn | None, min_score: float | None) -> str | None:
+    """Вид от малой модели или None (выключена, не загрузилась, «не товар», ниже порога)."""
+    if classify is None:
+        if not getattr(settings, "naming_kind_model", ""):
+            return None
+        from app.pipeline.kind_classifier import classify as classify  # noqa: PLC0415 — torch только при включённой модели
+    result = classify(jpeg, settings, min_score=min_score)
+    kind = getattr(result, "kind", None)
+    return kind if is_kind(kind) else None
+
+
+def kind_by_small_model(jpeg: bytes, settings, classify: KindFn | None = None) -> Guess | None:
+    """Малая быстрая модель (app/pipeline/kind_classifier.py): только вид товара, без названия; порог — из настроек."""
+    kind = _small_kind(jpeg, settings, classify, None)
+    return Guess(name="", source="kind_model", kind=kind) if kind else None
+
+
+def _agreed_kind(guess: Guess | None, jpeg: bytes, settings, classify: KindFn | None) -> Guess | None:
+    """Вид от большой модели остаётся, только если малая назвала тот же вид (замер 2026-11-15: так ошибок 1–2 % против 8–9 % у
+    большой одной). Малой модели нет — вид большой модели как есть."""
+    if guess is None or not guess.kind:
+        return guess
+    if classify is None and not (getattr(settings, "naming_kind_model", "") and _small_available(settings)):
+        return guess                                  # малой модели нет или она не загрузилась — вид большой как есть
+    small = _small_kind(jpeg, settings, classify, 0.0)
+    if small == guess.kind:
+        return guess
+    if not guess.name:
+        return None                                   # «только вид», а модели не согласны — честное «не удалось определить»
+    return replace(guess, kind="")
+
+
+def _small_available(settings) -> bool:
+    try:
+        from app.pipeline.kind_classifier import get_classifier  # noqa: PLC0415
+        return get_classifier(settings) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def name_product(jpeg: bytes | None, codes: list[str], lang: str, settings,
-                 http_get: HttpGet | None = None, http_post: HttpPost | None = None) -> Guess | None:
-    """Товара нет в базе: штрихкод -> открытые базы; иначе -> локальная модель по кадру; иначе None («не удалось определить»)."""
+                 http_get: HttpGet | None = None, http_post: HttpPost | None = None,
+                 classify: KindFn | None = None) -> Guess | None:
+    """Товара нет в базе: штрихкод -> открытые базы; иначе -> локальная модель по кадру (название и вид товара; вид — если с
+    ним согласна малая модель); большая модель недоступна -> малая модель (только вид); иначе None («не удалось определить»).
+    Догадка может быть «только вид» (name пустое, kind заполнен): «Это напиток» (документ 07, §10.7)."""
     if not getattr(settings, "naming_enabled", False):
         return None
     if getattr(settings, "naming_barcode_lookup", False):
@@ -296,12 +358,15 @@ def name_product(jpeg: bytes | None, codes: list[str], lang: str, settings,
             guess = lookup_barcode(code, lang, http_get=http_get)
             if guess is not None:
                 return guess
-    if jpeg:
-        return name_by_vision(jpeg, lang, getattr(settings, "naming_vision_url", "") or "",
-                              getattr(settings, "naming_vision_model", "") or "",
-                              float(getattr(settings, "naming_vision_timeout_seconds", 40.0)), http_post=http_post,
-                              min_confidence=str(getattr(settings, "naming_min_confidence", "high") or "high"))
-    return None
+    if not jpeg:
+        return None
+    url = getattr(settings, "naming_vision_url", "") or ""
+    answer = ask_vision(jpeg, lang, url, getattr(settings, "naming_vision_model", "") or "",
+                        float(getattr(settings, "naming_vision_timeout_seconds", 40.0)), http_post=http_post) if url else None
+    if answer is not None:          # большая модель ответила — её «не товар» окончательное
+        guess = accept_answer(answer, str(getattr(settings, "naming_min_confidence", "high") or "high"), with_kind=True)
+        return _agreed_kind(guess, jpeg, settings, classify)
+    return kind_by_small_model(jpeg, settings, classify)
 
 
 def normalize_lang(value: str | None) -> str:

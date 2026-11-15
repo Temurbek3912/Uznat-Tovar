@@ -16,6 +16,9 @@ test("ответ сервера -> карточка: цена покупател
   const u = H.toView({ status: "uncertain", product: { name: "A", price: null }, candidates: [{ name: "A" }, { name: "B" }] });
   assert.strictEqual(u.state, "uncertain"); assert.deepStrictEqual(u.candidates.map((c) => c.name), ["A", "B"]);
   assert.deepStrictEqual(H.toView({ status: "unknown" }), { state: "unknown" });
+  assert.deepStrictEqual(H.toView({ status: "not_in_catalog", guess: { name: "", brand: "", kind: "drink" } }),
+    { state: "not_in_catalog", guess: { name: "", brand: "", kind: "drink" } });
+  assert.deepStrictEqual(H.toView({ status: "not_in_catalog", guess: { name: "", kind: "" } }), { state: "unknown" });
   assert.deepStrictEqual(H.toView(null), { state: "unknown" });
   assert.deepStrictEqual(H.toView({ status: "matched", product: null }), { state: "unknown" });
 });

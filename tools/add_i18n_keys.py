@@ -35,8 +35,7 @@ def add(entries: dict[str, dict[str, str]]) -> None:
             if not before.endswith(","):
                 before += ","
             text = before + "\n" + "\n".join(new_lines).rstrip(",") + text[end:]
-        path.write_text(text, encoding="utf-8", newline="
-")
+        path.write_text(text, encoding="utf-8", newline="\n")
 
 
 if __name__ == "__main__":

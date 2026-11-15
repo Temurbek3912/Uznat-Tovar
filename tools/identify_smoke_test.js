@@ -479,7 +479,7 @@ async function withPage(opts, fn) { const s = boot(opts); try { await s.ready();
   await test("тема: кнопка переключает системная → светлая → тёмная, подпись и значок меняются, выбор запоминается; страница закрывается — камера останавливается", async () => {
     await withPage({ tuning: { tickMs: 100000 } }, async (s) => {
       const label = () => s.$("themeBtn").getAttribute("aria-label");
-      assert.ok(label().includes("как в системе")); await s.click("themeBtn"); assert.ok(label().includes("светлая")); await s.click("themeBtn"); assert.ok(label().includes("тёмная"));
+      assert.ok(label().includes("светлая")); await s.click("themeBtn"); assert.ok(label().includes("тёмная"));
       assert.strictEqual(s.local.getItem("app_theme"), "dark");
       await s.camOn(); (s.win._ev.pagehide || []).forEach((fn) => fn()); assert.strictEqual(s.cam.stops, 1);
     });

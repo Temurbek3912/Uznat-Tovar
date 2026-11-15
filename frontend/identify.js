@@ -388,7 +388,7 @@
       label($("fileBtn"), "camera", t("identify.take_photo"));
       var mode = Theme.get(), theme = $("themeBtn");
       clear(theme);
-      theme.appendChild(Icons.make(doc, mode === "dark" ? "moon" : mode === "light" ? "sun" : "monitor", { size: 20 }));
+      theme.appendChild(Icons.make(doc, mode === "dark" ? "moon" : "sun", { size: 20 }));
       theme.setAttribute("aria-label", t("theme.label", { mode: t("theme." + mode) }));
       doc.title = t("app.name");
     }

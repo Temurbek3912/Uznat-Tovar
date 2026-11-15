@@ -115,13 +115,12 @@ function boot(opts) {
     assert.deepStrictEqual(t.touched, [], "страница обращалась к озвучке: " + t.touched);
   });
 
-  await test("тема: кнопка листает «как в системе → светлая → тёмная», ставит data-theme, запоминает, подпись кнопки читаема", async () => {
+  await test("тема: кнопка переключает «светлая ↔ тёмная», ставит data-theme, запоминает, подпись кнопки читаема", async () => {
     const t = boot();
-    t.$("themeBtn").click(); assert.strictEqual(t.doc.documentElement.getAttribute("data-theme"), "light");
     t.$("themeBtn").click(); assert.strictEqual(t.doc.documentElement.getAttribute("data-theme"), "dark");
     assert.strictEqual(t.storage._m.get("app_theme"), "dark");
     assert.strictEqual(t.$("themeBtn").getAttribute("aria-label"), "Тема: тёмная");
-    t.$("themeBtn").click(); assert.strictEqual(t.doc.documentElement.getAttribute("data-theme"), null);
+    t.$("themeBtn").click(); assert.strictEqual(t.doc.documentElement.getAttribute("data-theme"), "light");
   });
 
   await test("разделы: адрес #products / #settings переключает раздел, заголовок, меню и прячет панель образцов", async () => {
@@ -156,12 +155,12 @@ function boot(opts) {
     assert.ok(t.$("list").byClass("check__text").some((c) => c.textContent === "Mice"));
   });
 
-  await test("настройки: раздел показывает только тему; три кнопки темы, выбранная помечена, выбор применяется", async () => {
+  await test("настройки: раздел показывает только тему; две кнопки темы, выбранная помечена, выбор применяется", async () => {
     const t = boot({ hash: "#settings" }); await flush();
-    assert.ok(t.visible("viewSettings")); assert.strictEqual(t.$("themeHost").byClass("lang-btn").length, 3);
-    t.$("themeHost").byClass("lang-btn")[2].click();
+    assert.ok(t.visible("viewSettings")); assert.strictEqual(t.$("themeHost").byClass("lang-btn").length, 2);
+    t.$("themeHost").byClass("lang-btn")[1].click();
     assert.strictEqual(t.doc.documentElement.getAttribute("data-theme"), "dark");
-    assert.strictEqual(t.$("themeHost").byClass("lang-btn")[2].getAttribute("aria-pressed"), "true");
+    assert.strictEqual(t.$("themeHost").byClass("lang-btn")[1].getAttribute("aria-pressed"), "true");
   });
 
   await test("в preview.js нет innerHTML/outerHTML/insertAdjacentHTML/eval; данные образцов вымышленные (нет настоящих брендов)", async () => {

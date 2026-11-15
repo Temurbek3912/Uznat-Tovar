@@ -82,15 +82,15 @@ function boot(opts) {
     for (const bad of ["innerHTML", "outerHTML", "insertAdjacentHTML", "eval(", "new Function"]) assert.ok(!SCRIPT.includes(bad), bad);
   });
 
-  await test("тема: три кнопки с подписями из словаря, выбранная помечена; клик меняет и запоминает; верхняя кнопка листает режимы", async () => {
+  await test("тема: две кнопки (светлая, тёмная) с подписями из словаря, выбранная помечена; клик меняет и запоминает; верхняя кнопка переключает", async () => {
     const s = boot(); await s.ready();
     const btns = () => s.$("themeHost").byTag("button");
-    assert.deepStrictEqual(btns().map((b) => b.textContent), ["как в системе", "светлая", "тёмная"]);
-    assert.deepStrictEqual(btns().map((b) => b.getAttribute("aria-pressed")), ["true", "false", "false"]);
-    btns()[2].click(); assert.strictEqual(s.local.getItem("app_theme"), "dark"); assert.deepStrictEqual(btns().map((b) => b.getAttribute("aria-pressed")), ["false", "false", "true"]);
+    assert.deepStrictEqual(btns().map((b) => b.textContent), ["светлая", "тёмная"]);
+    assert.deepStrictEqual(btns().map((b) => b.getAttribute("aria-pressed")), ["true", "false"]);
+    btns()[1].click(); assert.strictEqual(s.local.getItem("app_theme"), "dark"); assert.deepStrictEqual(btns().map((b) => b.getAttribute("aria-pressed")), ["false", "true"]);
     assert.ok(s.$("themeBtn").getAttribute("aria-label").includes("тёмная"));
-    await s.click("themeBtn"); assert.strictEqual(s.theme.get(), "system"); assert.strictEqual(btns()[0].getAttribute("aria-pressed"), "true");
-    s.i18n.setLang("en"); await flush(); assert.deepStrictEqual(btns().map((b) => b.textContent), ["as system", "light", "dark"].map((x, i) => DICTS.en["theme." + ["system", "light", "dark"][i]]));
+    await s.click("themeBtn"); assert.strictEqual(s.theme.get(), "light"); assert.strictEqual(btns()[0].getAttribute("aria-pressed"), "true");
+    s.i18n.setLang("en"); await flush(); assert.deepStrictEqual(btns().map((b) => b.textContent), [DICTS.en["theme.light"], DICTS.en["theme.dark"]]);
   });
 
   await test("язык: два переключателя (вверху и в группе) меняют язык приложения, всё на странице переводится и запоминается", async () => {
@@ -98,7 +98,7 @@ function boot(opts) {
     assert.strictEqual(s.$("langHost").byClass("lang-btn").length, 4); assert.strictEqual(s.$("langHost2").byClass("lang-btn").length, 4);
     s.$("langHost2").byClass("lang-btn")[3].click(); await flush();
     assert.strictEqual(s.i18n.getLang(), "en"); assert.strictEqual(s.local.getItem("app_lang"), "en"); assert.strictEqual(s.doc.title, "Settings — Identify Product");
-    assert.ok(s.$("themeBtn").getAttribute("aria-label").includes(DICTS.en["theme.system"])); assert.strictEqual(s.$("langHost").byClass("lang-btn")[3].getAttribute("aria-pressed"), "true");
+    assert.ok(s.$("themeBtn").getAttribute("aria-label").includes(DICTS.en["theme.light"])); assert.strictEqual(s.$("langHost").byClass("lang-btn")[3].getAttribute("aria-pressed"), "true");
     s.$("langHost").byClass("lang-btn")[1].click(); await flush(); assert.strictEqual(s.local.getItem("app_lang"), "uz"); assert.strictEqual(s.$("rail").getAttribute("aria-label"), DICTS.uz["nav.menu"]);
   });
 

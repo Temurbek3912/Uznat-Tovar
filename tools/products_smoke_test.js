@@ -499,7 +499,7 @@ const sorted = (a) => a.slice().sort();
 
   await test("тема переключается кнопкой и запоминается; меню — общее (shell.js); при закрытии страницы миниатюры из памяти освобождаются", async () => {
     await withPage({ list: MANY(2) }, async (s) => {
-      const label = () => s.$("themeBtn").getAttribute("aria-label"); assert.ok(label().includes("как в системе")); await s.click("themeBtn"); assert.ok(label().includes("светлая")); await s.click("themeBtn"); assert.strictEqual(s.local.getItem("app_theme"), "dark");
+      const label = () => s.$("themeBtn").getAttribute("aria-label"); assert.ok(label().includes("светлая")); await s.click("themeBtn"); assert.ok(label().includes("тёмная")); assert.strictEqual(s.local.getItem("app_theme"), "dark");
       assert.strictEqual(s.$("rail").getAttribute("data-shell"), "", "меню рисует shell.js (tools/shell_smoke_test.js)");
       assert.strictEqual(s.$("langHost").byClass("lang-btn").length, 4); assert.strictEqual(s.doc.title, "Товары — Узнать товар");
       const made = s.urls.made; assert.ok(made >= 2); (s.win._ev.pagehide || []).forEach((fn) => fn()); assert.strictEqual(s.urls.revoked.length, made, "все блоб-адреса миниатюр освобождены");

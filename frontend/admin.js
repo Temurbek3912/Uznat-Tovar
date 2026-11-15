@@ -552,7 +552,7 @@ function paintTheme() {
   const btn = $("themeBtn"), T = window.Theme, I = window.Icons;
   if (!btn || !T || !I) return;
   const mode = T.get();
-  btn.replaceChildren(I.make(document, mode === "dark" ? "moon" : mode === "light" ? "sun" : "monitor", {size: 20}));
+  btn.replaceChildren(I.make(document, mode === "dark" ? "moon" : "sun", {size: 20}));
   btn.setAttribute("aria-label", tr("theme.label", {mode: tr("theme." + mode)}));
 }
 // Esc закрывает открытое окно (кнопка «Отмена» — первая в окне).

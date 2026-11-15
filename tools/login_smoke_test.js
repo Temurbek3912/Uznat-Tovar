@@ -49,7 +49,7 @@ function boot(opts) {
       return h ? Promise.resolve(h(init || {})) : Promise.reject(new Error("нет ответа для " + p));
     },
   };
-  const theme = { mode: "system", get() { return this.mode; }, next() { this.mode = "light"; } };
+  const theme = { mode: "light", get() { return this.mode; }, next() { this.mode = "light"; } };
   const app = Login.start(win, { I18N: i18n, Auth, Icons, Theme: theme });
   const $ = (id) => doc.getElementById(id);
   return { doc, win, i18n, app, $, calls, replaced, history, shown: (id) => !$(id).hasAttribute("hidden"),

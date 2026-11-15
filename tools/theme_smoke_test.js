@@ -10,15 +10,16 @@ async function test(name, fn) { try { await fn(); passed++; } catch (err) { cons
 const mm = (dark) => () => ({ matches: dark });
 
 (async () => {
-  await test("по умолчанию «как в системе»: атрибута нет, видимая тема берётся из настройки устройства", async () => {
+  await test("два режима; пока не выбрано — тема устройства, атрибут ставится сразу", async () => {
+    assert.deepStrictEqual(Theme.MODES, ["light", "dark"]);
     const doc = new FakeDocument();
     const th = Theme.create({ localStorage: makeStorage(), document: doc, matchMedia: mm(true) });
     th.apply();
-    assert.strictEqual(th.get(), "system");
-    assert.strictEqual(doc.documentElement.getAttribute("data-theme"), null);
+    assert.strictEqual(th.get(), "dark");
+    assert.strictEqual(doc.documentElement.getAttribute("data-theme"), "dark");
     assert.strictEqual(th.effective(), "dark");
-    assert.strictEqual(Theme.create({ matchMedia: mm(false) }).effective(), "light");
-    assert.strictEqual(Theme.create({}).effective(), "light");
+    assert.strictEqual(Theme.create({ matchMedia: mm(false) }).get(), "light");
+    assert.strictEqual(Theme.create({}).get(), "light");
   });
 
   await test("выбор светлой/тёмной ставит <html data-theme>, запоминается и переживает «перезапуск»", async () => {
@@ -28,30 +29,25 @@ const mm = (dark) => () => ({ matches: dark });
     assert.strictEqual(doc.documentElement.getAttribute("data-theme"), "dark");
     assert.strictEqual(storage._m.get("app_theme"), "dark");
     const doc2 = new FakeDocument();
-    const again = Theme.create({ localStorage: storage, document: doc2 });
+    const again = Theme.create({ localStorage: storage, document: doc2, matchMedia: mm(false) });
     again.apply();
     assert.strictEqual(again.get(), "dark");
     assert.strictEqual(doc2.documentElement.getAttribute("data-theme"), "dark");
-    assert.strictEqual(again.effective(), "dark");
   });
 
-  await test("возврат к «как в системе» убирает атрибут", async () => {
-    const doc = new FakeDocument(), th = Theme.create({ localStorage: makeStorage(), document: doc });
-    th.set("light"); assert.strictEqual(doc.documentElement.getAttribute("data-theme"), "light");
-    th.set("system"); assert.strictEqual(doc.documentElement.getAttribute("data-theme"), null);
-  });
-
-  await test("несуществующая тема отвергается; мусор в хранилище игнорируется", async () => {
+  await test("прежнее «как в системе» и мусор в хранилище — тема устройства; «system» и чужое отвергаются", async () => {
+    assert.strictEqual(Theme.create({ localStorage: makeStorage({ app_theme: "system" }), matchMedia: mm(true) }).get(), "dark");
     const th = Theme.create({ localStorage: makeStorage({ app_theme: "neon" }) });
-    assert.strictEqual(th.get(), "system");
+    assert.strictEqual(th.get(), "light");
     assert.strictEqual(th.set("neon"), false);
-    assert.strictEqual(th.get(), "system");
+    assert.strictEqual(th.set("system"), false);
+    assert.strictEqual(th.get(), "light");
   });
 
-  await test("next: по кругу system -> light -> dark -> system", async () => {
+  await test("next: светлая <-> тёмная", async () => {
     const th = Theme.create({ localStorage: makeStorage(), document: new FakeDocument() });
-    const seen = []; for (let i = 0; i < 4; i++) { th.next(); seen.push(th.get()); }
-    assert.deepStrictEqual(seen, ["light", "dark", "system", "light"]);
+    const seen = []; for (let i = 0; i < 3; i++) { th.next(); seen.push(th.get()); }
+    assert.deepStrictEqual(seen, ["dark", "light", "dark"]);
   });
 
   await test("слушатели: вызываются при выборе, отписка работает, сломанный не мешает", async () => {
@@ -67,7 +63,7 @@ const mm = (dark) => () => ({ matches: dark });
     const broken = { getItem() { throw new Error("x"); }, setItem() { throw new Error("y"); } };
     const th = Theme.create({ localStorage: broken, document: new FakeDocument() });
     assert.ok(th.set("dark")); assert.strictEqual(th.get(), "dark");
-    assert.strictEqual(Theme.create({ matchMedia() { throw new Error("z"); } }).effective(), "light");
+    assert.strictEqual(Theme.create({ matchMedia() { throw new Error("z"); } }).get(), "light");
   });
 
   console.log(`\n${passed} passed`);

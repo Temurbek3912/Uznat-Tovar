@@ -108,7 +108,7 @@
       flip.appendChild(Icons.make(doc, "refresh", { size: 20 })); flip.setAttribute("aria-label", t("common.retry"));
       var theme = $("themeBtn"), mode = Theme.get();
       while (theme.firstChild) theme.removeChild(theme.firstChild);
-      theme.appendChild(Icons.make(doc, mode === "dark" ? "moon" : mode === "light" ? "sun" : "monitor", { size: 20 }));
+      theme.appendChild(Icons.make(doc, mode === "dark" ? "moon" : "sun", { size: 20 }));
       theme.setAttribute("aria-label", t("theme.label", { mode: t("theme." + mode) }));
       $("themeTitle").textContent = t("theme.label", { mode: t("theme." + mode) });
       doc.title = t("app.name");

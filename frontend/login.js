@@ -73,10 +73,10 @@
       $("whereNote").textContent = !state.local ? "" : local.this_computer ? t("signin.this_computer") : t("signin.other_device");
       Object.keys(state.msgs).forEach(paintMsg);
       paintUsers();
-      var mode = Theme ? Theme.get() : "system", theme = $("themeBtn");
+      var mode = Theme ? Theme.get() : "light", theme = $("themeBtn");
       if (theme && Icons) {
         while (theme.firstChild) theme.removeChild(theme.firstChild);
-        theme.appendChild(Icons.make(doc, mode === "dark" ? "moon" : mode === "light" ? "sun" : "monitor", { size: 20 }));
+        theme.appendChild(Icons.make(doc, mode === "dark" ? "moon" : "sun", { size: 20 }));
         theme.setAttribute("aria-label", t("theme.label", { mode: t("theme." + mode) }));
       }
       doc.title = t("signin.title") + " — " + t("app.name");

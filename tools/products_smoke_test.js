@@ -61,7 +61,8 @@ function boot(opts) {
   class FormDataFake { constructor() { this.items = []; } append(k, v, n) { this.items.push([k, v, n]); } get(k) { const f = this.items.find((x) => x[0] === k); return f ? f[1] : null; } all(k) { return this.items.filter((x) => x[0] === k); } }
   const win = {
     document: doc, I18N: i18n, Theme: theme, Auth, Icons, Ticket, ProductList, fetch, FormData: FormDataFake, localStorage: local, sessionStorage: session, navigator: { languages: ["ru"] },
-    location: { search: opts.search || "", protocol: "http:", origin: "http://app", href: "" }, matchMedia: () => ({ matches: false }),
+    location: { search: opts.search || "", protocol: "http:", origin: "http://app", href: "", pathname: "/ui/products.html", hash: opts.hash || "",
+                replace(u) { win.redirects.push(u); } }, redirects: [], matchMedia: () => ({ matches: false }),
     URL: { createObjectURL: () => "blob:u" + (++urls.made), revokeObjectURL: (u) => { urls.revoked.push(u); } },
     addEventListener(type, fn) { (win._ev[type] = win._ev[type] || []).push(fn); }, _ev: {}
   };
@@ -96,8 +97,10 @@ const sorted = (a) => a.slice().sort();
     const used = new Set([...SCRIPT.matchAll(/\$\("([A-Za-z][\w-]*)"\)/g)].map((m) => m[1]).concat([...SCRIPT.matchAll(/\bshow\("([A-Za-z][\w-]*)"/g)].map((m) => m[1])).concat([...SCRIPT.matchAll(/\b(?:scrollTo|scrollNear)\("([A-Za-z][\w-]*)"\)/g)].map((m) => m[1])));
     for (const id of used) assert.ok(ids.includes(id), `в разметке нет #${id}`);
     const s = boot({ token: null });
-    for (const id of ["accessBanner", "mainArea", "addCard", "progressCard", "editCard", "dupNotice", "formError", "editError", "listError", "listNote", "loginError", "listEmpty", "productList", "railAdmin"]) assert.ok(!s.shown(id), `#${id} должен быть скрыт до нужды`);
-    assert.ok(s.shown("loginPanel"));
+    for (const id of ["accessBanner", "mainArea", "addCard", "progressCard", "editCard", "dupNotice", "formError", "editError", "listError", "listNote", "listEmpty", "productList"]) assert.ok(!s.shown(id), `#${id} должен быть скрыт до нужды`);
+    assert.deepStrictEqual(s.win.redirects, ["login.html?next=products.html"], "без входа — на общую страницу входа");
+    assert.ok(!HTML.includes('id="loginPanel"') && !HTML.includes('id="loginUser"'), "своей формы входа на странице больше нет (редизайн 2026-11-15)");
+    assert.ok(HTML.includes('<nav class="rail" id="rail" data-shell') && HTML.includes('<script src="shell.js"></script>'), "меню — общее (shell.js)");
   });
 
   await test("скрипты: язык и словари раньше значков, ценника, каталога, списка и страницы; без внешних адресов; страница только запускает модуль", async () => {
@@ -168,39 +171,30 @@ const sorted = (a) => a.slice().sort();
   });
 
   // ============================================================ вход и права
-  await test("без входа — форма входа, остальное скрыто и сервер не спрашивается; нет права на запись — «Нет доступа», а не форма; администратору виден «Управление»", async () => {
-    await withPage({ token: null }, async (s) => { assert.ok(s.shown("loginPanel") && !s.shown("mainArea") && !s.shown("accessBanner")); assert.strictEqual(s.calls.length, 0); });
-    await withPage({ me: ME_READER }, async (s) => { assert.ok(s.shown("accessBanner") && !s.shown("mainArea") && !s.shown("loginPanel")); assert.strictEqual(s.listCalls().length, 0, "список не грузим тем, кому страница не нужна"); });
+  await test("без входа — на страницу входа, сервер не спрашивается; нет права на запись — «Нет доступа»; «Добавить товар» в меню (#add) открывает форму", async () => {
+    await withPage({ token: null }, async (s) => { assert.ok(!s.shown("mainArea") && !s.shown("accessBanner")); assert.strictEqual(s.calls.length, 0); assert.deepStrictEqual(s.win.redirects, ["login.html?next=products.html"]); });
+    await withPage({ me: ME_READER }, async (s) => { assert.ok(s.shown("accessBanner") && !s.shown("mainArea")); assert.strictEqual(s.listCalls().length, 0, "список не грузим тем, кому страница не нужна"); });
     await withPage({ me: ME_READER }, async (s) => { assert.ok(s.shown("accessText") && !s.shown("accessListener")); });
     // В-5: администратор на адресе для сотрудников — сервер не перечисляет catalog:write; объяснение — «только на компьютере или через VPN»
     await withPage({ me: { username: "boss", role: "admin", admin_listener: false, permissions: ["catalog:read", "report:read"] } }, async (s) => {
       assert.ok(s.shown("accessBanner") && s.shown("accessListener") && !s.shown("accessText") && !s.shown("mainArea"));
       assert.strictEqual(s.listCalls().length, 0);
     });
-    await withPage({ me: ME_ADMIN }, async (s) => { assert.ok(s.shown("mainArea") && s.shown("railAdmin")); assert.strictEqual(s.calls[0].opts.headers.Authorization, "Bearer tok"); });
-    await withPage({ me: ME_WRITER }, async (s) => { assert.ok(s.shown("mainArea") && !s.shown("railAdmin")); });
-  });
-
-  await test("вход по паролю: токен сохраняется, затем открывается страница; неверный пароль и «слишком много попыток» — понятное сообщение, которое меняет язык вместе с приложением", async () => {
-    await withPage({ token: null, login: () => json(401, {}) }, async (s) => {
-      s.$("loginPanel").dispatch("submit", { preventDefault() {} }); await sleep(10); await flush();
-      assert.strictEqual(s.text("loginError"), "Неверный логин или пароль"); s.i18n.setLang("en"); await flush(); assert.strictEqual(s.text("loginError"), "Wrong username or password");
-      assert.strictEqual(s.$("loginBtn").disabled, false);
-    });
-    await withPage({ token: null, login: () => json(429, {}) }, async (s) => { s.$("loginPanel").dispatch("submit", { preventDefault() {} }); await sleep(10); await flush(); assert.ok(s.text("loginError").includes("Слишком много")); });
-    await withPage({ token: null, list: MANY(2) }, async (s) => {
-      s.$("loginUser").value = "u"; s.$("loginPass").value = "secret";
-      s.$("loginPanel").dispatch("submit", { preventDefault() {} }); await sleep(30); await flush();
-      const login = s.calls.find((c) => /auth\/login$/.test(c.url)); assert.ok(login.opts.body.includes("username=u") && login.opts.body.includes("password=secret"));
-      assert.strictEqual(s.session.getItem("shelf_audit_token"), "new-token"); assert.strictEqual(s.$("loginPass").value, "");
-      assert.ok(s.shown("mainArea") && !s.shown("loginPanel")); assert.strictEqual(s.rows().length, 2);
+    await withPage({ me: ME_ADMIN }, async (s) => { assert.ok(s.shown("mainArea")); assert.strictEqual(s.calls[0].opts.headers.Authorization, "Bearer tok"); });
+    await withPage({ me: ME_WRITER, list: MANY(2), hash: "#add" }, async (s) => { assert.ok(s.shown("mainArea") && s.shown("addCard"), "products.html#add — форма добавления открыта"); });
+    await withPage({ me: ME_WRITER, list: MANY(2) }, async (s) => {
+      assert.ok(!s.shown("addCard"));
+      s.win.location.hash = "#add"; (s.win._ev.hashchange || []).forEach((fn) => fn()); await flush();
+      assert.ok(s.shown("addCard"), "пункт меню на уже открытой странице тоже открывает форму");
+      assert.strictEqual(s.$("openAdd").getAttribute("data-hotkey"), "n", "клавиша N — новый товар");
     });
   });
 
-  await test("сессия истекла: на «me» и на запросе списка и при отправке — показан вход, токен забыт", async () => {
-    await withPage({ me: () => json(401, {}) }, async (s) => { assert.ok(s.shown("loginPanel") && s.text("loginError").includes("Сессия истекла")); });
-    await withPage({ list: [], listHandler: () => json(401, {}) }, async (s) => { assert.ok(s.shown("loginPanel") && !s.shown("mainArea")); assert.strictEqual(s.session.getItem("shelf_audit_token"), null); });
-    await withPage({ list: MANY(2), upload: () => json(401, {}) }, async (s) => { await s.fill(); await s.click("submitBtn"); assert.ok(s.shown("loginPanel") && !s.shown("mainArea")); });
+  await test("сессия истекла: на «me», на запросе списка и при отправке — на страницу входа с причиной, токен забыт", async () => {
+    const back = ["login.html?next=products.html&why=expired"];
+    await withPage({ me: () => json(401, {}) }, async (s) => { assert.deepStrictEqual(s.win.redirects, back); });
+    await withPage({ list: [], listHandler: () => json(401, {}) }, async (s) => { assert.ok(!s.shown("mainArea")); assert.strictEqual(s.session.getItem("shelf_audit_token"), null); assert.deepStrictEqual(s.win.redirects, back); });
+    await withPage({ list: MANY(2), upload: () => json(401, {}) }, async (s) => { await s.fill(); await s.click("submitBtn"); assert.ok(!s.shown("mainArea")); assert.deepStrictEqual(s.win.redirects, back); });
   });
 
   // ============================================================ список
@@ -503,10 +497,10 @@ const sorted = (a) => a.slice().sort();
     });
   });
 
-  await test("тема переключается кнопкой и запоминается; меню: «Товары» помечено текущим; ссылки на настоящие страницы; при закрытии страницы миниатюры из памяти освобождаются", async () => {
+  await test("тема переключается кнопкой и запоминается; меню — общее (shell.js); при закрытии страницы миниатюры из памяти освобождаются", async () => {
     await withPage({ list: MANY(2) }, async (s) => {
       const label = () => s.$("themeBtn").getAttribute("aria-label"); assert.ok(label().includes("как в системе")); await s.click("themeBtn"); assert.ok(label().includes("светлая")); await s.click("themeBtn"); assert.strictEqual(s.local.getItem("app_theme"), "dark");
-      const links = s.$("rail").byTag("a"); assert.deepStrictEqual(links.map((a) => a.getAttribute("href")), ["identify.html", "products.html", "settings.html", "admin.html"]); assert.strictEqual(links[1].getAttribute("aria-current"), "page");
+      assert.strictEqual(s.$("rail").getAttribute("data-shell"), "", "меню рисует shell.js (tools/shell_smoke_test.js)");
       assert.strictEqual(s.$("langHost").byClass("lang-btn").length, 4); assert.strictEqual(s.doc.title, "Товары — Узнать товар");
       const made = s.urls.made; assert.ok(made >= 2); (s.win._ev.pagehide || []).forEach((fn) => fn()); assert.strictEqual(s.urls.revoked.length, made, "все блоб-адреса миниатюр освобождены");
     });

@@ -14,8 +14,14 @@ const html = fs.readFileSync(process.env.ADMIN_HTML || path.join(__dirname, ".."
 assert.ok(/<script src="admin\.js"><\/script>/.test(html), "admin.html должна подключать admin.js");
 assert.ok(!/<script>/.test(html), "в admin.html не должно быть встроенных <script>");
 const script = fs.readFileSync(process.env.ADMIN_JS || path.join(__dirname, "..", "frontend", "admin.js"), "utf-8");
-assert.ok(/<script src="i18n\.js"><\/script>(\s*<script src="i18n\.[a-z-]+\.js"><\/script>){4}\s*<script src="auth\.js"><\/script>\s*<script src="admin\.js">/.test(html),
-          "admin.html: словари (i18n.js и четыре языка) и общий вход auth.js подключены до admin.js");
+{
+  const order = [...html.matchAll(/<script src="([^"]+)"/g)].map((m) => m[1]), at = (n) => order.indexOf(n);
+  assert.ok(/<script src="i18n\.js"><\/script>(\s*<script src="i18n\.[a-z-]+\.js"><\/script>){4}/.test(html) && at("i18n.en.js") < at("auth.js")
+            && at("auth.js") < at("shell.js") && at("shell.js") < at("admin.js") && at("admin.js") < order.lastIndexOf("boot.js"),
+            "admin.html: словари, общий вход auth.js и меню shell.js подключены до admin.js; меню запускает boot.js");
+  assert.ok(!/id="loginView"|id="loginForm"|id="loginUser"/.test(html), "своей формы входа больше нет — вход на login.html (2026-11-15)");
+  assert.ok(/<nav class="rail" id="rail" data-shell/.test(html) && /href="tokens\.css"/.test(html) && /href="ui\.css"/.test(html), "общий вид и общее меню");
+}
 const AuthMod = require(path.join(__dirname, "..", "frontend", "auth.js"));
 const FRONT = path.join(__dirname, "..", "frontend");
 const I18NMod = require(path.join(FRONT, "i18n.js"));
@@ -92,10 +98,10 @@ function makeEnv({token = null, hash = "", fetchImpl, lang = "ru"}) {
   const dom = makeDom();
   const session = token ? {shelf_audit_token: token} : {};
   const calls = [];
-  const windowListeners = {};
+  const windowListeners = {}, redirects = [];
   const ctx = {
     document: dom.document,
-    window: {location: {search: "", hash, protocol: "http:", origin: "http://srv:8000"}, addEventListener: (t, fn) => { windowListeners[t] = fn; }, I18N: i18n},
+    window: {location: {search: "", hash, protocol: "http:", origin: "http://srv:8000", pathname: "/ui/admin.html", replace: (u) => redirects.push(u)}, addEventListener: (t, fn) => { windowListeners[t] = fn; }, I18N: i18n},
     sessionStorage: {getItem: (k) => (k in session ? session[k] : null), setItem: (k, v) => { session[k] = String(v); }, removeItem: (k) => { delete session[k]; }},
     fetch: async (url, opts = {}) => { calls.push({url, opts}); return fetchImpl(url, opts, calls); },
     URL: {createObjectURL: () => "blob:fake", revokeObjectURL() {}},
@@ -106,7 +112,7 @@ function makeEnv({token = null, hash = "", fetchImpl, lang = "ru"}) {
   ctx.window.Auth = {create: () => AuthMod.create({fetch: ctx.fetch, sessionStorage: ctx.sessionStorage, location: ctx.window.location})};
   vm.createContext(ctx);
   vm.runInContext(script, ctx);
-  return {i18n, dom, session, calls, ctx, main: dom.document.getElementById("main"), windowListeners, run: (code) => vm.runInContext(code, ctx), el: (id) => dom.registry[id] || dom.document.getElementById(id)};
+  return {i18n, dom, session, calls, ctx, redirects, main: dom.document.getElementById("main"), windowListeners, run: (code) => vm.runInContext(code, ctx), el: (id) => dom.registry[id] || dom.document.getElementById(id)};
 }
 
 const ME_ADMIN = {username: "admin", role: "admin", permissions: ["store:manage", "camera:manage", "user:manage"], all_stores: true, store_ids: []};
@@ -132,11 +138,12 @@ async function test(name, fn) {
   const J = (v) => JSON.parse(JSON.stringify(v));
 
   // ================================================================ чистая логика
-  await test("pageFromHash: известные страницы, остальное — товары; разделов аудита больше нет", () => {
+  await test("pageFromHash: известные страницы, остальное — «Состояние программы»; разделов аудита больше нет", () => {
     assert.strictEqual(run(`pageFromHash("#/system")`), "system");
     assert.strictEqual(run(`pageFromHash("#/users?x=1")`), "users");
-    for (const gone of ["cameras", "overview", "stores", "evil"]) assert.strictEqual(run(`pageFromHash("#/${gone}")`), "products", gone);
-    assert.strictEqual(run(`pageFromHash("")`), "products");
+    for (const gone of ["cameras", "overview", "stores", "evil"]) assert.strictEqual(run(`pageFromHash("#/${gone}")`), "system", gone);
+    assert.strictEqual(run(`pageFromHash("")`), "system");
+    assert.strictEqual(run(`pageFromHash("#/products")`), "products", "прежний раздел товаров открывается по прямому адресу");
   });
   await test("карточка покупателя: в настройке только известные поля по порядку, срока годности нет и подделать нельзя", () => {
     assert.strictEqual(run(`JSON.stringify(buildCardFields(["description", "price", "expiry_date", "country"]))`),
@@ -149,12 +156,13 @@ async function test(name, fn) {
     assert.strictEqual(run(`fmtBytes(1536)`), "1.5 КБ");
     assert.strictEqual(run(`fmtBytes(null)`), "—");
   });
-  await test("меню админки: ровно «Товары», «Карточка для покупателя», «Пользователи», «Система»; ссылок на удалённые страницы нет", () => {
-    assert.deepStrictEqual(Array.from(html.matchAll(/data-page="(\w+)"/g), (m) => m[1]), ["products", "card", "users", "system"]);
+  await test("меню — общее (shell.js): разделы управления — пункты «Карточка покупателя», «Сотрудники», «Состояние программы»; ссылок на удалённые страницы нет", () => {
+    const Shell = require(path.join(FRONT, "shell.js"));
+    assert.deepStrictEqual(Shell.ITEMS.filter((i) => i.href.startsWith("admin.html")).map((i) => i.href), ["admin.html#/card", "admin.html#/users", "admin.html#/system"]);
     for (const gone of ["capture.html", "dashboard.html", "review.html", "setup.html", "#/overview", "#/cameras", "#/stores"]) {
       assert.ok(!html.includes(gone), `в админке не должно остаться: ${gone}`);
     }
-    assert.ok(html.includes('href="identify.html"') && html.includes('href="products.html"'));
+    assert.ok(Shell.ITEMS.some((i) => i.href === "identify.html") && Shell.ITEMS.some((i) => i.href === "products.html"));
   });
   await test("describeError: тексты сервера для 409/422/503, длинный список ошибок обрезается", () => {
     assert.strictEqual(run(`describeError(409, "Удалить нельзя: есть связанные записи")`), "Удалить нельзя: есть связанные записи");
@@ -198,10 +206,10 @@ async function test(name, fn) {
     assert.strictEqual(badgeText({is_active: false}), "отключён");                       // прежний сервер без status
   });
   // ================================================================ вход и права
-  await test("без токена — форма входа и ни одного запроса", async () => {
-    const e = makeEnv({fetchImpl: router([])});
+  await test("без токена — на страницу входа (с возвратом сюда) и ни одного запроса", async () => {
+    const e = makeEnv({hash: "#/users", fetchImpl: router([])});
     await sleep();
-    assert.strictEqual(e.el("loginView").style.display, "block");
+    assert.deepStrictEqual(e.redirects, ["login.html?next=admin.html%23%2Fusers"]);
     assert.strictEqual(e.calls.length, 0);
   });
   await test("не администратор: «Нужны права администратора», запросов к админ-API нет", async () => {
@@ -210,24 +218,13 @@ async function test(name, fn) {
     assert.ok(e.main.textContent.includes("Нужны права администратора"));
     assert.ok(!e.calls.some((c) => c.url.includes("/admin/") || c.url.includes("/cameras") || c.url.includes("/users")));
   });
-  await test("вход: токен в общем хранилище, панель открывается на разделе «Товары»", async () => {
-    const e = makeEnv({fetchImpl: router(baseRoutes([["/auth/login", () => json(200, {access_token: "NEW"})], ["/admin/products", () => json(200, EMPTY_PRODUCTS)]]))});
-    e.el("loginUser").value = "admin"; e.el("loginPass").value = "pw";
-    await e.el("loginForm").listeners.submit[0]({preventDefault() {}});
-    await sleep(40);
-    assert.strictEqual(e.session.shelf_audit_token, "NEW");
-    assert.strictEqual(e.el("appView").style.display, "flex");
-    assert.strictEqual(e.el("who").textContent, "admin · Администратор");
-    assert.strictEqual(e.el("loginPass").value, "");
-    assert.ok(e.calls.some((c) => c.url.includes("/admin/products")), "первая страница — товары");
-    assert.ok(!e.calls.some((c) => /overview|daily-report|\/cameras|planograms/.test(c.url)), "запросов к удалённым разделам нет");
-  });
-  await test("401 посреди работы: токен стёрт, снова форма входа", async () => {
-    const e = makeEnv({token: "old", fetchImpl: router([["/auth/me", () => json(200, ME_ADMIN)], ["/admin/products", () => json(401, {})]])});
+  await test("без раздела — «Состояние программы»; 401 посреди работы: токен стёрт, на страницу входа с причиной", async () => {
+    const e = makeEnv({token: "old", hash: "#/products", fetchImpl: router([["/auth/me", () => json(200, ME_ADMIN)], ["/admin/products", () => json(401, {})]])});
     await sleep(40);
     assert.strictEqual(e.session.shelf_audit_token, undefined);
-    assert.strictEqual(e.el("loginView").style.display, "block");
-    assert.ok(e.el("loginError").textContent.includes("Сессия истекла"));
+    assert.deepStrictEqual(e.redirects, ["login.html?next=admin.html%23%2Fproducts&why=expired"]);
+    assert.strictEqual(e.run("pageFromHash('')"), "system");
+    assert.strictEqual(e.run("pageFromHash('#/nope')"), "system");
   });
 
   // ================================================================ пользователи, товары, система
@@ -329,7 +326,7 @@ async function test(name, fn) {
   // ================================================================ язык
   await test("язык: все надписи страницы (data-i18n) есть в четырёх словарях; ключи admin.* одинаковы во всех языках", () => {
     const keys = [...html.matchAll(/data-i18n="([^"]+)"/g)].map((m) => m[1]);
-    assert.ok(keys.length >= 15);
+    assert.ok(keys.length >= 2);
     for (const [code, dict] of Object.entries(DICTS)) for (const k of keys) assert.ok(typeof dict[k] === "string", `${code}: нет ${k}`);
     const ak = (d) => Object.keys(d).filter((k) => k.startsWith("admin.")).sort();
     for (const code of ["uz", "uz-Cyrl", "en"]) assert.deepStrictEqual(ak(DICTS[code]), ak(DICTS.ru), code);
@@ -348,12 +345,11 @@ async function test(name, fn) {
     assert.ok(t.includes("not responding") && t.includes("5.0 GB") && t.includes("files: 7+") && t.includes("(incomplete count)"), t);
     assert.ok(t.includes("Photo folder") && t.includes("Новый параметр"), "известный ключ переведён, неизвестный — подпись сервера");
     assert.ok(t.includes("Settings are read-only") && !t.includes("по-русски"));
-    assert.strictEqual(e.el("who").textContent, "admin · Administrator");
-    assert.strictEqual(e.el("pageTitle").textContent, "System");
+    assert.strictEqual(e.el("pageTitle").textContent, DICTS.en["nav.system"]);
     e.i18n.setLang("uz-Cyrl"); await sleep(40);
     t = e.main.textContent;
     assert.ok(t.includes("жавоб бермаяпти") && t.includes("5.0 ГБ") && t.includes("Суратлар папкаси"), t);
-    assert.strictEqual(e.el("pageTitle").textContent, "Тизим");
+    assert.strictEqual(e.el("pageTitle").textContent, DICTS["uz-Cyrl"]["nav.system"]);
   });
   await test("язык: ошибка сервера с кодом — на языке человека (запрет удаления с причинами), без кода — текст сервера", () => {
     const body = {detail: "Удалить нельзя: ...", code: "delete_blocked", params: {reasons: [{key: "server.blocker_store_users", params: {n: 2}}]}};
@@ -364,31 +360,6 @@ async function test(name, fn) {
     assert.strictEqual(run(`describeError(403)`), "Not enough permissions");
     pure.i18n.setLang("ru");
   });
-  await test("язык: сообщение входа хранится ключом и переводится при смене языка", async () => {
-    const e = makeEnv({lang: "uz", fetchImpl: router([["/auth/login", () => json(401, {})]])});
-    e.el("loginUser").value = "a"; e.el("loginPass").value = "b";
-    await e.el("loginForm").listeners.submit[0]({preventDefault() {}});
-    assert.strictEqual(e.el("loginError").textContent, "Login yoki parol notoʻgʻri");
-    e.i18n.setLang("en"); await sleep();
-    assert.strictEqual(e.el("loginError").textContent, "Wrong username or password");
-  });
-
-  await test("вход со вторым фактором в управлении: поле кода, второй шаг, токен; пароль во второй шаг не уходит", async () => {
-    const e = makeEnv({fetchImpl: router([["/auth/login/2fa", () => json(200, {access_token: "tok-2fa"})],
-                                          ["/auth/login", () => json(200, {mfa_required: true, mfa_token: "pass-0123456789", expires_in: 300})],
-                                          ["/auth/me", () => json(200, {username: "admin", role: "admin", permissions: ["store:manage"]})],
-                                          ["/stores", () => json(200, [])], ["/admin/products", () => json(200, {total: 0, items: []})]])});
-    e.el("loginUser").value = "admin"; e.el("loginPass").value = "secret-pass";
-    await e.el("loginForm").listeners.submit[0]({preventDefault() {}});
-    assert.strictEqual(e.el("loginCodeField").hidden, false);
-    assert.strictEqual(e.el("loginError").textContent, "Пароль верный. Введите 6 цифр из приложения-аутентификатора на телефоне.");
-    e.el("loginCode").value = "123456";
-    await e.el("loginForm").listeners.submit[0]({preventDefault() {}}); await sleep(20);
-    assert.strictEqual(e.session.shelf_audit_token, "tok-2fa");
-    assert.strictEqual(e.el("loginCodeField").hidden, true);
-    assert.ok(!String(e.calls.find((c) => c.url.endsWith("/auth/login/2fa")).opts.body).includes("secret-pass"));
-  });
-
   await test("важная операция: сервер просит подтвердить — окно пароля и кода, подтверждение, повтор запроса; отказ — запрос не повторяется", async () => {
     const users = [{id: "u1", username: "admin", role: "admin", is_active: true, store_ids: [], created_at: "x"},
                    {id: "u2", username: "m.karimov", role: "merchandiser", is_active: true, store_ids: ["s1"], created_at: "x"}];
@@ -418,7 +389,26 @@ async function test(name, fn) {
     await sleep(40);
     assert.ok(e.main.textContent.includes("Здесь управление недоступно") && e.main.textContent.includes("http://localhost:8001/ui/admin.html"));
     assert.ok(!e.calls.some((c) => /\/users|\/stores|\/admin\//.test(c.url)));
-    assert.strictEqual(e.el("who").textContent, "admin · Администратор · владелец");
+  });
+
+  await test("важная операция на этом компьютере: у человека есть ПИН — подтверждение ПИН-кодом, не паролем", async () => {
+    const users = [{id: "u1", username: "admin", role: "admin", is_active: true, store_ids: [], created_at: "x"},
+                   {id: "u2", username: "m.karimov", role: "merchandiser", is_active: true, store_ids: ["s1"], created_at: "x"}];
+    let resets = 0, confirmed = false, body = null;
+    const e = makeEnv({token: "t", hash: "#/users", fetchImpl: router(baseRoutes([
+      ["/auth/local", () => json(200, {this_computer: true, users: [{username: "admin", role: "admin", is_owner: true}], setup_needed: false})],
+      ["/users/u2/2fa/reset", () => { resets++; return confirmed ? json(200, {status: "reset"}) : json(403, {detail: "…", code: "reauth_required", params: {}}); }],
+      ["/auth/reauth", (u, o) => { body = JSON.parse(o.body); if (body.pin !== "482917") return json(422, {code: "pin_wrong", params: {}}); confirmed = true; return json(200, {status: "confirmed"}); }],
+      [/\/api\/v1\/users$/, () => json(200, users)]]))});
+    await sleep(40);
+    const row = findAll(e.main, (n) => n.tag === "tr" && n.textContent.includes("m.karimov"))[0];
+    const click = button(row, "Сбросить 2FA").click();
+    await sleep(); await e.el("confirmOk").click(); await sleep(30);
+    assert.ok(e.dom.registry.reauthPin && !e.dom.registry.reauthPass, "окно спрашивает ПИН-код, а не пароль");
+    e.el("reauthPin").value = "000001"; await e.el("reauthOk").click(); await sleep();
+    assert.strictEqual(e.el("reauthError").textContent, DICTS.ru["server.pin_wrong"]);
+    e.el("reauthPin").value = "482917"; await e.el("reauthOk").click(); await click; await sleep(20);
+    assert.deepStrictEqual(body, {pin: "482917"}); assert.strictEqual(resets, 2);
   });
 
   if (unhandled.length) { failed++; console.log(`FAIL необработанные ошибки обработчиков:\n     ${unhandled.map((e) => e && e.stack || e).join("\n     ")}`); }

@@ -80,7 +80,7 @@ function boot(opts) {
     assert.ok(tiles[0].textContent.includes("Кола 0,5 л") && tiles[0].textContent.includes("9 000"));
     assert.strictEqual(tiles[0].querySelector("img").getAttribute("src"), "/api/v1/public/photo/r1");
     assert.strictEqual(tiles[1].querySelector("img"), null, "нет фото — нет картинки");
-    assert.ok(tiles[1].textContent.includes("Цена не указана"));
+    assert.ok(!tiles[1].textContent.includes("Цена не указана") && !tiles[1].textContent.includes("сум"), "нет цены — на плитке о цене ничего");
     assert.ok(p.$("countNote").textContent.includes("2"));
     assert.strictEqual(p.$("moreBtn").hidden, true);
     assert.ok(p.calls.every((c) => c.options && c.options.credentials === "omit"));

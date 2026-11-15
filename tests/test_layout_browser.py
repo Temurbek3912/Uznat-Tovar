@@ -19,7 +19,7 @@ playwright_sync = pytest.importorskip("playwright.sync_api")
 from app.core.security_headers import SECURITY_HEADERS  # noqa: E402
 
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
-PAGES = ("identify.html", "settings.html", "products.html", "preview.html", "index.html", "admin.html")
+PAGES = ("identify.html", "settings.html", "products.html", "preview.html", "index.html", "admin.html", "login.html")
 LANGS = ("ru", "uz", "uz-Cyrl", "en")
 WIDTHS = (320, 390, 1280)
 
@@ -79,21 +79,23 @@ def test_no_horizontal_scroll_and_no_js_errors_in_every_language(browser, base_u
     assert problems == []
 
 
-@pytest.mark.parametrize("lang, expected", [("uz", "Mahsulotni aniqlash"), ("uz-Cyrl", "Маҳсулотни аниқлаш"), ("en", "Identify Product")])
-def test_home_page_shows_the_chosen_language_and_switches_on_the_fly(browser, base_url, lang, expected):
-    """Главная (вход без сервера API): заголовок, подписи формы и переключатель языков; нажатие на «Русский» переводит на лету."""
+@pytest.mark.parametrize("lang, expected", [("uz", "Kirish"), ("uz-Cyrl", "Кириш"), ("en", "Sign in")])
+def test_sign_in_page_shows_the_chosen_language_and_switches_on_the_fly(browser, base_url, lang, expected):
+    """Главная без входа ведёт на страницу входа (редизайн 2026-11-15); без сервера API — вход логином и паролем. Заголовок
+    и переключатель языков; нажатие на «Русский» переводит на лету."""
     context = browser.new_context(viewport={"width": 390, "height": 800})
     context.add_init_script(f"localStorage.setItem('app_lang', '{lang}');")
     page = context.new_page()
     page.goto(f"{base_url}/index.html")
-    page.wait_for_timeout(300)
-    assert page.inner_text("#loginView h1") == expected
-    assert page.locator("#langSwitch .lang-btn").count() == 4
-    assert page.locator(f'#langSwitch .lang-btn[data-lang="{lang}"]').get_attribute("aria-pressed") == "true"
-    page.click('#langSwitch .lang-btn[data-lang="ru"]')
+    page.wait_for_url("**/login.html")
+    page.wait_for_selector("#passView:not([hidden])")
+    assert page.inner_text("#passView h1") == expected
+    assert page.locator("#langHost .lang-btn").count() == 4
+    assert page.locator(f'#langHost .lang-btn[data-lang="{lang}"]').get_attribute("aria-pressed") == "true"
+    page.click('#langHost .lang-btn[data-lang="ru"]')
     page.wait_for_timeout(100)
-    assert page.inner_text("#loginView h1") == "Узнать товар" and page.evaluate("document.documentElement.lang") == "ru"
-    assert page.title() == "Узнать товар — главная"
+    assert page.inner_text("#passView h1") == "Вход" and page.evaluate("document.documentElement.lang") == "ru"
+    assert page.title() == "Вход — Узнать товар"
     context.close()
 
 
@@ -197,16 +199,17 @@ def test_two_step_sign_in_and_security_panel_work_in_chromium_under_csp(browser,
     page = context.new_page()
     errors = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))
-    page.goto(f"{base_url}/settings.html")
+    page.goto(f"{base_url}/login.html?next=settings.html")      # вход — на единой странице (редизайн 2026-11-15)
     page.fill("#loginUser", "admin")
     page.fill("#loginPass", "secret-pass")
-    page.click("#loginBtn")
+    page.click("#passBtn")
     page.wait_for_selector("#loginCodeField:not([hidden])")
     page.fill("#loginCode", "000000")
-    page.click("#loginBtn")
-    page.wait_for_selector("#loginError:has-text('4')")          # wait_for_function со строкой запрещён CSP страницы (и правильно)
+    page.click("#passBtn")
+    page.wait_for_selector("#passError:has-text('4')")          # wait_for_function со строкой запрещён CSP страницы (и правильно)
     page.fill("#loginCode", "123456")
-    page.click("#loginBtn")
+    page.click("#passBtn")
+    page.wait_for_url("**/settings.html")
     page.wait_for_selector("#securityGroup:not([hidden])")
     page.wait_for_selector("#sessionList li >> nth=1")
     assert page.locator("#sessionList li").count() == 2
@@ -235,7 +238,7 @@ def test_two_step_sign_in_and_security_panel_work_in_chromium_under_csp(browser,
     context.close()
 
 
-def test_two_step_sign_in_on_the_home_page_in_chromium(browser, base_url):
+def test_two_step_sign_in_on_the_sign_in_page_in_chromium(browser, base_url):
     state = {}
     context = browser.new_context(viewport={"width": 390, "height": 800})
     context.add_init_script("window.__csp = []; document.addEventListener('securitypolicyviolation', (e) => window.__csp.push(e.violatedDirective));")
@@ -245,13 +248,14 @@ def test_two_step_sign_in_on_the_home_page_in_chromium(browser, base_url):
     errors = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))
     page.goto(f"{base_url}/index.html")
+    page.wait_for_url("**/login.html")
     page.fill("#loginUser", "admin")
     page.fill("#loginPass", "secret-pass")
-    page.click("#loginBtn")
+    page.click("#passBtn")
     page.wait_for_selector("#loginCodeField:not([hidden])")
     page.fill("#loginCode", "123456")
-    page.click("#loginBtn")
-    page.wait_for_selector("#homeView:not([hidden])")
+    page.click("#passBtn")
+    page.wait_for_url("**/products.html")                      # администратор — сразу к товарам
     assert page.evaluate("sessionStorage.getItem('shelf_audit_token')") == "tok-2fa"
     assert (errors, page.evaluate("window.__csp")) == ([], [])
     context.close()
@@ -286,9 +290,10 @@ def test_temporary_password_first_sign_in_in_chromium(browser, base_url):
     page = context.new_page()
     errors = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))
-    page.goto(f"{base_url}/settings.html")
+    page.goto(f"{base_url}/login.html")
     page.fill("#loginUser", "new.merch"); page.fill("#loginPass", "7KQM-X4HP-9TDW")
-    page.click("#loginBtn")
+    page.click("#passBtn")
+    page.wait_for_url("**/settings.html")                      # временный пароль — свой пароль задаётся в «Настройках»
     page.wait_for_selector("#initialPanel:not([hidden])")
     assert page.is_hidden("#loginPanel") and page.is_hidden("#initialCodeField")
     assert page.evaluate("sessionStorage.getItem('shelf_audit_token')") is None

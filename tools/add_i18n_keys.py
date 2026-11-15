@@ -19,7 +19,9 @@ FILES = {"ru": "i18n.ru.js", "uz": "i18n.uz.js", "uz-Cyrl": "i18n.uz-cyrl.js", "
 def add(entries: dict[str, dict[str, str]]) -> None:
     for lang, name in FILES.items():
         path = ROOT / name
-        text = path.read_text(encoding="utf-8")
+        raw = path.read_bytes().decode("utf-8")
+        eol = "\r\n" if raw.count("\r\n") * 2 > raw.count("\n") else "\n"      # перевод строки файла сохраняется как был
+        text = raw.replace("\r\n", "\n")
         new_lines = []
         for key, values in entries.items():
             value = values[lang]
@@ -35,7 +37,7 @@ def add(entries: dict[str, dict[str, str]]) -> None:
             if not before.endswith(","):
                 before += ","
             text = before + "\n" + "\n".join(new_lines).rstrip(",") + text[end:]
-        path.write_text(text, encoding="utf-8", newline="\n")
+        path.write_bytes(text.replace("\n", eol).encode("utf-8"))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,206 @@
+<title>Новый вид «Узнать товар»</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: три макета экрана друг под другом, каждый с подписью «что изменилось». Цвета — из tokens.css проекта (графит, бумага, жёлтый ценник). */
+:root{
+  --bg:#F3F4F6; --surface:#FFFFFF; --surface-2:#EAECEF; --ink:#171B21; --muted:#59636F; --line:#DDE1E6; --edge:#808A96;
+  --action:#FFC81E; --on-action:#171B21; --link:#1D4ED8; --ok:#17693D; --ok-soft:#E1F2E8; --danger:#C4262E; --frame:#D3D7DD;
+  --font: system-ui,-apple-system,"Segoe UI Variable Text","Segoe UI",Roboto,"Noto Sans",Arial,sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0F1216; --surface:#181C22; --surface-2:#222831; --ink:#ECEFF3; --muted:#A3ADB9; --line:#2C333D; --edge:#6B7684;
+  --action:#FFC81E; --on-action:#171B21; --link:#8AB4FF; --ok:#5FD08F; --ok-soft:#173326; --danger:#FF7A80; --frame:#2C333D; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0F1216; --surface:#181C22; --surface-2:#222831; --ink:#ECEFF3; --muted:#A3ADB9; --line:#2C333D; --edge:#6B7684;
+  --action:#FFC81E; --on-action:#171B21; --link:#8AB4FF; --ok:#5FD08F; --ok-soft:#173326; --danger:#FF7A80; --frame:#2C333D; color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font-family:var(--font);font-size:15px;line-height:1.5;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:24px 48px}
+.wrap{max-width:1080px;margin:0 auto;display:grid;gap:40px}
+h1{font-size:1.75rem;margin:0;text-wrap:balance}
+h2{font-size:1.25rem;margin:0;text-wrap:balance}
+.lead{color:var(--muted);margin:6px 0 0;max-width:65ch}
+.shot{display:grid;gap:14px}
+.shot-head{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
+.tag{background:var(--action);color:var(--on-action);font-weight:700;border-radius:4px;padding:2px 8px;font-size:.8rem;letter-spacing:.03em}
+.notes{margin:0;padding-left:20px;color:var(--muted);max-width:70ch}
+.notes b{color:var(--ink);font-weight:600}
+/* окно-рамка */
+.win{border:1px solid var(--frame);border-radius:12px;overflow:hidden;background:var(--bg);box-shadow:0 10px 30px rgba(0,0,0,.08)}
+.bar{display:flex;gap:6px;align-items:center;padding:8px 12px;background:var(--surface-2);border-bottom:1px solid var(--line);font-size:.75rem;color:var(--muted)}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--edge);opacity:.5}
+.url{margin-left:10px;background:var(--surface);border-radius:6px;padding:2px 10px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* общие элементы интерфейса */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:10px;font-weight:600;border:1px solid var(--edge);background:var(--surface);color:var(--ink);font:inherit;font-weight:600}
+.btn.main{background:var(--action);color:var(--on-action);border-color:var(--on-action)}
+.btn.wide{width:100%}
+.field{display:grid;gap:6px}
+.field label{font-weight:600;font-size:.9rem}
+.input{min-height:44px;border:1px solid var(--edge);border-radius:6px;background:var(--surface);padding:0 12px;display:flex;align-items:center;color:var(--muted)}
+.hint{font-size:.85rem;color:var(--muted)}
+kbd{font-family:inherit;font-size:.75rem;border:1px solid var(--edge);border-bottom-width:2px;border-radius:4px;padding:0 5px;color:var(--muted);background:var(--surface)}
+/* 1. вход */
+.login{display:grid;place-items:center;padding:40px 16px;min-height:380px}
+.login-card{width:min(360px,100%);background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px;display:grid;gap:18px;text-align:center}
+.logo{width:48px;height:48px;border-radius:12px;background:var(--action);color:var(--on-action);display:grid;place-items:center;font-weight:800;font-size:1.3rem;margin:0 auto}
+.pin{display:flex;gap:10px;justify-content:center}
+.pin span{width:44px;height:52px;border:1px solid var(--edge);border-radius:8px;display:grid;place-items:center;font-size:1.6rem;background:var(--surface)}
+.pin span.f{border-color:var(--ink);border-width:2px}
+.small-link{color:var(--link);font-size:.9rem}
+/* 2. управление */
+.console{display:grid;grid-template-columns:220px 1fr;min-height:470px}
+.side{background:var(--surface);border-right:1px solid var(--line);padding:16px 12px;display:grid;align-content:start;gap:4px}
+.brand{display:flex;gap:10px;align-items:center;font-weight:700;padding:0 8px 14px}
+.brand .logo{width:32px;height:32px;font-size:1rem;margin:0;border-radius:8px}
+.nav{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;color:var(--ink)}
+.nav.on{background:var(--surface-2);font-weight:600}
+.nav .n{margin-left:auto;font-size:.75rem;color:var(--muted)}
+.ico{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8}
+.sep{height:1px;background:var(--line);margin:10px 8px}
+.content{padding:20px 24px;display:grid;align-content:start;gap:16px;min-width:0}
+.top{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.top h2{margin-right:auto}
+.search{flex:1 1 260px;min-height:40px;border:1px solid var(--edge);border-radius:8px;background:var(--surface);display:flex;align-items:center;gap:8px;padding:0 12px;color:var(--muted)}
+.search kbd{margin-left:auto}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:.85rem;background:var(--surface)}
+.chip.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.table{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.9rem;min-width:560px}
+th{text-align:left;font-weight:600;color:var(--muted);font-size:.8rem;padding:10px 12px;border-bottom:1px solid var(--line)}
+td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+.thumb{width:36px;height:36px;border-radius:6px;background:var(--surface-2);display:inline-block;vertical-align:middle;margin-right:10px}
+.num{font-variant-numeric:tabular-nums;text-align:right}
+.pill{border-radius:999px;padding:2px 10px;font-size:.78rem;font-weight:600;white-space:nowrap}
+.pill.ok{background:var(--ok-soft);color:var(--ok)}
+.pill.warn{background:#FFF3C4;color:#6B5200}
+.status{display:flex;gap:8px;align-items:center;font-size:.85rem;color:var(--muted)}
+.led{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+/* 3. телефоны */
+.phones{display:flex;gap:28px;flex-wrap:wrap;justify-content:center;padding:28px 16px;background:var(--surface-2)}
+.phone{width:280px;max-width:100%;border:8px solid var(--ink);border-radius:34px;background:var(--bg);overflow:hidden;display:grid;align-content:start}
+.p-top{display:flex;justify-content:space-between;align-items:center;padding:14px 16px 6px;font-weight:700}
+.lang{font-size:.75rem;font-weight:600;border:1px solid var(--edge);border-radius:999px;padding:2px 8px}
+.p-body{padding:8px 16px 18px;display:grid;gap:12px}
+.cam{height:200px;border-radius:14px;background:#171B21;position:relative;display:grid;place-items:center;color:#fff;font-size:.85rem}
+.cam::before{content:"";position:absolute;inset:34px 46px;border:3px solid var(--action);border-radius:10px}
+.cam span{position:relative;opacity:.8;align-self:end;margin-bottom:10px}
+.ticket{background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:14px;display:grid;gap:6px}
+.ticket .img{height:110px;border-radius:4px;background:var(--surface-2)}
+.ticket .price{font-size:1.6rem;font-weight:800;font-variant-numeric:tabular-nums}
+.kv{display:flex;justify-content:space-between;font-size:.85rem;border-top:1px solid var(--line);padding-top:6px;color:var(--muted)}
+.kv b{color:var(--ink);font-weight:600}
+.tabs{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--line);background:var(--surface);font-size:.75rem;text-align:center}
+.tabs div{padding:8px 0 10px;color:var(--muted)}
+.tabs .on{color:var(--ink);font-weight:700}
+@media (max-width:720px){.console{grid-template-columns:1fr}.side{display:none}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Новый вид «Узнать товар»</h1>
+    <p class="lead">Три образца. Один стиль на всех страницах: светлая и тёмная тема, крупные кнопки, понятные слова, 4 языка.</p>
+  </header>
+
+  <section class="shot">
+    <div class="shot-head"><span class="tag">1</span><h2>Вход на этом компьютере</h2></div>
+    <div class="win">
+      <div class="bar"><i class="dot"></i><i class="dot"></i><i class="dot"></i><span class="url">localhost:8000 · Управление</span></div>
+      <div class="login">
+        <div class="login-card">
+          <div class="logo">У</div>
+          <div><h2>Здравствуйте, Владелец</h2><div class="hint">Введите ПИН-код</div></div>
+          <div class="pin"><span class="f">•</span><span class="f">•</span><span class="f">•</span><span></span><span></span><span></span></div>
+          <button class="btn main wide" type="button">Войти</button>
+          <span class="small-link">Забыли ПИН?</span>
+        </div>
+      </div>
+    </div>
+    <ul class="notes">
+      <li><b>6 цифр вместо длинного пароля</b> — только на компьютере, где работает программа.</li>
+      <li><b>Первый вход</b> — мастер «Придумайте ПИН» прямо в браузере, без чёрного окна.</li>
+      <li><b>Забыли ПИН</b> — новый ставится кнопкой из окна программы на этом компьютере.</li>
+    </ul>
+  </section>
+
+  <section class="shot">
+    <div class="shot-head"><span class="tag">2</span><h2>Управление на ноутбуке</h2></div>
+    <div class="win">
+      <div class="bar"><i class="dot"></i><i class="dot"></i><i class="dot"></i><span class="url">localhost:8000 · Товары</span></div>
+      <div class="console">
+        <nav class="side">
+          <div class="brand"><span class="logo">У</span>Узнать товар</div>
+          <div class="nav on"><svg class="ico" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg>Товары<span class="n">199</span></div>
+          <div class="nav"><svg class="ico" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Добавить товар</div>
+          <div class="nav"><svg class="ico" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h5"/></svg>Карточка покупателя</div>
+          <div class="nav"><svg class="ico" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7"/><rect x="13" y="4" width="7" height="7"/><rect x="4" y="13" width="7" height="7"/><path d="M14 14h6v6h-6z"/></svg>QR для покупателей</div>
+          <div class="nav"><svg class="ico" viewBox="0 0 24 24"><circle cx="9" cy="9" r="3"/><path d="M3 19c1-3 3.5-4.5 6-4.5s5 1.5 6 4.5M16 7h5M16 11h5"/></svg>Сотрудники</div>
+          <div class="sep"></div>
+          <div class="nav"><svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg>Проверить по фото</div>
+          <div class="nav"><svg class="ico" viewBox="0 0 24 24"><path d="M4 12h4l2-5 4 10 2-5h4"/></svg>Состояние программы</div>
+          <div class="nav"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>Настройки</div>
+        </nav>
+        <div class="content">
+          <div class="top">
+            <h2>Товары</h2>
+            <span class="status"><i class="led"></i>Программа работает</span>
+            <button class="btn main" type="button">+ Добавить товар <kbd>N</kbd></button>
+          </div>
+          <div class="search"><svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg>Найти по названию или штрихкоду<kbd>/</kbd></div>
+          <div class="chips"><span class="chip on">Все · 199</span><span class="chip">Напитки · 52</span><span class="chip">Сладости · 31</span><span class="chip">Бытовая химия · 18</span><span class="chip">Без фото · 4</span></div>
+          <div class="table">
+            <table>
+              <thead><tr><th>Товар</th><th>Штрихкод</th><th class="num">Цена, сум</th><th>Узнаётся</th></tr></thead>
+              <tbody>
+                <tr><td><i class="thumb"></i>Coca-Cola 1,5 л</td><td>5449000000439</td><td class="num">12 000</td><td><span class="pill ok">Хорошо</span></td></tr>
+                <tr><td><i class="thumb"></i>Hydrolife вода 0,5 л</td><td>4780010870015</td><td class="num">3 500</td><td><span class="pill ok">Хорошо</span></td></tr>
+                <tr><td><i class="thumb"></i>Шоколад «Pobeda» 100 г</td><td>4600943010326</td><td class="num">—</td><td><span class="pill warn">Добавьте 2 фото</span></td></tr>
+                <tr><td><i class="thumb"></i>Чай «Ahmad» 100 пак.</td><td>0054881005500</td><td class="num">38 000</td><td><span class="pill ok">Хорошо</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    <ul class="notes">
+      <li><b>Одна страница управления</b> вместо пяти разных: меню слева, всё под рукой.</li>
+      <li><b>Клавиши:</b> <kbd>/</kbd> — поиск, <kbd>N</kbd> — новый товар, <kbd>Esc</kbd> — закрыть.</li>
+      <li><b>Подсказки вместо пустоты:</b> «Добавьте 2 фото», «Программа работает», без технических слов.</li>
+    </ul>
+  </section>
+
+  <section class="shot">
+    <div class="shot-head"><span class="tag">3</span><h2>Телефон покупателя</h2></div>
+    <div class="win">
+      <div class="phones">
+        <div class="phone">
+          <div class="p-top">Узнать товар<span class="lang">RU</span></div>
+          <div class="p-body">
+            <div class="cam"><span>Наведите на товар</span></div>
+            <button class="btn main wide" type="button">Сфотографировать</button>
+            <button class="btn wide" type="button">Выбрать из галереи</button>
+          </div>
+          <div class="tabs"><div class="on">Узнать</div><div>Все товары</div></div>
+        </div>
+        <div class="phone">
+          <div class="p-top">Узнать товар<span class="lang">RU</span></div>
+          <div class="p-body">
+            <div class="ticket">
+              <div class="img"></div>
+              <b>Coca-Cola 1,5 л</b>
+              <span class="price">12 000 сум</span>
+              <div class="kv">Страна<b>Узбекистан</b></div>
+              <div class="kv">Объём<b>1,5 л</b></div>
+            </div>
+            <button class="btn main wide" type="button">Узнать ещё товар</button>
+          </div>
+          <div class="tabs"><div class="on">Узнать</div><div>Все товары</div></div>
+        </div>
+      </div>
+    </div>
+    <ul class="notes">
+      <li><b>Всё как сейчас по смыслу</b> — тот же QR, тот же адрес; страница просто чище.</li>
+      <li><b>Две вкладки внизу:</b> «Узнать» и «Все товары», выбор языка — одной кнопкой.</li>
+    </ul>
+  </section>
+</div>

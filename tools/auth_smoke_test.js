@@ -7,7 +7,7 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const Auth = require(path.join(__dirname, "..", "frontend", "auth.js"));
-const AppNav = require(path.join(__dirname, "..", "frontend", "nav.js"));
+const AppNav = require(path.join(__dirname, "..", "frontend", "shell.js"));   // меню (раньше nav.js) хранит права рядом с токеном
 
 let passed = 0;
 async function test(name, fn) { try { await fn(); passed++; } catch (err) { console.error("FAIL:", name); throw err; } }
@@ -57,7 +57,7 @@ const R = (status, json, extra) => Object.assign({ status, json }, extra || {});
     assert.strictEqual(Auth.create(makeWin()).apiBase(), "https://catalog.example.uz");
   });
 
-  await test("токен: запись, чтение, заголовок Authorization; пустое значение стирает; ключи те же, что у старого меню (nav.js)", async () => {
+  await test("токен: запись, чтение, заголовок Authorization; пустое значение стирает; ключи те же, что у меню (shell.js)", async () => {
     const win = makeWin(), a = Auth.create(win);
     assert.strictEqual(a.getToken(), null); assert.deepStrictEqual(a.authHeaders(), {});
     a.setToken("tok-1");
@@ -276,6 +276,39 @@ const R = (status, json, extra) => Object.assign({ status, json }, extra || {});
     const down = makeWin({ replies: [new Error("offline")] }), b = Auth.create(down); b.setToken("t");
     await b.logout(); assert.strictEqual(b.getToken(), null);
     const nobody = makeWin(), c = Auth.create(nobody); await c.logout(); assert.strictEqual(nobody.calls.length, 0, "не входили — серверу не пишем");
+  });
+
+  await test("ПИН на этом компьютере (2026-11-15): вход сохраняет токен; ошибка — ключ server.<код>; 429 — ожидание; setup и reauth", async () => {
+    const ok = makeWin({ replies: [R(200, { access_token: "pin-tok" })] }), a = Auth.create(ok);
+    assert.deepStrictEqual(await a.pinLogin("admin", "482917"), { ok: true });
+    assert.strictEqual(a.getToken(), "pin-tok");
+    assert.strictEqual(ok.calls[0].url, "https://catalog.example.uz/api/v1/auth/pin");
+    assert.deepStrictEqual(JSON.parse(ok.calls[0].init.body), { username: "admin", pin: "482917" });
+    const bad = makeWin({ replies: [R(401, { code: "pin_wrong" })] }), b = Auth.create(bad);
+    const r = await b.pinLogin("admin", "000001");
+    assert.strictEqual(r.ok, false); assert.strictEqual(r.key, "server.pin_wrong"); assert.strictEqual(b.getToken(), null);
+    const far = await Auth.create(makeWin({ replies: [R(403, { code: "pin_local_only" })] })).pinLogin("admin", "482917");
+    assert.strictEqual(far.status, 403); assert.strictEqual(far.key, "server.pin_local_only");
+    const slow = await Auth.create(makeWin({ replies: [R(429, {}, { headers: { "Retry-After": "600" } })] })).pinLogin("admin", "1");
+    assert.strictEqual(slow.key, "login.throttled");
+    const setup = makeWin({ replies: [R(200, { valid: true, username: "admin" }), R(200, { access_token: "s-tok" })] }), c = Auth.create(setup);
+    assert.deepStrictEqual(await c.setupCheck("TOKEN-1234567"), { valid: true, username: "admin" });
+    assert.deepStrictEqual(await c.setupPin("TOKEN-1234567", "482917"), { ok: true }); assert.strictEqual(c.getToken(), "s-tok");
+    const re = makeWin({ replies: [R(200, { status: "confirmed" })] }), d = Auth.create(re); d.setToken("t");
+    assert.deepStrictEqual(await d.reauthPin("482917"), { ok: true });
+    assert.deepStrictEqual(JSON.parse(re.calls[0].init.body), { pin: "482917" }); assert.strictEqual(re.calls[0].init.headers.Authorization, "Bearer t");
+    const local = await Auth.create(makeWin({ replies: [new Error("down")] })).localInfo();
+    assert.deepStrictEqual(local, { this_computer: false, users: [], setup_needed: false }, "нет связи — как с другого устройства");
+  });
+
+  await test("адрес страницы входа: возврат сюда (с разделом управления), причина; чужие и пустые страницы не передаются", async () => {
+    assert.strictEqual(Auth.loginUrlOf({ pathname: "/ui/products.html", hash: "" }), "login.html?next=products.html");
+    assert.strictEqual(Auth.loginUrlOf({ pathname: "/ui/admin.html", hash: "#/users" }, "expired"), "login.html?next=admin.html%23%2Fusers&why=expired");
+    assert.strictEqual(Auth.loginUrlOf({ pathname: "/ui/login.html", hash: "" }), "login.html");
+    assert.strictEqual(Auth.loginUrlOf({ pathname: "/", hash: "" }), "login.html");
+    const replaced = []; const w = makeWin({ location: { protocol: "https:", origin: "https://x", search: "", pathname: "/ui/identify.html", hash: "", replace: (u) => replaced.push(u) } });
+    Auth.create(w).goLogin("expired");
+    assert.deepStrictEqual(replaced, ["login.html?next=identify.html&why=expired"]);
   });
 
   await test("в разметку и память браузера лишнего не попадает: токен не в localStorage, нет innerHTML/eval и вывода в консоль", async () => {

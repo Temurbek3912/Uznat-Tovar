@@ -78,7 +78,7 @@ EXCEPTIONS: dict[str, str] = {
 PROTECTED_WORDS = {"https", "http", "localhost", "python", "zoom", "docker", "compose", "dir", "iphone", "android", "jpg", "png", "webp", "heic", "address", "redis", "up", "google"}   # address — надпись Windows «IPv4 Address»
 
 # Единицы измерения прописными: защищены как сокращения, но в кириллице пишутся кириллицей.
-UNITS = {"MB": "МБ", "KB": "КБ", "GB": "ГБ", "TB": "ТБ"}
+UNITS = {"MB": "МБ", "KB": "КБ", "GB": "ГБ", "TB": "ТБ", "PIN": "ПИН"}     # PIN-kod → ПИН-код (вход на этом компьютере, 2026-11-15)
 
 # Основы заимствований с мягким знаком ВНУТРИ слова: основа заменяется, окончание транслитерируется по правилам
 # (kompyuterda → компьютерда, filtrlarni → фильтрларни).

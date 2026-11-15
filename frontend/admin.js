@@ -11,7 +11,7 @@ function trHas(key) { const I = i18n(); return !!(I && typeof I.has === "functio
 // ============================ Чистая логика (тестируется в tools/admin_smoke_test.js) ============================
 
 const PAGES = ["products", "card", "users", "system"];
-const PAGE_TITLE_KEYS = {products: "nav.products", card: "admin.page_card", users: "admin.page_users", system: "admin.page_system"};
+const PAGE_TITLE_KEYS = {products: "nav.products", card: "nav.card", users: "nav.staff", system: "nav.system"};
 // Поля карточки покупателя (app/services/shop_card.py: CARD_FIELDS). Срока годности здесь нет и не будет — он у каждой партии свой.
 const CARD_FIELDS = ["price", "net_content", "manufacturer", "country", "in_stock", "ingredients", "description"];
 /** Отмеченные поля -> тело PUT /api/v1/admin/shop-card: только известные коды, в порядке карточки. */
@@ -24,7 +24,7 @@ function roleLabel(role) { return ROLES.includes(role) ? tr("role." + role) : St
 
 function pageFromHash(hash) {
   const m = /^#\/([a-z]+)/.exec(hash || "");
-  return m && PAGES.includes(m[1]) ? m[1] : "products";
+  return m && PAGES.includes(m[1]) ? m[1] : "system";       // без раздела — «Состояние программы» (редизайн 2026-11-15)
 }
 function fmtBytes(n) {
   if (n === null || n === undefined || isNaN(n)) return "—";
@@ -159,7 +159,32 @@ async function call(path, {method = "GET", body, form} = {}, retried = false) {
   return res.status === 204 ? null : res.json();
 }
 
-function reauthDialog() {
+async function reauthDialog() {
+  // На этом компьютере, если у человека есть ПИН, — подтверждение ПИН-кодом (решение владельца 2026-11-15); иначе пароль и код.
+  let local = null;
+  try { local = typeof auth().localInfo === "function" ? await auth().localInfo() : null; } catch (e) { local = null; }
+  const byPin = !!(local && local.this_computer && state.me && (local.users || []).some((u) => u.username === state.me.username));
+  if (byPin) return reauthPinDialog();
+  return reauthPasswordDialog();
+}
+function reauthPinDialog() {
+  return new Promise((resolve) => {
+    const pin = h("input", {id: "reauthPin", class: "pin-input", type: "password", inputmode: "numeric", maxlength: "6", autocomplete: "off"});
+    const err = h("div", {class: "err", id: "reauthError"});
+    openModal(tr("admin.reauth_title"), h("div", {}, h("div", {class: "hint"}, tr("pin.reauth_hint")), field(tr("signin.enter_pin"), pin), err), [
+      {label: tr("admin.cancel"), kind: "sec", onClick: (close) => { close(); resolve(false); }},
+      {label: tr("admin.reauth_ok"), id: "reauthOk", onClick: async (close) => {
+        const r = await auth().reauthPin(pin.value);
+        pin.value = "";
+        if (r.ok) { close(); resolve(true); return; }
+        err.textContent = tr(r.key, r.params);
+        if (r.key === "login.expired") { close(); resolve(false); showLogin({key: "login.expired"}); }
+      }},
+    ]);
+    if (pin.focus) pin.focus();
+  });
+}
+function reauthPasswordDialog() {
   return new Promise((resolve) => {
     const pass = h("input", {id: "reauthPass", type: "password", autocomplete: "current-password"});
     const code = h("input", {id: "reauthCode", type: "text", autocomplete: "one-time-code", maxlength: "9"});
@@ -219,40 +244,12 @@ async function loadStores() { state.stores = await call("/api/v1/stores"); retur
 
 // ============================ Вход / оболочка ============================
 
-// Сообщение входа хранится ключом ({key, params}) и переводится заново при смене языка.
-let loginMsg = null;
-function paintLoginMsg() { $("loginError").textContent = !loginMsg ? "" : (typeof loginMsg === "string" ? loginMsg : tr(loginMsg.key, loginMsg.params)); }
-function showLogin(message) {
-  $("appView").style.display = "none"; $("loginView").style.display = "block";
-  loginMsg = message || null; paintLoginMsg();
-}
-function setLoginMsg(m) { loginMsg = m || null; paintLoginMsg(); }
-// Вход — общий модуль auth.js (пароль и, если включён, второй фактор — документ 18).
+// Вход — на единой странице login.html (редизайн 2026-11-15): без сеанса или после его окончания — туда, с возвратом сюда.
 let authClient = null;
 function auth() { if (!authClient) authClient = window.Auth.create(window); return authClient; }
-function codeField(on) {
-  const f = $("loginCodeField"), c = $("loginCode");
-  f.hidden = !on;
-  if (!on) c.value = ""; else if (c.focus) c.focus();
-}
-async function doLogin(evt) {
-  evt.preventDefault();
-  const btn = $("loginBtn");
-  setLoginMsg(null); btn.disabled = true;
-  try {
-    const r = await auth().login($("loginUser").value, $("loginPass").value, $("loginCode").value || "");
-    codeField(!!r.needCode);
-    if (r.needEnroll || r.needPasswordChange) { window.location.assign("settings.html"); return; }   // и временный пароль: смена — тоже в «Настройках»      // администратор без 2FA: настройка — в «Настройках»
-    if (!r.ok) { setLoginMsg({key: r.key === "login.throttled" ? "home.throttled" : r.key, params: r.params}); return; }
-    setToken(auth().getToken());
-    $("loginPass").value = "";
-    await boot();
-  } catch (e) { setLoginMsg({key: "login.failed", params: {reason: e.message}}); } finally { btn.disabled = false; }
-}
-async function doLogout() {
-  const t = getToken(); setToken(null);
-  if (t) { try { await fetch(`${apiBase()}/api/v1/auth/logout`, {method: "POST", headers: {Authorization: `Bearer ${t}`}}); } catch (e) { /* токен уже стёрт локально */ } }
-  state.me = null; showLogin(null);
+function showLogin(message) {
+  const key = message && message.key;
+  auth().goLogin(key === "login.expired" || key === "server.session_max_age" ? "expired" : "");
 }
 async function boot() {
   if (!getToken()) { showLogin(null); return; }
@@ -263,8 +260,6 @@ async function boot() {
     me = await res.json();
   } catch (e) { if (e.message !== "unauthorized") showLogin({key: "home.offline", params: {reason: e.message}}); return; }
   state.me = me;
-  $("loginView").style.display = "none"; $("appView").style.display = "flex";
-  paintWho();
   startRefresh();
   // Роль — из ответа сервера; права в permissions — действующие здесь (вне административного входа прав управления в списке нет).
   const isAdmin = me.role === "admin";
@@ -287,9 +282,8 @@ async function boot() {
 async function route() {
   const page = pageFromHash(window.location.hash);
   state.page = page;
-  $("pageTitle").replaceChildren(h("b", {}, tr(PAGE_TITLE_KEYS[page])));
-  for (const a of document.querySelectorAll ? document.querySelectorAll("#side a[data-page]") : []) a.className = a.getAttribute("data-page") === page ? "active" : "";
-  $("side").className = "side";
+  $("pageTitle").textContent = tr(PAGE_TITLE_KEYS[page]);
+  document.title = `${tr(PAGE_TITLE_KEYS[page])} — ${tr("app.name")}`;
   const main = $("main");
   loading(main);
   try {
@@ -454,6 +448,9 @@ async function renderSystem(main) {
   const d = await call("/api/v1/admin/system");
   const st = (ok, text) => badge(text, ok ? "ok" : "error");
   clear(main);
+  // Сначала — одна понятная строка: всё ли в порядке (подробности — в карточках ниже, технические параметры — под «Для специалиста»).
+  const allOk = d.database === "ok" && d.queue === "ok" && !!(d.worker && d.worker.online);
+  main.appendChild(h("div", {class: allOk ? "banner ok" : "banner bad", id: "systemSummary", role: "status"}, tr(allOk ? "system.all_ok" : "system.problem")));
   main.appendChild(h("div", {class: "grid"},
     statCard(d.database === "ok" ? tr("admin.works") : tr("admin.failed"), tr("admin.database"), h("div", {class: "hint"}, d.database)),
     statCard(d.queue === "ok" ? tr("admin.works") : tr("admin.failed"), tr("admin.queue"), h("div", {class: "hint"}, d.queue)),
@@ -468,7 +465,7 @@ async function renderSystem(main) {
     h("div", {class: "hint"}, tr("admin.no_retention"))));
   // Подписи параметров переводятся по их ключу; неизвестный ключ — подпись сервера (по-русски). Источник — технический (файл: имя).
   const settingLabel = (s) => (trHas("admin.setting." + s.key) ? tr("admin.setting." + s.key) : s.label);
-  main.appendChild(h("div", {class: "card"}, h("h3", {class: "mt-0"}, tr("admin.params_title")),
+  main.appendChild(h("details", {class: "card tech-details"}, h("summary", {}, `${tr("identify.tech")}: ${tr("admin.params_title")}`),
     table([tr("admin.col_param"), tr("admin.col_value"), tr("admin.col_where")], d.settings.map((s) => [settingLabel(s), h("b", {}, String(s.value)), h("span", {class: "mute"}, s.source)])),
     h("div", {class: "hint mt-8"}, trHas("admin.settings_note") ? tr("admin.settings_note") : d.settings_note)));
 }
@@ -524,9 +521,6 @@ function startRefresh() {
   if (refreshTimer && typeof refreshTimer.unref === "function") refreshTimer.unref();     // не держать процесс в проверках Node
 }
 
-function paintWho() {
-  if (state.me) $("who").textContent = `${state.me.username} · ${roleLabel(state.me.role)}${state.me.is_owner ? " · " + tr("admin.owner_badge") : ""}`;
-}
 
 // Строка перевода с вставками-элементами ({link} → ссылка): элемент встаёт туда, где его место в переводе.
 function withNodes(target, key, nodes) {
@@ -541,22 +535,35 @@ function withNodes(target, key, nodes) {
 
 // Смена языка: статичные надписи (data-i18n) переводит I18N.apply, сообщение входа и открытый раздел перерисовываются здесь.
 function onLanguageChange() {
-  paintLoginMsg();
+  paintTheme();
   if (!state.me) return;
-  paintWho();
   if (Array.isArray(state.me.permissions) && state.me.permissions.includes("store:manage")) route(); else boot();
 }
 function startI18n() {
   const I = i18n();
   if (!I) return;
   if (typeof I.apply === "function") I.apply();
-  if (typeof I.mountSwitcher === "function") { I.mountSwitcher($("langSwitchLogin")); I.mountSwitcher($("langSwitch")); }
+  if (typeof I.mountSwitcher === "function") I.mountSwitcher($("langSwitch"));
   if (typeof I.onChange === "function") I.onChange(onLanguageChange);
 }
 
+// Тема: та же кнопка, что на остальных страницах (theme.js).
+function paintTheme() {
+  const btn = $("themeBtn"), T = window.Theme, I = window.Icons;
+  if (!btn || !T || !I) return;
+  const mode = T.get();
+  btn.replaceChildren(I.make(document, mode === "dark" ? "moon" : mode === "light" ? "sun" : "monitor", {size: 20}));
+  btn.setAttribute("aria-label", tr("theme.label", {mode: tr("theme." + mode)}));
+}
+// Esc закрывает открытое окно (кнопка «Отмена» — первая в окне).
+if (typeof document.addEventListener === "function") document.addEventListener("keydown", (evt) => {
+  if (evt.key !== "Escape") return;
+  const cancel = document.querySelector ? document.querySelector("#modalRoot .overlay .foot .btn.sec") : null;
+  if (cancel && cancel.click) cancel.click();
+});
+
 startI18n();
-$("loginForm").addEventListener("submit", doLogin);
-$("logoutBtn").addEventListener("click", doLogout);
-$("menuBtn").addEventListener("click", () => { $("side").className = $("side").className.includes("open") ? "side" : "side open"; });
+paintTheme();
+if ($("themeBtn") && window.Theme) $("themeBtn").addEventListener("click", () => { window.Theme.next(); paintTheme(); });
 window.addEventListener("hashchange", () => { if (state.me) route(); });
 boot();

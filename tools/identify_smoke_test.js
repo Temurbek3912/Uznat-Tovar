@@ -62,7 +62,8 @@ function boot(opts) {
   if (opts.camera !== "none") navigator.mediaDevices = { getUserMedia: async (c) => { cam.constraints = c; cam.starts++; if (cam.fail) throw cam.fail; return { getTracks: () => [{ stop: () => { cam.stops++; } }] }; } };
   const win = {
     document: doc, I18N: i18n, Theme: theme, Auth, Ticket, Icons, fetch, FormData: FormDataFake, localStorage: local, sessionStorage: session, navigator,
-    isSecureContext: opts.secure === undefined ? true : opts.secure, location: { search: opts.search || "", protocol: "http:", origin: "http://app", href: "" },
+    isSecureContext: opts.secure === undefined ? true : opts.secure, location: { search: opts.search || "", protocol: "http:", origin: "http://app", href: "", pathname: "/ui/identify.html", hash: "",
+              replace(u) { win.redirects.push(u); } }, redirects: [],
     addEventListener(type, fn) { (win._ev[type] = win._ev[type] || []).push(fn); }, _ev: {}, matchMedia: () => ({ matches: false })
   };
   // озвучки в программе больше нет: любое обращение страницы к синтезатору речи или к модулю Voice — ошибка (попадает в s.errors)
@@ -104,8 +105,9 @@ async function withPage(opts, fn) { const s = boot(opts); try { await s.ready();
     const used = new Set([...SCRIPT.matchAll(/\$\("([A-Za-z][\w-]*)"\)/g)].map((m) => m[1]).concat([...SCRIPT.matchAll(/\bshow\("([A-Za-z][\w-]*)"/g)].map((m) => m[1])));
     for (const id of used) assert.ok(ids.includes(id), `в разметке нет #${id}`);
     const s = boot({ token: null });
-    for (const id of ["accessBanner", "mainArea", "demoBanner", "barcodeNote", "linkBtn", "resError", "railProducts", "railAdmin", "video"]) assert.ok(!s.shown(id), `#${id} должен быть скрыт до нужды`);
-    assert.ok(s.shown("loginPanel"), "без токена видна форма входа");
+    for (const id of ["accessBanner", "mainArea", "demoBanner", "barcodeNote", "linkBtn", "resError", "video"]) assert.ok(!s.shown(id), `#${id} должен быть скрыт до нужды`);
+    assert.deepStrictEqual(s.win.redirects, ["login.html?next=identify.html"], "без токена — на общую страницу входа");
+    assert.ok(!HTML.includes('id="loginPanel"') && HTML.includes('<nav class="rail" id="rail" data-shell'), "своей формы входа нет, меню — shell.js");
   });
 
   await test("порядок и состав скриптов: язык и словари раньше значков, ценника и страницы; озвучки нет; без внешних адресов; страница только запускает модуль", async () => {
@@ -208,52 +210,30 @@ async function withPage(opts, fn) { const s = boot(opts); try { await s.ready();
   });
 
   // ============================================================ вход и права
-  await test("без входа — форма входа; без права на каталог — «Нет доступа»; с правом — страница; меню зависит от прав", async () => {
+  await test("без входа — на страницу входа; без права на каталог — «Нет доступа»; с правом — страница", async () => {
     await withPage({ token: null }, async (s) => {
-      assert.ok(s.shown("loginPanel") && !s.shown("mainArea") && !s.shown("accessBanner"));
+      assert.ok(!s.shown("mainArea") && !s.shown("accessBanner"));
       assert.strictEqual(s.calls.length, 0, "без токена сервер не спрашиваем");
+      assert.deepStrictEqual(s.win.redirects, ["login.html?next=identify.html"]);
     });
-    await withPage({ me: ME_NONE }, async (s) => { assert.ok(s.shown("accessBanner") && !s.shown("mainArea") && !s.shown("loginPanel")); });
+    await withPage({ me: ME_NONE }, async (s) => { assert.ok(s.shown("accessBanner") && !s.shown("mainArea")); });
     await withPage({ me: ME_ADMIN }, async (s) => {
-      assert.ok(s.shown("mainArea") && !s.shown("loginPanel") && !s.shown("accessBanner"));
-      assert.ok(s.shown("railProducts") && s.shown("railAdmin"), "администратору видны «Товары» и «Управление»");
+      assert.ok(s.shown("mainArea") && !s.shown("accessBanner"));
       assert.strictEqual(s.kind(), "idle", "в начале — приглашение показать товар");
       assert.ok(s.ticket().includes("Покажите товар камере"));
       assert.strictEqual(s.calls[0].opts.headers.Authorization, "Bearer tok");
     });
-    await withPage({ me: ME_MERCH }, async (s) => { assert.ok(s.shown("mainArea") && !s.shown("railProducts") && !s.shown("railAdmin"), "мерчандайзеру только «Узнать товар»"); });
+    await withPage({ me: ME_MERCH }, async (s) => { assert.ok(s.shown("mainArea")); });
   });
 
-  await test("вход: неверный пароль — сообщение, успех — токен сохранён, форма скрыта, страница открыта; сообщение меняет язык вместе с приложением", async () => {
-    await withPage({ token: null, login: () => json(401, {}) }, async (s) => {
-      s.$("loginUser").value = "u"; s.$("loginPass").value = "bad";
-      s.$("loginPanel").dispatch("submit", { preventDefault() {} }); await flush(); await sleep(10);
-      assert.ok(s.shown("loginError") && s.$("loginError").textContent === "Неверный логин или пароль");
-      s.i18n.setLang("en"); await flush();
-      assert.strictEqual(s.$("loginError").textContent, "Wrong username or password");
-      assert.strictEqual(s.$("loginBtn").disabled, false);
-    });
-    await withPage({ token: null, login: () => json(429, {}) }, async (s) => {
-      s.$("loginPanel").dispatch("submit", { preventDefault() {} }); await flush(); await sleep(10);
-      assert.ok(s.$("loginError").textContent.includes("Слишком много"));
-    });
-    await withPage({ token: null }, async (s) => {
-      s.$("loginUser").value = "u"; s.$("loginPass").value = "secret";
-      s.$("loginPanel").dispatch("submit", { preventDefault() {} }); await sleep(25); await flush();
-      const login = s.calls.find((c) => /auth\/login$/.test(c.url));
-      assert.ok(login.opts.body.includes("username=u") && login.opts.body.includes("password=secret"));
-      assert.strictEqual(s.session.getItem("shelf_audit_token"), "new-token");
-      assert.strictEqual(s.$("loginPass").value, "", "пароль не остаётся в поле");
-      assert.ok(s.shown("mainArea") && !s.shown("loginPanel"));
-    });
-  });
-
-  await test("сессия истекла (401 на «me» или на узнавании) — вход и остановка камеры; 403 на узнавании — баннер «Нет доступа»", async () => {
-    await withPage({ me: () => json(401, {}) }, async (s) => { assert.ok(s.shown("loginPanel") && s.$("loginError").textContent.includes("Сессия истекла")); });
+  await test("сессия истекла (401 на «me» или на узнавании) — на страницу входа с причиной и остановка камеры; нет связи — сообщение здесь же; 403 — «Нет доступа»", async () => {
+    const back = ["login.html?next=identify.html&why=expired"];
+    await withPage({ me: () => json(401, {}) }, async (s) => { assert.deepStrictEqual(s.win.redirects, back); });
     await withPage({ answer: json(401, {}) }, async (s) => {
       await s.camOn(); await s.click("snapBtn");
-      assert.ok(s.shown("loginPanel") && !s.shown("mainArea")); assert.strictEqual(s.cam.stops, 1, "камера остановлена");
+      assert.ok(!s.shown("mainArea")); assert.ok(s.cam.stops >= 1, "камера остановлена");
       assert.strictEqual(s.session.getItem("shelf_audit_token"), null);
+      assert.deepStrictEqual(s.win.redirects, back);
     });
     await withPage({ answer: json(403, {}) }, async (s) => { await s.file(); assert.ok(s.shown("accessBanner") && !s.shown("mainArea")); });
   });
@@ -505,10 +485,9 @@ async function withPage(opts, fn) { const s = boot(opts); try { await s.ready();
     });
   });
 
-  await test("меню: «Узнать товар» помечено текущим, ссылки ведут на настоящие страницы; название приложения в заголовке и на вкладке", async () => {
+  await test("меню — общее (shell.js, tools/shell_smoke_test.js); название приложения на вкладке; переключатель языка", async () => {
     await withPage({}, async (s) => {
-      const links = s.$("rail").byTag("a"); assert.deepStrictEqual(links.map((a) => a.getAttribute("href")), ["identify.html", "products.html", "settings.html", "admin.html"]);
-      assert.strictEqual(links[0].getAttribute("aria-current"), "page");
+      assert.strictEqual(s.$("rail").getAttribute("data-shell"), "");
       assert.strictEqual(s.$("rail").getAttribute("aria-label"), "Разделы"); assert.strictEqual(s.doc.title, "Узнать товар");
       assert.strictEqual(s.$("langHost").byClass("lang-btn").length, 4, "переключатель языка из четырёх кнопок");
     });

@@ -11,56 +11,36 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Узнать товар">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<title data-i18n="admin.page_title">Админ-панель — Узнать товар</title>
+<title data-i18n="admin.page_title">Управление — Узнать товар</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="ui.css">
 <link rel="stylesheet" href="admin.css">
+<script src="theme.js"></script>
+<script src="theme-apply.js"></script>
 </head>
-<body>
-<div id="loginView" class="loginbox card boot-hidden">
-  <div class="lang-row" id="langSwitchLogin"></div>
-  <h2 data-i18n="admin.panel">Админ-панель</h2>
-  <form id="loginForm">
-    <label class="f"><span data-i18n="login.user">Логин</span><input id="loginUser" type="text" autocomplete="username" autocapitalize="none" required></label>
-    <label class="f"><span data-i18n="login.pass">Пароль</span><input id="loginPass" type="password" autocomplete="current-password" required></label>
-    <label class="f" id="loginCodeField" hidden><span data-i18n="login.code">Код из приложения</span><input id="loginCode" type="text" autocomplete="one-time-code" maxlength="13"></label>
-    <button id="loginBtn" class="btn" type="submit" data-i18n="login.submit">Войти</button>
-    <div id="loginError" class="err mt-8"></div>
-  </form>
-  <div class="hint"><span data-i18n="admin.forgot">Забыли пароль? На сервере:</span> <code>docker compose exec api python -m scripts.user_admin reset-password --username <span data-i18n="admin.login_placeholder">ЛОГИН</span></code></div>
-</div>
-
-<div id="appView" class="app boot-hidden">
-  <nav id="side" class="side">
-    <h1 data-i18n="app.name">Узнать товар</h1>
-    <a href="index.html" data-i18n="admin.back_home">← На главную</a>
-    <a href="#/products" data-page="products" data-i18n="nav.products">Товары</a>
-    <a href="#/card" data-page="card" data-i18n="admin.page_card">Карточка для покупателя</a>
-    <a href="#/users" data-page="users" data-i18n="admin.page_users">Пользователи</a>
-    <a href="#/system" data-page="system" data-i18n="admin.page_system">Система</a>
-    <div class="sep" data-i18n="admin.other_pages">Другие страницы</div>
-    <a href="identify.html" data-i18n="app.name">Узнать товар</a>
-    <a href="products.html" data-i18n="admin.link_products">Добавить товары и фото</a>
-    <a href="/docs" target="_blank" rel="noopener" data-i18n="admin.link_api">Для программистов: API</a>
-  </nav>
-  <div class="main-col">
-    <div class="top">
-      <button id="menuBtn" class="btn sec sm" type="button">☰</button>
-      <div id="pageTitle" class="grow"><b data-i18n="admin.panel">Админ-панель</b></div>
-      <div id="who" class="who"></div>
-      <div id="langSwitch"></div>
-      <button id="logoutBtn" class="btn sec sm" type="button" data-i18n="settings.sign_out">Выйти</button>
-    </div>
-    <main id="main"></main>
+<body data-page="admin">
+<div class="shell">
+  <nav class="rail" id="rail" data-shell aria-label="Разделы"></nav>
+  <div class="main">
+    <header class="topbar">
+      <h1 class="topbar__title" id="pageTitle" data-i18n="nav.system">Состояние программы</h1>
+      <div class="topbar__tools"><span id="langSwitch"></span><button type="button" class="icon-btn" id="themeBtn"></button></div>
+    </header>
+    <main id="main" class="adm"></main>
   </div>
 </div>
-<div id="modalRoot"></div>
-<div id="toasts" class="toasts"></div>
+<div id="modalRoot" class="adm"></div>
+<div id="toasts" class="toasts adm" role="status" aria-live="polite"></div>
 
 <script src="i18n.js"></script>
 <script src="i18n.ru.js"></script>
 <script src="i18n.uz.js"></script>
 <script src="i18n.uz-cyrl.js"></script>
 <script src="i18n.en.js"></script>
+<script src="icons.js"></script>
 <script src="auth.js"></script>
+<script src="shell.js"></script>
 <script src="admin.js"></script>
+<script src="boot.js" data-start="Shell"></script>
 </body>
 </html>

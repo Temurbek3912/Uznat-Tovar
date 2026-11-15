@@ -160,7 +160,7 @@
       if (id === "listNote") listNoteKind = m ? (kind || "") : "";
       paintMsg(id);
     }
-    function paintAllMsgs() { ["loginError", "formError", "editError", "listError", "listNote", "editPhotosNote"].forEach(paintMsg); }
+    function paintAllMsgs() { ["formError", "editError", "listError", "listNote", "editPhotosNote"].forEach(paintMsg); }
 
     // ----- выбор и подготовка фото
     function shrinkPhoto(file) {
@@ -561,29 +561,11 @@
     }
 
     // ----- вход, доступ, запуск
-    function resetViews() { show("loginPanel", false); show("accessBanner", false); show("mainArea", false); }
+    function resetViews() { show("accessBanner", false); show("mainArea", false); }
+    // Вход — на единой странице login.html (редизайн 2026-11-15): без сеанса или после его окончания — туда, с возвратом сюда.
     function showLogin(messageKey) {
-      resetViews(); show("loginPanel", true);
-      setMsg("loginError", messageKey ? { key: messageKey } : null);
-      var u = $("loginUser"); if (u && u.focus) u.focus();
-    }
-    // Второй фактор (документ 18): поле кода появляется, когда сервер попросил код после верного пароля.
-    function codeField(on) {
-      var f = $("loginCodeField"), c = $("loginCode");
-      if (f) { if (on) f.removeAttribute("hidden"); else f.setAttribute("hidden", ""); }
-      if (c) { if (!on) c.value = ""; else if (c.focus) c.focus(); }
-    }
-    function doLogin(evt) {
-      if (evt && evt.preventDefault) evt.preventDefault();
-      var btn = $("loginBtn");
-      setMsg("loginError", null); btn.disabled = true;
-      return auth.login($("loginUser").value, $("loginPass").value, ($("loginCode") || {}).value || "").then(function (r) {
-        codeField(!!(r && r.needCode));
-        if (r && (r.needEnroll || r.needPasswordChange)) { win.location.assign("settings.html"); return null; }   // и временный пароль: смена — тоже в «Настройках»     // администратор без 2FA: настройка — в «Настройках»
-        if (!r.ok) { setMsg("loginError", r.params ? { key: r.key, params: r.params } : { key: r.key }); return null; }
-        $("loginPass").value = ""; return init();
-      }).catch(function (e) { setMsg("loginError", { key: "login.failed", params: { reason: e.message } }); })
-        .then(function () { btn.disabled = false; });
+      resetViews();
+      auth.goLogin(messageKey === "login.expired" ? "expired" : "");
     }
     function init() {
       $("footerApiBase").textContent = apiBase();
@@ -595,11 +577,11 @@
         if (!me) return undefined;
         var perms = Array.isArray(me.permissions) ? me.permissions : [];
         if (perms.indexOf("catalog:write") === -1) { showAccess(me.role === "admin" && me.admin_listener === false); return undefined; }
-        setHidden($("railAdmin"), perms.indexOf("store:manage") === -1);
         resetViews(); show("mainArea", true);
         refreshForm(); renderProgress(); renderListState();
         var code = barcodeFromSearch((win.location || {}).search);                 // со страницы «Узнать товар»: «Добавить товар со штрих-кодом»
         if (code) { $("barcodeInput").value = code; $("moreDetails").setAttribute("open", ""); openAddPanel(true); }
+        else if ((win.location || {}).hash === "#add") openAddPanel(true);       // пункт меню «Добавить товар»
         return loadProducts();
       }, function (e) { if (!isNetError(e)) throw e; });
     }
@@ -630,8 +612,10 @@
       $("rail").setAttribute("aria-label", t("nav.menu"));
     });
 
-    $("loginPanel").addEventListener("submit", guard(doLogin));
     $("openAdd").addEventListener("click", function () { openAddPanel(true); scrollTo("addCard"); });
+    if (win.addEventListener) win.addEventListener("hashchange", function () {      // «Добавить товар» в меню, когда страница уже открыта
+      if (win.location.hash === "#add" && !$("mainArea").hasAttribute("hidden")) { openAddPanel(true); scrollTo("addCard"); }
+    });
     $("addCancel").addEventListener("click", function () { openAddPanel(false); });
     $("pickBtn").addEventListener("click", function () { setMsg("formError", null); $("photoInput").click(); });
     $("photoInput").addEventListener("change", guard(function () { var input = $("photoInput"); return addChosen(input.files).then(function () { input.value = ""; }); }));

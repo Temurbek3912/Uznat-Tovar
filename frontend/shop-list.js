@@ -78,7 +78,8 @@
       text.appendChild(el("span", "shoplist__name", item.name));
       if (Object.prototype.hasOwnProperty.call(item, "price")) {
         var price = Ticket.formatPrice(item.price);
-        text.appendChild(el("span", "shoplist__price", price ? price + " " + t("ticket.price_unit") : t("ticket.no_price")));
+        // Нет цены — на плитке ничего не пишем (редизайн 2026-11-15: «Цена не указана» на каждой плитке только мешала искать товар).
+        if (price) text.appendChild(el("span", "shoplist__price", price + " " + t("ticket.price_unit")));
       }
       b.appendChild(text);
       b.addEventListener("click", function () { openCard(item, b); });

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="referrer" content="no-referrer">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<title data-i18n="signin.title">Вход</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="ui.css">
+<script src="theme.js"></script>
+<script src="theme-apply.js"></script>
+</head>
+<body data-page="login" class="signin-page">
+<main class="signin">
+  <header class="signin__top">
+    <span class="signin__brand"><img src="icons/icon-192.png" alt="" width="32" height="32"><span data-i18n="app.name">Узнать товар</span></span>
+    <span class="signin__tools"><span id="langHost"></span><button type="button" class="icon-btn" id="themeBtn"></button></span>
+  </header>
+
+  <section class="signin__card" id="loadingView" aria-busy="true">
+    <p class="hint" data-i18n="common.loading">Загрузка…</p>
+  </section>
+
+  <!-- Первый вход и «забыли ПИН»: одноразовая ссылка из окна программы (login.html#setup=…) -->
+  <form class="signin__card" id="setupView" hidden novalidate>
+    <h1 class="signin__title" id="setupTitle" data-i18n="signin.setup_title">Придумайте ПИН-код</h1>
+    <p class="hint" id="setupFor"></p>
+    <label class="signin__pinlabel" for="setupPin" id="setupPinLabel" data-i18n="signin.enter_new_pin">Новый ПИН-код</label>
+    <input class="pin-input" id="setupPin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="new-password" spellcheck="false">
+    <p class="hint signin__small" data-i18n="signin.pin_rule">6 цифр. Не 111111 и не 123456 — такие легко угадать.</p>
+    <p class="notice notice--danger" id="setupError" role="alert" hidden></p>
+    <button class="btn btn--primary btn--block" id="setupBtn" type="submit" data-i18n="signin.next">Дальше</button>
+  </form>
+
+  <!-- Этот компьютер: вход ПИН-кодом -->
+  <form class="signin__card" id="pinView" hidden novalidate>
+    <h1 class="signin__title" id="pinHello"></h1>
+    <div class="signin__users" id="userPicker" role="radiogroup" hidden></div>
+    <label class="signin__pinlabel" for="pinInput" data-i18n="signin.enter_pin">Введите ПИН-код</label>
+    <input class="pin-input" id="pinInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" spellcheck="false">
+    <p class="notice notice--danger" id="pinError" role="alert" hidden></p>
+    <button class="btn btn--primary btn--block" id="pinBtn" type="submit" data-i18n="signin.submit">Войти</button>
+    <div class="signin__links">
+      <button class="link" type="button" id="forgotBtn" data-i18n="signin.forgot_pin">Забыли ПИН?</button>
+      <button class="link" type="button" id="toPassword" data-i18n="signin.use_password">Войти логином и паролем</button>
+    </div>
+    <p class="notice" id="forgotHint" hidden data-i18n="signin.forgot_hint">Откройте папку программы и запустите «Забыли ПИН» — откроется страница, где можно задать новый ПИН-код.</p>
+  </form>
+
+  <!-- Другое устройство (или по желанию): логин и пароль, у администратора ещё код из приложения -->
+  <form class="signin__card" id="passView" hidden novalidate>
+    <h1 class="signin__title" data-i18n="signin.title">Вход</h1>
+    <p class="notice" id="firstRunNote" hidden data-i18n="signin.first_run">ПИН-код ещё не задан. Закройте окно программы и запустите её снова — откроется страница «Придумайте ПИН». Или запустите «Забыли ПИН» в папке программы.</p>
+    <label class="field"><span class="field__label" data-i18n="login.user">Логин</span><input class="input" id="loginUser" type="text" autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+    <label class="field"><span class="field__label" data-i18n="login.pass">Пароль</span><input class="input" id="loginPass" type="password" autocomplete="current-password"></label>
+    <label class="field" id="loginCodeField" hidden><span class="field__label" data-i18n="login.code">Код из приложения</span><input class="input" id="loginCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="13"></label>
+    <p class="notice notice--danger" id="passError" role="alert" hidden></p>
+    <button class="btn btn--primary btn--block" id="passBtn" type="submit" data-i18n="signin.submit">Войти</button>
+    <div class="signin__links"><button class="link" type="button" id="toPin" hidden data-i18n="signin.use_pin">Войти ПИН-кодом</button></div>
+  </form>
+
+  <p class="signin__foot hint" id="whereNote"></p>
+</main>
+<script src="i18n.js"></script>
+<script src="i18n.ru.js"></script>
+<script src="i18n.uz.js"></script>
+<script src="i18n.uz-cyrl.js"></script>
+<script src="i18n.en.js"></script>
+<script src="icons.js"></script>
+<script src="auth.js"></script>
+<script src="login.js"></script>
+<script src="boot.js" data-start="Login"></script>
+</body>
+</html>

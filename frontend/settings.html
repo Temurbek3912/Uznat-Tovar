@@ -19,12 +19,7 @@
 </head>
 <body data-page="settings">
 <div class="shell">
-  <nav class="rail" id="rail" aria-label="Разделы">
-    <a class="rail__item" href="identify.html"><span data-icon="viewfinder"></span><span data-i18n="nav.identify">Узнать товар</span></a>
-    <a class="rail__item" id="railProducts" href="products.html" hidden><span data-icon="list"></span><span data-i18n="nav.products">Товары</span></a>
-    <a class="rail__item" href="settings.html" aria-current="page"><span data-icon="sliders"></span><span data-i18n="nav.settings">Настройки</span></a>
-    <a class="rail__item" id="railAdmin" href="admin.html" hidden><span data-icon="monitor"></span><span data-i18n="nav.admin">Управление</span></a>
-  </nav>
+  <nav class="rail" id="rail" data-shell aria-label="Разделы"></nav>
   <main class="main">
     <header class="topbar">
       <h1 class="topbar__title" data-i18n="nav.settings">Настройки</h1>
@@ -50,9 +45,6 @@
           <h2 class="ticket__title" data-i18n="settings.account">Учётная запись</h2>
           <p class="hint" data-i18n="settings.account_hint">Для владельца и администратора. После входа в меню появятся разделы по вашим правам.</p>
           <form id="loginPanel" class="settings__form" hidden>
-            <label class="field"><span class="field__label" data-i18n="login.user">Логин</span><input class="input" id="loginUser" type="text" autocomplete="username" autocapitalize="none" spellcheck="false"></label>
-            <label class="field"><span class="field__label" data-i18n="login.pass">Пароль</span><input class="input" id="loginPass" type="password" autocomplete="current-password"></label>
-            <label class="field" id="loginCodeField" hidden><span class="field__label" data-i18n="login.code">Код из приложения</span><input class="input" id="loginCode" type="text" autocomplete="one-time-code" maxlength="13"></label>
             <p class="notice notice--danger" id="loginError" role="alert" hidden></p>
             <button class="btn btn--primary" id="loginBtn" type="submit" data-i18n="login.submit">Войти</button>
           </form>
@@ -68,6 +60,18 @@
             <p id="accountName" role="status"></p>
             <div><button class="btn btn--secondary" id="logoutBtn" type="button" data-i18n="settings.sign_out">Выйти</button></div>
           </div>
+        </div>
+        <div class="settings__group" id="pinGroup" hidden>
+          <h2 class="ticket__title" data-i18n="pin.title">ПИН-код для входа на этом компьютере</h2>
+          <p class="hint" id="pinStatus" role="status"></p>
+          <form id="pinForm" class="settings__form" novalidate>
+            <label class="field" id="pinCurrentField"><span class="field__label" data-i18n="pin.current">Текущий ПИН-код</span><input class="input" id="pinCurrent" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></label>
+            <label class="field"><span class="field__label" data-i18n="signin.enter_new_pin">Новый ПИН-код</span><input class="input" id="pinNew" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></label>
+            <label class="field"><span class="field__label" data-i18n="signin.repeat_pin">Повторите ПИН-код</span><input class="input" id="pinRepeat" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></label>
+            <p class="hint" data-i18n="signin.pin_rule">6 цифр. Не 111111 и не 123456 — такие легко угадать.</p>
+            <p class="notice" id="pinMsg" role="status" hidden></p>
+            <button class="btn btn--primary" id="pinSaveBtn" type="submit" data-i18n="pin.save">Сохранить ПИН-код</button>
+          </form>
         </div>
         <div class="settings__group" id="securityGroup" hidden>
           <h2 class="ticket__title" data-i18n="security.title">Безопасность входа</h2>
@@ -149,6 +153,8 @@
 <script src="icons.js"></script>
 <script src="auth.js"></script>
 <script src="settings.js"></script>
+<script src="shell.js"></script>
 <script src="boot.js" data-start="Settings"></script>
+<script src="boot.js" data-start="Shell"></script>
 </body>
 </html>

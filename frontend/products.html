@@ -19,27 +19,12 @@
 </head>
 <body data-page="products">
 <div class="shell">
-  <nav class="rail" id="rail" aria-label="Разделы">
-    <a class="rail__item" href="identify.html"><span data-icon="viewfinder"></span><span data-i18n="nav.identify">Узнать товар</span></a>
-    <a class="rail__item" href="products.html" aria-current="page"><span data-icon="list"></span><span data-i18n="nav.products">Товары</span></a>
-    <a class="rail__item" href="settings.html"><span data-icon="sliders"></span><span data-i18n="nav.settings">Настройки</span></a>
-    <a class="rail__item" id="railAdmin" href="admin.html" hidden><span data-icon="monitor"></span><span data-i18n="nav.admin">Управление</span></a>
-  </nav>
+  <nav class="rail" id="rail" data-shell aria-label="Разделы"></nav>
   <main class="main">
     <header class="topbar">
       <h1 class="topbar__title" data-i18n="nav.products">Товары</h1>
       <div class="topbar__tools"><span id="langHost"></span><button type="button" class="icon-btn" id="themeBtn"></button></div>
     </header>
-
-    <form id="loginPanel" class="login" hidden>
-      <h2 class="ticket__title" data-i18n="login.title">Вход</h2>
-      <p class="hint" data-i18n="products.login_note">Добавлять товары может администратор.</p>
-      <label class="field"><span class="field__label" data-i18n="login.user">Логин</span><input class="input" id="loginUser" type="text" autocomplete="username" autocapitalize="none" spellcheck="false"></label>
-      <label class="field"><span class="field__label" data-i18n="login.pass">Пароль</span><input class="input" id="loginPass" type="password" autocomplete="current-password"></label>
-      <label class="field" id="loginCodeField" hidden><span class="field__label" data-i18n="login.code">Код из приложения</span><input class="input" id="loginCode" type="text" autocomplete="one-time-code" maxlength="13"></label>
-      <p class="notice notice--danger" id="loginError" role="alert" hidden></p>
-      <button class="btn btn--primary" id="loginBtn" type="submit" data-i18n="login.submit">Войти</button>
-    </form>
 
     <div id="accessBanner" class="notice notice--danger" role="alert" hidden>
       <span class="notice__title" data-i18n="access.title">Нет доступа</span>
@@ -49,7 +34,7 @@
 
     <div id="mainArea" class="area" hidden>
       <p class="hint" data-i18n="products.intro">Здесь товары, которые система умеет узнавать. Добавьте товар: напишите название и снимите 3–5 фото с разных сторон.</p>
-      <div class="row"><button type="button" class="btn btn--primary" id="openAdd"></button></div>
+      <div class="row"><button type="button" class="btn btn--primary" id="openAdd" data-hotkey="n"></button></div>
 
       <section class="panel" id="addCard" hidden>
         <h2 class="panel__title" data-i18n="products.add">Добавить товар</h2>
@@ -184,6 +169,8 @@
 <script src="catalog.js"></script>
 <script src="productlist.js"></script>
 <script src="products.js"></script>
+<script src="shell.js"></script>
 <script src="boot.js" data-start="Products"></script>
+<script src="boot.js" data-start="Shell"></script>
 </body>
 </html>

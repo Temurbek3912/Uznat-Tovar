@@ -40,7 +40,7 @@ def _run_factory(results):
 
 def test_main_runs_every_suite_and_sums_checks():
     suites = sorted(p.name for p in (runner.ROOT / "tools").glob("*_smoke_test.js"))
-    assert {"admin_smoke_test.js", "home_smoke_test.js", "nav_smoke_test.js"} <= set(suites)
+    assert {"admin_smoke_test.js", "login_smoke_test.js", "shell_smoke_test.js"} <= set(suites)
     assert not {"capture_smoke_test.js", "dashboard_smoke_test.js", "review_smoke_test.js", "setup_smoke_test.js"} & set(suites)
     lines = []
     code = runner.main(run=_run_factory({name: (0, "2 passed\n") for name in suites}), which=lambda n: "node", out=lines.append)
@@ -51,8 +51,8 @@ def test_main_runs_every_suite_and_sums_checks():
 def test_main_fails_and_names_the_failed_suite():
     suites = sorted(p.name for p in (runner.ROOT / "tools").glob("*_smoke_test.js"))
     results = {name: (0, "2 passed\n") for name in suites}
-    results["nav_smoke_test.js"] = (1, "ok a\nFAIL: boom\n")
+    results["shell_smoke_test.js"] = (1, "ok a\nFAIL: boom\n")
     lines = []
     assert runner.main(run=_run_factory(results), which=lambda n: "node", out=lines.append) == 1
-    assert "НЕ ПРОШЛИ: nav_smoke_test.js" in lines[-1]
-    assert any(line.startswith("FAIL nav_smoke_test.js") for line in lines)
+    assert "НЕ ПРОШЛИ: shell_smoke_test.js" in lines[-1]
+    assert any(line.startswith("FAIL shell_smoke_test.js") for line in lines)

@@ -249,6 +249,7 @@
     function renderBar() {
       clear(el.bar);
       var search = node(doc, "input", "input input--search");
+      search.setAttribute("data-hotkey", "/");                 // клавиша «/» — к поиску (shell.js)
       search.setAttribute("type", "search");
       search.setAttribute("id", "listSearch");
       search.setAttribute("placeholder", t("list.search"));

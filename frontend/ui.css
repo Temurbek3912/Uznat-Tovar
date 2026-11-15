@@ -285,3 +285,47 @@ a.btn { text-decoration: none; text-align: center; }                      /* к�
 }
 textarea.input { min-height: 5rem; padding: var(--sp-2) var(--sp-3); resize: vertical; }
 .details-box > summary { cursor: pointer; }
+
+/* ---------- редизайн 2026-11-15: рамка приложения (shell.js) — одно меню на всех страницах сотрудников ---------- */
+.rail__brand { display: none; }
+.rail__brandname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail__label { overflow-wrap: anywhere; }
+.rail__sep { flex: none; height: 1px; margin: var(--sp-2) var(--sp-2); background: var(--line); }
+.rail__foot { margin-top: auto; display: flex; flex-direction: column; gap: var(--sp-1); }
+.rail__who { display: none; }
+button.rail__item { width: 100%; background: none; border: 0; font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+@media (min-width: 1100px) {
+  .shell { grid-template-columns: var(--rail-w-wide) minmax(0, 1fr); }
+  .rail { padding: var(--sp-4) var(--sp-3); gap: 2px; overflow-y: auto; }
+  .rail__brand { display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-2) var(--sp-4); color: var(--ink); font-weight: var(--fw-bold); text-decoration: none; }
+  .rail__brand img { border-radius: var(--r-s); }
+  .rail__item { flex-direction: row; justify-content: flex-start; gap: var(--sp-3); padding: var(--sp-2) var(--sp-3); font-size: var(--fs-s); text-align: left; }
+  button.rail__item { font-size: var(--fs-s); }
+  .rail__item[aria-current="page"] { font-weight: var(--fw-medium); }
+  .rail__who { display: flex; flex-direction: column; padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--line); font-size: var(--fs-s); }
+  .rail__who span { color: var(--ink-muted); font-size: var(--fs-xs); }
+}
+@media (max-width: 899px) {
+  .rail__item--wide, .rail__sep, .rail__foot { display: none; }
+  .rail__item { font-size: var(--fs-xs); }
+}
+
+/* ---------- страница входа (login.html) ---------- */
+.signin-page { min-height: 100vh; min-height: 100dvh; }
+.signin { display: flex; flex-direction: column; align-items: center; gap: var(--sp-5); min-height: 100vh; min-height: 100dvh; padding: var(--sp-4) max(var(--sp-4), env(safe-area-inset-right, 0px)) var(--sp-6) max(var(--sp-4), env(safe-area-inset-left, 0px)); }
+.signin__top { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); width: 100%; max-width: 64rem; flex-wrap: wrap; }
+.signin__brand { display: flex; align-items: center; gap: var(--sp-2); font-weight: var(--fw-bold); font-size: var(--fs-l); }
+.signin__brand img { border-radius: var(--r-s); }
+.signin__tools { display: flex; align-items: center; gap: var(--sp-2); }
+.signin__card { display: flex; flex-direction: column; gap: var(--sp-3); width: 100%; max-width: 24rem; margin-top: 6vh; padding: var(--sp-6) var(--sp-5); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-tag); box-shadow: var(--shadow-tag); }
+.signin__title { font-size: var(--fs-xl); line-height: var(--lh-tight); text-align: center; text-wrap: balance; }
+.signin__pinlabel { font-weight: var(--fw-medium); text-align: center; }
+.signin__small { text-align: center; font-size: var(--fs-xs); }
+.signin__users { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--sp-2); }
+.signin__users .chip--filter[aria-checked="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.signin__links { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--sp-1); }
+.signin__foot { text-align: center; }
+.pin-input { width: 100%; min-height: calc(var(--hit) * 1.4); padding: 0 var(--sp-3); background: var(--surface); color: var(--ink); border: 1.5px solid var(--line-strong); border-radius: var(--r-m); font-size: var(--fs-2xl); letter-spacing: 0.6em; text-align: center; font-variant-numeric: tabular-nums; }
+.btn--block { width: 100%; }
+.kbd { display: inline-block; min-width: 1.4em; padding: 0 var(--sp-1); border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: var(--r-s); color: var(--ink-muted); font-size: var(--fs-xs); line-height: 1.5; text-align: center; }
+@media (max-width: 479px) { .signin__card { margin-top: var(--sp-2); padding: var(--sp-5) var(--sp-4); } }

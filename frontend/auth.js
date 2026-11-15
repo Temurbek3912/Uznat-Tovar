@@ -38,8 +38,26 @@
     return /^https?:$/.test(loc.protocol || "") ? loc.origin : "http://localhost:8000";
   }
 
+  /** Адрес единой страницы входа с возвратом на эту страницу (редизайн 2026-11-15): login.html?next=products.html&why=expired. */
+  function loginUrlOf(loc, why) {
+    loc = loc || {};
+    var page = String(loc.pathname || "").split("/").pop() || "";
+    var next = /^[a-z-]+\.html$/.test(page) && page !== "login.html" ? page + (/^#\/[a-z]+$/.test(loc.hash || "") ? loc.hash : "") : "";
+    var q = [];
+    if (next) q.push("next=" + encodeURIComponent(next));
+    if (why) q.push("why=" + encodeURIComponent(why));
+    return "login.html" + (q.length ? "?" + q.join("&") : "");
+  }
+
   function create(win) {
     var memoryToken = null;
+    /** Нет сеанса или он закончился — на страницу входа (вернёт обратно после входа). */
+    function goLogin(why) {
+      var url = loginUrlOf(win.location, why);
+      if (win.location && typeof win.location.replace === "function") win.location.replace(url);
+      else if (win.location) win.location.href = url;
+      return url;
+    }
     var pending = null;            // {mfaToken, username, until} — пароль уже проверен сервером, ждём код из приложения
 
     function getToken() { try { return win.sessionStorage.getItem(TOKEN_KEY) || memoryToken; } catch (e) { return memoryToken; } }
@@ -265,6 +283,73 @@
       }, function () { return { ok: false, key: "error.network" }; });
     }
 
+    // ---------------- ПИН на этом компьютере (решение владельца 2026-11-15; сервер — app/core/local_pin.py)
+    function jsonPost(path, body, withAuth) {
+      var headers = withAuth ? authHeaders() : {};
+      headers["Content-Type"] = "application/json";
+      return win.fetch(apiBase() + path, { method: "POST", headers: headers, body: JSON.stringify(body || {}) });
+    }
+    /** Ответ с токеном сеанса -> {ok:true} (токен сохранён), иначе {ok:false, key, params, retryAfter?}. */
+    function sessionResult(res) {
+      if (res.ok) return res.json().then(function (data) {
+        if (!data || !data.access_token) throw new Error("no access_token in response");
+        setToken(data.access_token); return { ok: true };
+      });
+      return bodyOf(res).then(function (body) {
+        if (res.status === 429) return throttled(res);
+        return { ok: false, status: res.status, key: serverKey(body, "login.failed"), params: body.params || {} };
+      });
+    }
+    function failed(e) { return { ok: false, key: "error.network", params: { reason: e && e.message } }; }
+    /** {this_computer, users:[{username, role, is_owner}], setup_needed} — что показать на экране входа. Ошибка — «не этот компьютер». */
+    function localInfo() {
+      return Promise.resolve().then(function () { return win.fetch(apiBase() + "/api/v1/auth/local", { method: "GET" }); })
+        .then(function (res) { return res.ok ? res.json() : null; }, function () { return null; })
+        .then(function (d) { return d && typeof d === "object" ? d : { this_computer: false, users: [], setup_needed: false }; },
+              function () { return { this_computer: false, users: [], setup_needed: false }; });
+    }
+    function pinLogin(username, pin) {
+      pending = null;
+      return Promise.resolve().then(function () { return jsonPost("/api/v1/auth/pin", { username: String(username || ""), pin: String(pin || "") }); })
+        .then(sessionResult, failed);
+    }
+    /** Ссылка «Придумайте ПИН»: {valid, username}. */
+    function setupCheck(token) {
+      return Promise.resolve().then(function () { return jsonPost("/api/v1/auth/setup/check", { token: String(token || "") }); })
+        .then(function (res) { return res.ok ? res.json() : { valid: false, username: null }; }, function () { return { valid: false, username: null, offline: true }; });
+    }
+    function setupPin(token, pin) {
+      return Promise.resolve().then(function () { return jsonPost("/api/v1/auth/setup", { token: String(token || ""), pin: String(pin || "") }); })
+        .then(sessionResult, failed);
+    }
+    function reauthPin(pin) {
+      return Promise.resolve().then(function () { return jsonPost("/api/v1/auth/reauth", { pin: String(pin || "") }, true); })
+        .then(function (res) {
+          if (res.ok) return { ok: true };
+          return bodyOf(res).then(function (body) {
+            if (res.status === 401) { clearSession(); return { ok: false, key: "login.expired" }; }
+            if (res.status === 429) return throttled(res);
+            return { ok: false, key: serverKey(body, "login.failed"), params: body.params || {} };
+          });
+        }, failed);
+    }
+    /** Задать или сменить свой ПИН (current — текущий, если уже был). */
+    function setPin(pin, current) {
+      var body = { pin: String(pin || "") };
+      if (current) body.current_pin = String(current);
+      return Promise.resolve().then(function () {
+        var headers = authHeaders(); headers["Content-Type"] = "application/json";
+        return win.fetch(apiBase() + "/api/v1/auth/pin", { method: "PUT", headers: headers, body: JSON.stringify(body) });
+      }).then(function (res) {
+        if (res.ok) return { ok: true };
+        return bodyOf(res).then(function (b) {
+          if (res.status === 401) { clearSession(); return { ok: false, key: "login.expired" }; }
+          if (res.status === 429) return throttled(res);
+          return { ok: false, key: serverKey(b, "login.failed"), params: b.params || {} };
+        });
+      }, failed);
+    }
+
     function logoutEverywhere() {
       var token = getToken();
       if (!token) return Promise.resolve({ ok: true });
@@ -280,8 +365,9 @@
              logoutEverywhere: logoutEverywhere, awaitingCode: awaitingCode, enrollToken: enrollToken, setEnrollToken: setEnrollToken,
              recoveryLeft: recoveryLeft, setRecoveryLeft: setRecoveryLeft, refresh: refresh, reauth: reauth,
              passwordChange: passwordChange, setPasswordChange: setPasswordChange, setInitialPassword: setInitialPassword,
-             checkTransport: checkTransport };
+             checkTransport: checkTransport, localInfo: localInfo, pinLogin: pinLogin, setupCheck: setupCheck, setupPin: setupPin,
+             reauthPin: reauthPin, setPin: setPin, goLogin: goLogin };
   }
 
-  return { TOKEN_KEY: TOKEN_KEY, ROLE_KEY: ROLE_KEY, PERMS_KEY: PERMS_KEY, apiBaseOf: apiBaseOf, create: create };
+  return { TOKEN_KEY: TOKEN_KEY, ROLE_KEY: ROLE_KEY, PERMS_KEY: PERMS_KEY, apiBaseOf: apiBaseOf, loginUrlOf: loginUrlOf, create: create };
 });

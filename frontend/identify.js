@@ -352,33 +352,13 @@
     }
 
     // ----- вход, доступ, запуск
-    function resetViews() { show("loginPanel", false); show("accessBanner", false); show("mainArea", false); }
-    function renderLoginError() {
-      var err = $("loginError"), text = loginState ? t(loginState.key, loginState.params) : "";
-      err.textContent = text; setHidden(err, !text);
-    }
+    function resetViews() { show("accessBanner", false); show("mainArea", false); }
+    // Вход — на единой странице login.html (редизайн 2026-11-15). Нет связи — сообщение здесь же, без ухода со страницы.
     function showLogin(messageKey) {
-      resetViews(); show("loginPanel", true);
-      loginState = messageKey ? { key: messageKey } : null; renderLoginError();
-      var u = $("loginUser"); if (u && u.focus) u.focus();
-    }
-    // Второй фактор (документ 18): поле кода появляется, когда сервер попросил код после верного пароля.
-    function codeField(on) {
-      var f = $("loginCodeField"), c = $("loginCode");
-      if (f) { if (on) f.removeAttribute("hidden"); else f.setAttribute("hidden", ""); }
-      if (c) { if (!on) c.value = ""; else if (c.focus) c.focus(); }
-    }
-    function doLogin(evt) {
-      if (evt && evt.preventDefault) evt.preventDefault();
-      var btn = $("loginBtn");
-      loginState = null; renderLoginError(); btn.disabled = true;
-      function problem(key, params) { loginState = { key: key, params: params }; renderLoginError(); }
-      return auth.login($("loginUser").value, $("loginPass").value, ($("loginCode") || {}).value || "").then(function (r) {
-        codeField(!!(r && r.needCode));
-        if (r && (r.needEnroll || r.needPasswordChange)) { win.location.assign("settings.html"); return null; }   // и временный пароль: смена — тоже в «Настройках»     // администратор без 2FA: настройка — в «Настройках»
-        if (!r.ok) { problem(r.key, r.params); return null; }
-        $("loginPass").value = ""; return init();
-      }).catch(function (e) { problem("login.failed", { reason: e.message }); }).then(function () { btn.disabled = false; });
+      stopCamera();
+      if (messageKey === "error.network") { resetViews(); show("mainArea", true); errorState = { key: "error.network" }; renderError(); return; }
+      resetViews();
+      auth.goLogin(messageKey === "login.expired" ? "expired" : "");
     }
     function init() {
       $("footerApiBase").textContent = apiBase();
@@ -393,8 +373,6 @@
         if (perms.indexOf("catalog:read") === -1) { resetViews(); show("accessBanner", true); return; }
         canAdd = perms.indexOf("catalog:write") !== -1;
         syncAddHandler();
-        setHidden($("railProducts"), !canAdd);
-        setHidden($("railAdmin"), perms.indexOf("store:manage") === -1);
         resetViews(); show("mainArea", true);
         applySettings(readSettings());
         if (!cameraSupported()) cameraProblem(cameraErrorKey(null, win.isSecureContext === false ? false : undefined));
@@ -421,11 +399,10 @@
     relabel();
     setLive(false);
     I18N.onChange(function () {
-      relabel(); renderTicket(); renderBarcode(); renderError(); renderLoginError(); renderHistory();
+      relabel(); renderTicket(); renderBarcode(); renderError(); renderHistory();
       $("rail").setAttribute("aria-label", t("nav.menu"));
     });
 
-    $("loginPanel").addEventListener("submit", guard(doLogin));
     $("camBtn").addEventListener("click", function () { if (stream) stopCamera(); else startCamera(); });
     $("snapBtn").addEventListener("click", guard(snapNow));
     $("fileBtn").addEventListener("click", function () { $("fileInput").click(); });

@@ -37,7 +37,8 @@ function boot(opts) {
     if (String(url).endsWith("/api/v1/auth/transport")) return json(200, opts.transport || { secure: true, required: true, https_url: null });
     calls.push({ url, opts: o || {} }); if (opts.fetch) return opts.fetch(url, o); return json(200, opts.me || { permissions: [] });
   };
-  const win = { document: doc, I18N: i18n, Theme: theme, Auth, Icons, fetch, localStorage: local, sessionStorage: session, location: { protocol: "http:", origin: "http://app" } };
+  const win = { document: doc, I18N: i18n, Theme: theme, Auth, Icons, fetch, localStorage: local, sessionStorage: session, location: { protocol: "http:", origin: "http://app", pathname: "/ui/settings.html", hash: "", search: "",
+                                                                                                                     replace(u) { win.redirects.push(u); } }, redirects: [] };
   // озвучки в программе больше нет: любое обращение страницы к синтезатору речи или к модулю Voice — ошибка (попадает в s.errors)
   const forbidden = (name) => ({ get() { errors.push(new Error("страница обратилась к win." + name + ": озвучки больше нет")); return undefined; }, enumerable: true });
   Object.defineProperties(win, { Voice: forbidden("Voice"), speechSynthesis: forbidden("speechSynthesis") });
@@ -48,7 +49,7 @@ function boot(opts) {
     ready: async () => { await app.ready; await flush(); },
     shown: (id) => !$(id).hasAttribute("hidden"),
     click: async (id) => { $(id).click(); await sleep(5); await flush(); },
-    submit: async (user, pass) => { $("loginUser").value = user; $("loginPass").value = pass; $("loginPanel").dispatch("submit", { preventDefault() {} }); await sleep(10); await flush(); },
+    submit: async (user, pass) => { const r = await Auth.create(win).login(user, pass, ""); await app.reload(); await flush(); return r; },
     stored: () => JSON.parse(local.getItem("identify_settings") || "null")
   };
 }
@@ -60,18 +61,17 @@ function boot(opts) {
     assert.strictEqual(new Set(ids).size, ids.length);
     for (const id of new Set([...SCRIPT.matchAll(/\$\("([A-Za-z][\w-]*)"\)/g)].map((m) => m[1]))) assert.ok(ids.includes(id), `в разметке нет #${id}`);
     const s = boot(); await s.ready();
-    assert.ok(!s.shown("railProducts") && !s.shown("railAdmin"));
-    const links = s.$("rail").byTag("a"); assert.deepStrictEqual(links.map((a) => a.getAttribute("href")), ["identify.html", "products.html", "settings.html", "admin.html"]);
-    assert.strictEqual(links[2].getAttribute("aria-current"), "page");
+    assert.strictEqual(s.$("rail").getAttribute("data-shell"), "", "меню — общее (shell.js)");
+    assert.ok(!HTML.includes('id="loginUser"') && !HTML.includes('id="loginPass"'), "своей формы входа нет — кнопка «Войти» ведёт на login.html");
   });
 
   await test("скрипты и стили: язык раньше значков и страницы, озвучки нет, без внешних адресов, в странице только запуск модуля; все ключи текстов есть в трёх словарях; у каждого класса есть правило в ui.css; нет innerHTML", async () => {
     const scripts = [...HTML.matchAll(/<script src="([^"]+)"/g)].map((m) => m[1]), at = (n) => scripts.indexOf(n);
-    assert.ok(at("i18n.js") < at("i18n.ru.js") && at("icons.js") < at("settings.js") && at("auth.js") < at("settings.js") && scripts[scripts.length - 2] === "settings.js" && scripts[scripts.length - 1] === "boot.js");
+    assert.ok(at("i18n.js") < at("i18n.ru.js") && at("icons.js") < at("settings.js") && at("auth.js") < at("settings.js") && scripts.indexOf("settings.js") < scripts.indexOf("boot.js") && scripts[scripts.length - 1] === "boot.js");
     assert.strictEqual(at("voice.js"), -1, "озвучки больше нет: модуль голоса не подключается");
     assert.ok(!/(?:src|href)="(?:https?:)?\/\//.test(HTML));
     assert.deepStrictEqual([...HTML.matchAll(/<script>([\s\S]*?)<\/script>/g)], []);
-    assert.ok(/<script src="theme\.js"><\/script>\s*<script src="theme-apply\.js"><\/script>/.test(HTML) && /<script src="boot\.js" data-start="Settings"><\/script>\s*<\/body>/.test(HTML));
+    assert.ok(/<script src="theme\.js"><\/script>\s*<script src="theme-apply\.js"><\/script>/.test(HTML) && /<script src="boot\.js" data-start="Settings"><\/script>\s*<script src="boot\.js" data-start="Shell"><\/script>\s*<\/body>/.test(HTML));
     const prefixes = new Set(Object.keys(DICTS.ru).map((k) => k.split(".")[0]));
     const keys = new Set([...SCRIPT.matchAll(/"([a-z_]+\.[a-z_]+)"/g)].map((m) => m[1]).filter((k) => prefixes.has(k.split(".")[0]) && !/\.(html|js|css|json)$/.test(k)));
     for (const m of HTML.matchAll(/data-i18n="([^"]+)"/g)) keys.add(m[1]);
@@ -127,13 +127,14 @@ function boot(opts) {
     assert.strictEqual(Settings.SETTINGS_KEY, Identify.SETTINGS_KEY); assert.strictEqual(Settings.SETTINGS_KEY, "identify_settings");
   });
 
-  await test("меню без входа: страница работает без сервера, лишних пунктов нет; с токеном — «Товары» и «Управление» по правам; сбой или чужой токен — пункты остаются скрытыми, ошибок нет", async () => {
-    const a = boot(); await a.ready(); assert.strictEqual(a.calls.length, 0, "без токена сервер не спрашиваем"); assert.ok(!a.shown("railProducts") && !a.shown("railAdmin"));
+  await test("без входа страница работает без сервера; с токеном — «кто я»; сбой или чужой токен — ошибок нет; «Войти» ведёт на общую страницу входа", async () => {
+    const a = boot(); await a.ready(); assert.strictEqual(a.calls.length, 0, "без токена сервер не спрашиваем");
+    a.$("loginPanel").dispatch("submit", { preventDefault() {} }); await flush();
+    assert.deepStrictEqual(a.win.redirects, ["login.html?next=settings.html"]);
     const b = boot({ token: "tok", me: { permissions: ["catalog:read", "catalog:write", "store:manage"] } }); await b.ready();
-    assert.ok(b.shown("railProducts") && b.shown("railAdmin")); assert.strictEqual(b.calls[0].url, "http://app/api/v1/auth/me"); assert.strictEqual(b.calls[0].opts.headers.Authorization, "Bearer tok");
-    const c = boot({ token: "tok", me: { permissions: ["catalog:read", "catalog:write"] } }); await c.ready(); assert.ok(c.shown("railProducts") && !c.shown("railAdmin"));
-    const d = boot({ token: "tok", fetch: async () => json(401, {}) }); await d.ready(); assert.ok(!d.shown("railProducts") && !d.shown("railAdmin")); assert.deepStrictEqual(d.errors, []);
-    const e = boot({ token: "tok", fetch: async () => { throw new Error("offline"); } }); await e.ready(); assert.ok(!e.shown("railProducts")); assert.deepStrictEqual(e.errors, []);
+    assert.strictEqual(b.calls[0].url, "http://app/api/v1/auth/me"); assert.strictEqual(b.calls[0].opts.headers.Authorization, "Bearer tok");
+    const d = boot({ token: "tok", fetch: async () => json(401, {}) }); await d.ready(); assert.deepStrictEqual(d.errors, []);
+    const e = boot({ token: "tok", fetch: async () => { throw new Error("offline"); } }); await e.ready(); assert.deepStrictEqual(e.errors, []);
   });
 
   // ============================================================ вход владельца и администратора
@@ -151,7 +152,6 @@ function boot(opts) {
     assert.ok(!b.shown("loginPanel") && !b.shown("accountInfo"), "пока ждём сервер — ни формы, ни имени");
     release(); await b.ready();
     assert.ok(b.shown("accountInfo") && !b.shown("loginPanel")); assert.strictEqual(b.$("accountName").textContent, "Вы вошли как admin1.");
-    assert.ok(b.shown("railProducts") && b.shown("railAdmin"));
   });
 
   await test("вход: удачный вход — запрос в форме, токен в sessionStorage, пароль очищен и нигде не хранится, появились имя и пункты меню", async () => {
@@ -161,32 +161,9 @@ function boot(opts) {
     const login = s.calls[0]; assert.strictEqual(login.url, "http://app/api/v1/auth/login"); assert.strictEqual(login.opts.method, "POST");
     assert.strictEqual(new URLSearchParams(login.opts.body).get("password"), "se&cret 1");
     assert.strictEqual(s.calls[1].url, "http://app/api/v1/auth/me"); assert.strictEqual(s.calls[1].opts.headers.Authorization, "Bearer tok-9");
-    assert.strictEqual(s.$("loginPass").value, "", "пароль не остаётся в поле");
     assert.ok(s.shown("accountInfo") && !s.shown("loginPanel") && !s.shown("loginError")); assert.strictEqual(s.$("accountName").textContent, "Вы вошли как admin1.");
-    assert.ok(s.shown("railProducts") && s.shown("railAdmin")); assert.ok(!s.$("loginBtn").disabled);
     for (const store of [s.local, s.session]) assert.ok(![...store._m.values()].some((v) => v.includes("se&cret")), "пароль не сохраняется");
     assert.deepStrictEqual(s.errors, []);
-  });
-
-  await test("вход: неверный пароль, слишком много попыток, нет связи, ответ без токена — понятная строка под формой, токена нет, кнопка снова доступна", async () => {
-    const cases = [
-      [json(401, {}), "Неверный логин или пароль"], [json(429, {}), "Слишком много неудачных попыток"], [json(500, {}), "Не удалось войти: HTTP 500"],
-      [new Error("offline"), "Не удалось войти: offline"], [json(200, {}), "Не удалось войти: no access_token in response"]
-    ];
-    for (const [reply, text] of cases) {
-      const s = boot({ fetch: async () => { if (reply instanceof Error) throw reply; return reply; } }); await s.ready();
-      await s.submit("u", "p");
-      assert.ok(s.shown("loginError") && s.$("loginError").textContent.includes(text), `${text} ≠ ${s.$("loginError").textContent}`);
-      assert.strictEqual(s.session.getItem("shelf_audit_token"), null); assert.ok(s.shown("loginPanel") && !s.shown("accountInfo")); assert.ok(!s.$("loginBtn").disabled);
-      await s.submit("u", "p");                     // повторная попытка очищает прежнюю строку, а не копит
-    }
-  });
-
-  await test("вход: вход прошёл, но «кто я» проверить не вышло — токен не остаётся, под формой сказано, что проверить не удалось", async () => {
-    const s = boot({ fetch: route({ "/auth/login": () => json(200, { access_token: "tok-10" }), "/auth/me": () => json(500, {}) }) }); await s.ready();
-    await s.submit("u", "p");
-    assert.strictEqual(s.session.getItem("shelf_audit_token"), null); assert.ok(s.shown("loginPanel") && !s.shown("accountInfo"));
-    assert.ok(s.$("loginError").textContent.includes("Не удалось проверить вход"));
   });
 
   await test("вход: прежняя сессия истекла — форма и «Сессия истекла», токен стёрт; сервер недоступен — форма и сообщение о связи, ошибок страницы нет", async () => {
@@ -197,15 +174,16 @@ function boot(opts) {
     assert.strictEqual(b.session.getItem("shelf_audit_token"), "tok", "при сбое связи токен не стирается");
   });
 
-  await test("выход: токен стирается сразу (до ответа сервера), серверу уходит прежний токен, форма возвращается, пункты меню скрываются", async () => {
+  await test("выход: токен стирается сразу (до ответа сервера), серверу уходит прежний токен, затем — на страницу входа", async () => {
     let release; const gate = new Promise((r) => { release = r; });
     const s = boot({ token: "tok-11", fetch: route({ "/auth/me": () => json(200, ADMIN), "/auth/logout": async () => { await gate; return json(200, {}); } }) }); await s.ready();
     assert.ok(s.shown("accountInfo"));
     s.$("logoutBtn").click(); await flush();
     assert.strictEqual(s.session.getItem("shelf_audit_token"), null, "стёрт сразу, не дожидаясь сервера");
-    assert.ok(s.shown("loginPanel") && !s.shown("accountInfo") && !s.shown("railProducts") && !s.shown("railAdmin"));
+    assert.ok(s.shown("loginPanel") && !s.shown("accountInfo"));
     const out = s.calls.find((c) => c.url.endsWith("/auth/logout")); assert.ok(out && out.opts.method === "POST" && out.opts.headers.Authorization === "Bearer tok-11");
     release(); await flush(); assert.deepStrictEqual(s.errors, []);
+    assert.deepStrictEqual(s.win.redirects, ["login.html"]);
   });
 
   await test("вход: тексты на странице следуют за языком — «Вы вошли как», кнопки и строка ошибки меняются на лету, имя из базы не переводится", async () => {
@@ -213,8 +191,6 @@ function boot(opts) {
     s.i18n.setLang("en"); await flush();
     assert.strictEqual(s.$("accountName").textContent, DICTS.en["settings.signed_in"].replace("{name}", "admin1")); assert.strictEqual(s.$("logoutBtn").textContent, DICTS.en["settings.sign_out"]);
     s.i18n.setLang("uz"); await flush(); assert.strictEqual(s.$("accountName").textContent, DICTS.uz["settings.signed_in"].replace("{name}", "admin1"));
-    const e = boot({ fetch: async () => json(401, {}) }); await e.ready(); await e.submit("u", "p");
-    assert.strictEqual(e.$("loginError").textContent, DICTS.ru["login.wrong"]); e.i18n.setLang("en"); await flush(); assert.strictEqual(e.$("loginError").textContent, DICTS.en["login.wrong"]);
   });
 
   // ================================================================ безопасность входа (документ 18)
@@ -299,18 +275,6 @@ function boot(opts) {
     s.i18n.setLang("en"); await flush();
     assert.strictEqual(s.$("mfaStatus").textContent, DICTS.en["security.mfa_off"]);
     assert.ok(s.$("sessionList").byTag("li")[0].textContent.includes("Computer · Windows · Chrome"));
-  });
-
-  await test("вход со вторым фактором на странице настроек: поле кода появляется и прячется", async () => {
-    let n = 0;
-    const s = boot({ fetch: route({ "/auth/login": () => json(200, { mfa_required: true, mfa_token: "pass-0123456789", expires_in: 300 }),
-                                    "/auth/login/2fa": () => (++n === 1 ? json(200, { access_token: "tok-2" }) : json(500, {})),
-                                    "/auth/me": () => json(200, ADMIN), "/auth/2fa": () => json(200, { enabled: true, available: true }),
-                                    "/auth/sessions": () => json(200, []) }) }); await s.ready();
-    await s.submit("admin1", "p");
-    assert.ok(!s.$("loginCodeField").hasAttribute("hidden") && s.$("loginError").textContent === DICTS.ru["login.code_prompt"]);
-    s.$("loginCode").value = "123456"; s.$("loginPanel").dispatch("submit", { preventDefault() {} }); await sleep(10); await flush();
-    assert.strictEqual(s.session.getItem("shelf_audit_token"), "tok-2"); assert.ok(s.$("loginCodeField").hasAttribute("hidden"));
   });
 
   // ================================================================ решения владельца В-1…В-4 (2026-11-08)
@@ -463,13 +427,30 @@ function boot(opts) {
     assert.strictEqual(s.session.getItem("shelf_audit_token"), null);
   });
 
-  await test("вход по незащищённому каналу: пароль не уходит, вместо входа — защищённый адрес", async () => {
-    const s = boot({ transport: { secure: false, required: true, https_url: "https://192.168.1.10:8000" } });
-    await s.ready();
-    await s.submit("boss", "secret-pass");
-    assert.strictEqual(s.calls.length, 0, "запроса с паролем не было");
-    assert.strictEqual(s.$("loginError").textContent, "Здесь соединение не защищено — пароль по нему не отправляется. Откройте защищённый адрес: https://192.168.1.10:8000");
-    assert.strictEqual(s.$("loginPass").value, "", "пароль стёрт из поля");
+  await test("ПИН-код (2026-11-15): только на этом компьютере; задать впервые — без текущего; сменить — с текущим; несовпадение — строкой", async () => {
+    const log = []; let local = { this_computer: true, users: [], setup_needed: true };
+    const s = boot({ token: "tok", fetch: async (url, o) => {
+      const p = url.replace(/^.*\/api\/v1/, ""), method = (o && o.method) || "GET";
+      log.push(method + " " + p + " " + ((o && o.body) || ""));
+      if (p === "/auth/me") return json(200, ADMIN);
+      if (p === "/auth/local") return json(200, local);
+      if (p === "/auth/pin") return method === "PUT" ? json(200, { status: "pin_set" }) : json(404, {});
+      if (p === "/auth/2fa") return json(200, { enabled: false, available: true });
+      if (p === "/auth/sessions") return json(200, []);
+      return json(404, {});
+    } });
+    await s.ready(); await flush();
+    assert.ok(s.shown("pinGroup") && !s.shown("pinCurrentField")); assert.strictEqual(s.$("pinStatus").textContent, DICTS.ru["pin.status_off"]);
+    s.$("pinNew").value = "482917"; s.$("pinRepeat").value = "482918"; s.$("pinForm").dispatch("submit", { preventDefault() {} }); await flush();
+    assert.strictEqual(s.$("pinMsg").textContent, DICTS.ru["signin.mismatch"]); assert.ok(!log.some((l) => l.startsWith("PUT")));
+    s.$("pinNew").value = "482917"; s.$("pinRepeat").value = "482917"; s.$("pinForm").dispatch("submit", { preventDefault() {} }); await sleep(5); await flush();
+    assert.ok(log.includes('PUT /auth/pin {"pin":"482917"}')); assert.strictEqual(s.$("pinMsg").textContent, DICTS.ru["pin.saved"]);
+    assert.ok(s.shown("pinCurrentField"), "ПИН теперь есть — для смены нужен текущий");
+    for (const id of ["pinNew", "pinRepeat", "pinCurrent"]) assert.strictEqual(s.$(id).value, "", id);
+    local = { this_computer: false, users: [] };
+    const far = boot({ token: "tok", fetch: async (url) => (url.endsWith("/auth/me") ? json(200, ADMIN) : url.endsWith("/auth/local") ? json(200, local) : json(200, [])) });
+    await far.ready(); await flush();
+    assert.ok(!far.shown("pinGroup"), "с другого устройства раздела ПИН нет");
   });
 
   console.log(`\n${passed} passed`);

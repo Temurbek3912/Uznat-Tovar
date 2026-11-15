@@ -78,7 +78,6 @@
         initialMsg = null;
         if (r.signedIn) return refreshAccount();
         loginMsg = { key: "login.password_set_sign_in", ok: true }; renderAccount();                 // нужен второй фактор — вход с новым паролем
-        var u = $("loginUser"); if (u && u.focus) u.focus();
         return null;
       }).then(function (x) { btn.disabled = false; return x; }, function (e) { btn.disabled = false; throw e; });
     }
@@ -93,10 +92,7 @@
       err.setAttribute("role", loginMsg && loginMsg.ok ? "status" : "alert");
       renderSecurity();
     }
-    function revealRail(perms) {
-      setHidden($("railProducts"), perms.indexOf("catalog:write") === -1);
-      setHidden($("railAdmin"), perms.indexOf("store:manage") === -1);
-    }
+    function revealRail() { /* меню рисует shell.js по правам */ }
     function refreshAccount() {
       return auth.me().then(function (r) {
         account.known = true;
@@ -105,6 +101,7 @@
           account.name = String(me.username || "—"); loginMsg = null;
           revealRail(Array.isArray(me.permissions) ? me.permissions : []);
           loadSecurity().catch(report);
+          loadPin().catch(report);
         } else {
           account.name = null; revealRail([]); resetSecurity();
           loginMsg = r.status === "expired" ? { key: "login.expired" } : r.status === "error" ? { key: r.key } : null;
@@ -113,32 +110,54 @@
         return r;
       });
     }
-    // Второй фактор (документ 18): поле кода появляется, когда сервер попросил код после верного пароля.
-    function codeField(on) {
-      var f = $("loginCodeField"), c = $("loginCode");
-      if (f) { if (on) f.removeAttribute("hidden"); else f.setAttribute("hidden", ""); }
-      if (c) { if (!on) c.value = ""; else if (c.focus) c.focus(); }
-    }
+    // Вход — на единой странице login.html (редизайн 2026-11-15); отсюда — только кнопка «Войти» с возвратом сюда.
     function doLogin(evt) {
       if (evt && evt.preventDefault) evt.preventDefault();
-      var btn = $("loginBtn");
-      loginMsg = null; renderAccount(); btn.disabled = true;
-      return auth.login($("loginUser").value, $("loginPass").value, ($("loginCode") || {}).value || "").then(function (r) {
-        codeField(!!(r && r.needCode));
-        if (r && r.insecure) $("loginPass").value = "";          // пароль не отправлен (незащищённый канал) — и в поле не остаётся
-        if (r && r.needEnroll) { loginMsg = null; $("loginPass").value = ""; renderAccount(); return loadSecurity(); }
-        if (r && r.needPasswordChange) { loginMsg = null; initialMsg = null; $("loginPass").value = ""; renderAccount(); var n = $("initialNew"); if (n && n.focus) n.focus(); return null; }
-        if (!r.ok) { loginMsg = r.params ? { key: r.key, params: r.params } : { key: r.key }; renderAccount(); return null; }
-        $("loginPass").value = "";
-        return refreshAccount().then(function (me) { if (me.status !== "ok") auth.setToken(null); });      // вход прошёл, но проверить, кто это, не вышло — токен не оставляем
-      }).catch(function (e) { loginMsg = { key: "login.failed", params: { reason: e.message } }; renderAccount(); })
-        .then(function () { btn.disabled = false; });
+      auth.goLogin("");
+      return Promise.resolve(null);
+    }
+    // ПИН-код для входа на этом компьютере (сервер принимает его только отсюда — app/core/local_pin.py).
+    var pinState = { shown: false, has: false, msg: null };
+    function renderPin() {
+      setHidden($("pinGroup"), !pinState.shown);
+      if (!pinState.shown) return;
+      $("pinStatus").textContent = t(pinState.has ? "pin.status_on" : "pin.status_off");
+      setHidden($("pinCurrentField"), !pinState.has);
+      var m = $("pinMsg");
+      m.textContent = pinState.msg ? t(pinState.msg.key, pinState.msg.params || {}) : "";
+      m.className = pinState.msg && pinState.msg.ok ? "notice" : "notice notice--danger";
+      setHidden(m, !pinState.msg);
+    }
+    function loadPin() {
+      if (account.name === null || typeof auth.localInfo !== "function") { pinState.shown = false; renderPin(); return Promise.resolve(null); }
+      return auth.localInfo().then(function (local) {
+        pinState.shown = !!local.this_computer;
+        pinState.has = (local.users || []).some(function (u) { return u.username === account.name; });
+        renderPin();
+        return local;
+      });
+    }
+    function savePin(evt) {
+      if (evt && evt.preventDefault) evt.preventDefault();
+      var digits = function (id) { return String($(id).value || "").replace(/\D+/g, ""); };
+      var next = digits("pinNew"), again = digits("pinRepeat"), current = digits("pinCurrent");
+      $("pinNew").value = ""; $("pinRepeat").value = ""; $("pinCurrent").value = "";
+      if (next.length !== 6) { pinState.msg = { key: "signin.pin_rule_short" }; renderPin(); return Promise.resolve(null); }
+      if (next !== again) { pinState.msg = { key: "signin.mismatch" }; renderPin(); return Promise.resolve(null); }
+      var btn = $("pinSaveBtn"); btn.disabled = true;
+      return auth.setPin(next, pinState.has ? current : "").then(function (r) {
+        pinState.msg = r.ok ? { key: "pin.saved", ok: true } : { key: r.key, params: r.params };
+        if (r.ok) pinState.has = true;
+        renderPin();
+        return r;
+      }).then(function (x) { btn.disabled = false; return x; }, function (e) { btn.disabled = false; throw e; });
     }
     function doLogout() {
       var done = auth.logout();                                  // токен стирается сразу, сервер уведомляется по возможности
       account.name = null; account.known = true; loginMsg = null; revealRail([]); resetSecurity(); renderAccount();
-      var u = $("loginUser"); if (u && u.focus) u.focus();
-      return done;
+      pinState.shown = false; renderPin();
+      // Вышли — на страницу входа (как кнопка «Выйти» в меню): на этом компьютере там сразу ПИН-код.
+      return done.then(function () { if (win.location && typeof win.location.replace === "function") win.location.replace("login.html"); });
     }
 
     // ----- безопасность входа: второй фактор и сеансы (документ 18). Только после входа; данные — с сервера, тексты — ключами.
@@ -359,12 +378,13 @@
     $("autoToggle").checked = cfg.auto;
     relabel(); renderThemeSwitch();
     renderAccount();
-    I18N.onChange(function () { relabel(); renderThemeSwitch(); renderAccount(); renderSecurity(); $("rail").setAttribute("aria-label", t("nav.menu")); });
+    I18N.onChange(function () { relabel(); renderThemeSwitch(); renderAccount(); renderSecurity(); renderPin(); $("rail").setAttribute("aria-label", t("nav.menu")); });
 
     $("themeBtn").addEventListener("click", function () { Theme.next(); relabel(); renderThemeSwitch(); });
     $("autoToggle").addEventListener("change", storeSettings);
     $("loginPanel").addEventListener("submit", guard(doLogin));
     $("initialPanel").addEventListener("submit", guard(setInitial));
+    $("pinForm").addEventListener("submit", guard(savePin));
     $("logoutBtn").addEventListener("click", guard(doLogout));
     $("mfaEnableBtn").addEventListener("click", function () { securityStep("setup"); var p = $("mfaSetupPass"); if (p && p.focus) p.focus(); });
     $("mfaDisableBtn").addEventListener("click", function () { securityStep("disable"); var p = $("mfaDisablePass"); if (p && p.focus) p.focus(); });
@@ -381,7 +401,8 @@
     $("passwordChangeBtn").addEventListener("click", function () { securityStep("password"); var p = $("pwCurrent"); if (p && p.focus) p.focus(); });
     $("passwordForm").addEventListener("submit", guard(changePassword));
 
-    return { ready: refreshAccount().then(function (me) { if (enrolling()) return loadSecurity(); return me; }).catch(report) };
+    function reload() { return refreshAccount().then(function (me) { if (enrolling()) return loadSecurity(); return me; }).catch(report); }
+    return { ready: reload(), reload: reload };
   }
 
   return { start: start, cleanSettings: cleanSettings, SETTINGS_KEY: SETTINGS_KEY };

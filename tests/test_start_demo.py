@@ -66,7 +66,7 @@ class Env:
             lan_ip=lambda: "192.168.1.57", render_qr=lambda url: f"[QR {url}]", open_browser=self.opened.append,
             out=self.lines.append, platform="win32", python="PY", root=tmp_path, worker_status=lambda p: {"ready": True},
             migrate=lambda: "", probe_hw=lambda: hardware.Hardware(ram_gb=32, cores=8, gpu_name="RTX", vram_gb=8.0),
-            apply_env=self.applied.update, hf_cache=lambda: tmp_path / "no-hf-cache",
+            apply_env=self.applied.update, hf_cache=lambda: tmp_path / "no-hf-cache", setup_link=lambda py, root, env: None,
         )
         kw.update(over)
         self.deps = Deps(**kw)
@@ -158,13 +158,26 @@ def test_services_are_stopped_in_reverse_order(tmp_path):
 
 def test_browser_opens_home_page_unless_disabled_and_browser_errors_are_ignored(tmp_path):
     _, env = go(tmp_path, Options(no_browser=False))
-    assert env.opened == ["http://localhost:8000/ui/index.html"]
+    assert env.opened == ["http://localhost:8000/ui/admin.html"]          # управление на этом компьютере (редизайн 2026-11-15)
+    assert "Забыли ПИН.bat" in env.text
     _, env = go(tmp_path, Options(no_browser=True))
     assert env.opened == []
     def boom(url):
         raise RuntimeError("no browser")
     code, _ = go(tmp_path, Options(no_browser=False), open_browser=boom)
     assert code == 0
+
+
+def test_first_run_opens_the_choose_a_pin_page(tmp_path):
+    """ПИН ещё ни у кого нет — окно показывает и браузер открывает «Придумайте ПИН» (без командной строки); run_mode записан."""
+    seen = []
+    def link(py, root, env):
+        seen.append(env)
+        return {"needed": True, "token": "TOKEN123", "username": "admin", "error": None}
+    _, env = go(tmp_path, Options(no_browser=False), setup_link=link)
+    assert env.opened == ["http://localhost:8000/ui/login.html#setup=TOKEN123"]
+    assert "ПЕРВЫЙ ВХОД (admin)" in env.text and seen
+    assert (tmp_path / "data" / "run_mode.json").is_file()
 
 
 def test_custom_port_is_used_for_services_health_and_urls(tmp_path):
@@ -359,7 +372,8 @@ def _real_env(tmp_path, port, **over):
         time.sleep(0.05)
     kw = dict(popen=popen, http_ready=sd._http_ready, worker_status=lambda p: {"ready": True}, which=lambda n: None, load_settings=lambda: None,
               port_busy=lambda p: False, sleep=sleep, out=lines.append, lan_ip=lambda: "10.0.0.2", render_qr=lambda u: None,
-              open_browser=lambda u: None, platform="linux", python=sys.executable, root=tmp_path, migrate=lambda: "")
+              open_browser=lambda u: None, platform="linux", python=sys.executable, root=tmp_path, migrate=lambda: "",
+              setup_link=lambda py, root, env: None)
     kw.update(over)
     return Deps(**kw), popen_log, lines
 

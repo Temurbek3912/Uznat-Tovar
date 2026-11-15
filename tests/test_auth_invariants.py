@@ -22,7 +22,11 @@ PUBLIC_ROUTES = {("post", "/auth/login"), ("post", "/auth/login/2fa"), ("post", 
                  ("post", "/public/identify"), ("get", "/public/store"),
                  # список товаров покупателя (шаг 3, 2026-11-15): только товары не из архива, только поля карточки магазина,
                  # миниатюры; своё ограничение частоты (tests/test_public_api.py)
-                 ("get", "/public/products"), ("get", "/public/categories"), ("get", "/public/photo/{ref}")}
+                 ("get", "/public/products"), ("get", "/public/categories"), ("get", "/public/photo/{ref}"),
+                 # вход ПИН-кодом и ссылка «Придумайте ПИН» (решение владельца 2026-11-15): только с самого компьютера программы —
+                 # каждый проверяет это первой строкой (test_pin_routes_check_this_computer_first, tests/test_local_pin.py)
+                 ("get", "/auth/local"), ("post", "/auth/pin"), ("post", "/auth/setup/check"), ("post", "/auth/setup")}
+LOCAL_ONLY_ROUTES = ("def login_pin(", "def setup_check(", "def setup_pin(")
 AUTH_DEPS = {"get_current_user", "require_permission", "require_recent_auth", "get_enrolling_user", "get_password_changing_user"}
 ENROLL_ROUTES = {("get", "/auth/2fa"), ("post", "/auth/2fa/setup"), ("post", "/auth/2fa/confirm")}
 
@@ -74,6 +78,16 @@ def test_enrollment_pass_is_accepted_only_by_the_three_2fa_setup_routes():
             if "get_enrolling_user" in deps:
                 users.add((method, (_prefix(path) + route).replace("/api/v1", "")))
     assert users == ENROLL_ROUTES
+
+
+def test_pin_routes_check_this_computer_first():
+    auth = (API / "routes_auth.py").read_text(encoding="utf-8")
+    for head in LOCAL_ONLY_ROUTES:
+        body = auth[auth.index(head):]
+        first = body.index('"""', body.index('"""') + 3) + 3
+        assert body[first:].lstrip().startswith("_require_this_computer(request)"), head
+    local = auth[auth.index("def local_info("):auth.index("def login_pin(")]
+    assert local.index("if not _this_computer(request):") < local.index("pin_users()")
 
 
 def test_own_password_change_is_the_only_other_place_that_opens_a_session():

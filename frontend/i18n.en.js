@@ -695,7 +695,12 @@
     "admin.reset_2fa_confirm": "Reset two-step sign-in for “{name}”?\nAll their sessions will end; on the next sign-in they will set it up again.\nIf the phone was stolen or someone else may know the password, set a new password too (edit user).",
     "admin.reset_2fa_done": "Two-step sign-in reset",
     "admin.owner_badge": "owner",
-    "items.count": { one: "{n} product", other: "{n} products" }
+    "items.count": { one: "{n} product", other: "{n} products" },
+    "server.pin_format": "The PIN must be exactly 6 digits.",
+    "server.pin_too_simple": "This PIN is too easy to guess. Choose another one.",
+    "server.pin_wrong": "Wrong PIN.",
+    "server.pin_local_only": "PIN sign-in works only on the computer running the program. Here, sign in with your username and password.",
+    "server.setup_link_invalid": "This link has expired or was already used. Run “Забыли ПИН.bat” in the program folder to open a new one.",
   };
   if (root.I18N) root.I18N.add("en", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

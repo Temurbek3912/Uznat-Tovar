@@ -18,7 +18,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core import account_status, auth_secrets, recovery_codes, temp_password, totp
+from app.core import account_status, auth_secrets, local_pin, recovery_codes, temp_password, totp
 from app.services import audit
 from app.services.audit import AuditActor
 from app.core.app_errors import AppError
@@ -52,6 +52,7 @@ from app.db.models import (
     AuthMfaChallenge,
     AuthRecoveryCode,
     AuthSessionMeta,
+    AuthSetupLink,
     Store,
     User,
     UserSecurity,
@@ -141,6 +142,20 @@ class AccessExpiredError(AuthServiceError):
     default_code = "access_expired"
 
 
+class SetupLinkError(AuthServiceError):
+    """Ссылка «Придумайте ПИН» не найдена, истекла или уже использована — нужна новая (окно программы или «Забыли ПИН.bat»)."""
+
+    kind = "unauthorized"
+    default_code = "setup_link_invalid"
+
+
+class PinError(AuthServiceError):
+    """ПИН не подходит под правила (6 цифр, не простой)."""
+
+    kind = "invalid"
+    default_code = "pin_format"
+
+
 class OwnerError(AuthServiceError):
     """Действие с владельцем системы запрещено (назначение — только с консоли сервера)."""
 
@@ -209,23 +224,24 @@ class AuthService:
 
     def issue_token(self, user: User, ttl_minutes: int, *, context: LoginContext | None = None,
                     mfa: bool = False, secret_key: str = "", scope: str = SCOPE_FULL, listener: str = "all",
-                    auth_at: datetime | None = None) -> tuple[str, datetime]:
+                    auth_at: datetime | None = None, method: str | None = None) -> tuple[str, datetime]:
         """Выдаёт новый токен. Сырое значение возвращается ОДИН раз — в БД остаётся только хеш.
         Сведения о сеансе (устройство, откуда, поколение, пройден ли второй фактор, область, вход программы, время проверки
         пароля) пишутся в той же транзакции. Новый сеанс = только что подтверждённая личность (reauth_at = сейчас)."""
         result = self._add_session(user, ttl_minutes, context=context, mfa=mfa, secret_key=secret_key, scope=scope,
-                                   listener=listener, auth_at=auth_at)
+                                   listener=listener, auth_at=auth_at, method=method)
         if scope == SCOPE_FULL:
             ctx = context or LoginContext()
             device = summarize_user_agent(ctx.user_agent)
             self._audit("login.succeeded", user.id, after={"device": device["kind"], "os": device["os"], "source": ctx.source,
-                                                           "mfa": mfa, "listener": listener},
+                                                           "mfa": mfa, "listener": listener,
+                                                           "method": method or "password"},
                         actor=AuditActor(user.id, (self.actor.via if self.actor else "api"), self.actor.ip_hash if self.actor else None))
         self.db.commit()
         return result
 
     def _add_session(self, user: User, ttl_minutes: int, *, context: LoginContext | None, mfa: bool, secret_key: str,
-                     scope: str, listener: str, auth_at: datetime | None) -> tuple[str, datetime]:
+                     scope: str, listener: str, auth_at: datetime | None, method: str | None = None) -> tuple[str, datetime]:
         """issue_token без commit: вызывающий фиксирует вместе со своим изменением (смена пароля — документ 05, §12.11, п. 4)."""
         now = utcnow()
         # Попутно чистим просроченные токены этого пользователя, чтобы таблица не росла вечно.
@@ -245,6 +261,7 @@ class AuthService:
             device_browser=device["browser"], source=ctx.source,
             ip_hash=ip_fingerprint(ctx.ip, auth_secrets.ip_hmac_key(secret_key)), mfa=mfa, scope=scope, listener=listener,
             auth_at=auth_at or now, reauth_at=now if scope == SCOPE_FULL else None, created_at=now, last_used_at=now,
+            method=method,
         ))
         return raw_token, expires_at
 
@@ -285,6 +302,8 @@ class AuthService:
             return None
         if scope == SCOPE_FULL and security is not None and security.must_change_password:
             return None                       # при временном пароле обычных сеансов нет (документ 05, §12.2), где бы токен ни взялся
+        if meta is not None and meta.method == local_pin.METHOD_PIN and local_pin.pin_session_idle(meta.last_used_at, utcnow()):
+            return None                       # сеанс по ПИН закрывается после простоя (app/core/local_pin.py)
         if meta is not None and needs_last_used_update(meta.last_used_at, utcnow()):
             meta.last_used_at = utcnow()
             self.db.commit()
@@ -404,7 +423,7 @@ class AuthService:
                 token_id=token.id, user_id=meta.user_id, session_epoch=meta.session_epoch, device_label=meta.device_label,
                 device_kind=meta.device_kind, device_os=meta.device_os, device_browser=meta.device_browser, source=meta.source,
                 ip_hash=meta.ip_hash, mfa=meta.mfa, scope=meta.scope, listener=meta.listener, auth_at=auth_at,
-                reauth_at=meta.reauth_at, created_at=meta.created_at, last_used_at=now,
+                reauth_at=meta.reauth_at, created_at=meta.created_at, last_used_at=now, method=meta.method,
             ))
         self.db.delete(old)
         self.db.commit()
@@ -421,6 +440,144 @@ class AuthService:
             if step is None:
                 raise MfaCodeError("Код не подошёл или уже был использован — дождитесь следующего кода в приложении")
             security.totp_last_step = step
+        meta = self.db.get(AuthSessionMeta, session_id)
+        if meta is None or meta.user_id != user_id:
+            raise SessionNotFoundError("Сеанс не найден — войдите заново")
+        meta.reauth_at = utcnow()
+        self.db.commit()
+
+    # ------------------------------------------------- ПИН на этом компьютере (решение владельца 2026-11-15, app/core/local_pin.py)
+
+    def has_pin(self, user_id: str) -> bool:
+        security = self._security(user_id)
+        return bool(security is not None and security.pin_hash)
+
+    def pin_users(self) -> list[User]:
+        """Кто может войти ПИН-кодом: ПИН задан, учётная запись может входить. Для экрана входа на этом компьютере."""
+        rows = self.db.execute(select(User).join(UserSecurity, UserSecurity.user_id == User.id)
+                               .where(UserSecurity.pin_hash.is_not(None)).order_by(User.username)).scalars().all()
+        now = utcnow()
+        return [u for u in rows if account_status.can_sign_in(is_active=u.is_active, archived_at=u.archived_at,
+                                                              access_until=u.access_until, now=now)]
+
+    def login_with_pin(self, username: str, pin: str) -> User | None:
+        """Верный ПИН -> пользователь (счётчик ошибок сброшен). Неверный -> None; PIN_MAX_FAILURES ошибок подряд снимают ПИН.
+        Хеш проверяется всегда (для неизвестного логина — пустышка): время ответа не выдаёт, есть ли ПИН."""
+        canon = canonical_username(username)
+        user = self.db.execute(select(User).where(User.username == canon)).scalar_one_or_none() if canon else None
+        security = self._security(user.id, lock=True) if user is not None else None
+        stored = security.pin_hash if security is not None and security.pin_hash else dummy_password_hash()
+        ok = verify_password(pin or "", stored)
+        if user is None or security is None or not security.pin_hash:
+            return None
+        if not ok:
+            security.pin_failures = int(security.pin_failures or 0) + 1
+            if security.pin_failures >= local_pin.PIN_MAX_FAILURES:
+                security.pin_hash, security.pin_set_at, security.pin_failures = None, None, 0
+                self._audit("user.pin_disabled", user.id, reason="too_many_failures")
+            self.db.commit()
+            return None
+        if not account_status.can_sign_in(is_active=user.is_active, archived_at=user.archived_at,
+                                          access_until=user.access_until, now=utcnow()):
+            self.db.commit()
+            return None
+        security.pin_failures = 0
+        self.db.commit()
+        return user
+
+    def set_own_pin(self, user_id: str, new_pin: str, current_pin: str | None) -> None:
+        """Сменить или впервые задать свой ПИН в открытом сеансе. Если ПИН уже есть — нужен текущий."""
+        try:
+            value = local_pin.check_pin(new_pin)
+        except local_pin.PinPolicyError as exc:
+            raise PinError(str(exc), exc.code) from exc
+        security = self._security(user_id, create=True, lock=True)
+        if security.pin_hash and not verify_password(current_pin or "", security.pin_hash):
+            raise WrongPasswordError("Текущий ПИН неверный", "pin_wrong")
+        security.pin_hash, security.pin_set_at, security.pin_failures = hash_password(value), utcnow(), 0
+        security.updated_at = utcnow()
+        self._audit("user.pin_set", user_id)
+        self.db.commit()
+
+    def remove_pin(self, user_id: str) -> None:
+        security = self._security(user_id, lock=True)
+        if security is not None and security.pin_hash:
+            security.pin_hash, security.pin_set_at, security.pin_failures = None, None, 0
+            self._audit("user.pin_removed", user_id)
+            self.db.commit()
+
+    def setup_link_target(self, username: str | None = None) -> User | None:
+        """Для кого ссылка «Придумайте ПИН»: названный логин, иначе владелец, иначе первый действующий администратор."""
+        if username:
+            return self.db.execute(select(User).where(User.username == canonical_username(username))).scalar_one_or_none()
+        owner = self.owner_id()
+        if owner:
+            user = self.db.get(User, owner)
+            if user is not None and user.is_active and user.archived_at is None:
+                return user
+        admins = self.db.execute(select(User).where(User.role == Role.ADMIN.value, User.is_active.is_(True),
+                                                    User.archived_at.is_(None)).order_by(User.username)).scalars().all()
+        return admins[0] if admins else None
+
+    def create_setup_link(self, user: User, minutes: int = local_pin.SETUP_LINK_MINUTES) -> tuple[str, datetime]:
+        """Новая одноразовая ссылка; прежние ссылки этого пользователя гаснут. Сырое значение возвращается один раз."""
+        now = utcnow()
+        self.db.execute(delete(AuthSetupLink).where(AuthSetupLink.user_id == user.id))
+        raw = generate_token()
+        expires_at = now + timedelta(minutes=minutes)
+        self.db.add(AuthSetupLink(user_id=user.id, token_hash=hash_token(raw), created_at=now, expires_at=expires_at))
+        self._audit("user.setup_link_created", user.id, after={"expires_at": expires_at})
+        self.db.commit()
+        return raw, expires_at
+
+    def _setup_link(self, raw: str, *, lock: bool = False) -> AuthSetupLink | None:
+        if not raw:
+            return None
+        query = select(AuthSetupLink).where(AuthSetupLink.token_hash == hash_token(raw))
+        if lock:
+            query = query.with_for_update()
+        link = self.db.execute(query).scalar_one_or_none()
+        if link is None or link.used_at is not None or token_is_expired(link.expires_at):
+            return None
+        return link
+
+    def setup_link_user(self, raw: str) -> User | None:
+        link = self._setup_link(raw)
+        user = self.db.get(User, link.user_id) if link is not None else None
+        if user is None or not account_status.can_sign_in(is_active=user.is_active, archived_at=user.archived_at,
+                                                          access_until=user.access_until, now=utcnow()):
+            return None
+        return user
+
+    def use_setup_link(self, raw: str, pin: str) -> User:
+        """Задать ПИН по ссылке. ОДНОЙ транзакцией: ссылка израсходована, новый ПИН, все прежние сеансы завершены; если действовал
+        временный пароль (его никто не знает) — он заменяется случайным: вход через сеть — после установки пароля в «Настройках»."""
+        try:
+            value = local_pin.check_pin(pin)
+        except local_pin.PinPolicyError as exc:
+            raise PinError(str(exc), exc.code) from exc
+        link = self._setup_link(raw, lock=True)
+        user = self.db.get(User, link.user_id) if link is not None else None
+        if link is None or user is None or not account_status.can_sign_in(
+                is_active=user.is_active, archived_at=user.archived_at, access_until=user.access_until, now=utcnow()):
+            raise SetupLinkError("Ссылка устарела или уже использована. Получите новую: «Забыли ПИН» на этом компьютере")
+        link.used_at = utcnow()
+        security = self._security(user.id, create=True, lock=True)
+        if security.must_change_password:
+            user.password_hash = hash_password(generate_token())
+            security.must_change_password, security.temp_password_expires_at = False, None
+        security.pin_hash, security.pin_set_at, security.pin_failures = hash_password(value), utcnow(), 0
+        self._end_all_sessions(user.id)
+        self._audit("user.pin_set", user.id, reason="setup_link")
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
+    def reauthenticate_with_pin(self, user_id: str, session_id: str, pin: str) -> None:
+        """Подтверждение личности ПИН-кодом (только на этом компьютере — проверяет маршрут)."""
+        security = self._security(user_id, lock=True)
+        if security is None or not security.pin_hash or not verify_password(pin or "", security.pin_hash):
+            raise WrongPasswordError("ПИН неверный", "pin_wrong")
         meta = self.db.get(AuthSessionMeta, session_id)
         if meta is None or meta.user_id != user_id:
             raise SessionNotFoundError("Сеанс не найден — войдите заново")

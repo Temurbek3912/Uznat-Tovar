@@ -242,6 +242,11 @@ class UserSecurity(Base):
     # своего пароля (пропуск «смена пароля»), обычного сеанса с ним нет. Срок — temp_password_expires_at (NULL — без срока).
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     temp_password_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # ПИН-код для входа на САМОМ компьютере программы (решение владельца 2026-11-15, app/core/local_pin.py; миграция 0008):
+    # хеш scrypt, как у пароля. Через сеть ПИН не принимается. После PIN_MAX_FAILURES ошибок подряд ПИН отключается.
+    pin_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    pin_set_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    pin_failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -279,6 +284,21 @@ class AuthSessionMeta(Base):
     reauth_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)      # последнее подтверждение для важных операций
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    method: Mapped[str | None] = mapped_column(String, nullable=True)                # pin — вход по ПИН (простой → выход), иначе NULL
+
+
+class AuthSetupLink(Base):
+    """Одноразовая ссылка «Придумайте ПИН» (первый вход и «забыли ПИН», миграция 0008). Создаёт её только программа на этом
+    компьютере (scripts/setup_link.py, запуск start_demo); открыть — только на этом компьютере. В базе — только хеш."""
+
+    __tablename__ = "auth_setup_links"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class AuthMfaChallenge(Base):

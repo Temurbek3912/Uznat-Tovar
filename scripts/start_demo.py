@@ -26,6 +26,7 @@ PostgreSQL полного режима; перенести товары: python 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import socket
@@ -41,6 +42,7 @@ from typing import Callable
 from app.core import hardware
 from scripts import phone_url, public_access
 from scripts.preflight import parse_host_port
+from scripts.setup_link import write_run_mode
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_FRAMES_URL = "redis://127.0.0.1:6380/0"    # служба frames из docker-compose.yml (порт FRAMES_PORT, только 127.0.0.1)
@@ -226,6 +228,16 @@ def _preflight() -> int:
     return preflight.main()
 
 
+def _setup_link(python: str, root: Path, env: dict) -> dict | None:
+    """Ссылка «Придумайте ПИН», если ПИН ещё ни у кого нет (scripts/setup_link.py, тем же окружением, что и API)."""
+    try:
+        res = subprocess.run([python, "-m", "scripts.setup_link", "--json", "--if-needed", "--no-open"], cwd=str(root), env=env,
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        return json.loads((res.stdout or "").strip().splitlines()[-1])
+    except Exception:            # noqa: BLE001 — без ссылки программа работает: вход паролем, «Забыли ПИН.bat»
+        return None
+
+
 @dataclass
 class Deps:
     popen: Callable = subprocess.Popen
@@ -247,6 +259,7 @@ class Deps:
     apply_env: Callable[[dict], None] = os.environ.update
     hf_cache: Callable[[], Path] = _hf_model_cache
     open_browser: Callable[[str], object] = webbrowser.open
+    setup_link: Callable[[str, Path, dict], dict | None] = _setup_link
     out: Callable[[str], None] = print
     platform: str = sys.platform
     environ: dict = field(default_factory=lambda: dict(os.environ))
@@ -408,10 +421,13 @@ def _print_qr(d: Deps, url: str) -> None:
 
 
 def _show_addresses(d: Deps, port: int, no_browser: bool, notice: str | None = None, tls: bool = False,
-                    public_url: str = "") -> None:
+                    public_url: str = "", child_env: dict | None = None) -> None:
     out = d.out
     scheme = "https" if tls else "http"
     local = f"{scheme}://localhost:{port}/ui/"
+    # Первый вход (решение владельца 2026-11-15): ПИН ещё ни у кого нет — сразу страница «Придумайте ПИН», без командной строки.
+    setup = d.setup_link(d.python, d.root, child_env if child_env is not None else dict(d.environ)) or {}
+    setup_url = f"{local}login.html#setup={setup['token']}" if setup.get("needed") and setup.get("token") else ""
     ip = d.lan_ip()
     out("\n" + "=" * 60)
     out("  ВСЁ ЗАПУЩЕНО")
@@ -441,15 +457,18 @@ def _show_addresses(d: Deps, port: int, no_browser: bool, notice: str | None = N
             out("(QR-код не показан: pip install qrcode)")
     else:
         out("IP в локальной сети не определён (нет Wi-Fi?) — телефон не подключится; страницы доступны на этом компьютере.")
-    out(f"На этом компьютере: {local}index.html   (разделы: {local}identify.html   {local}products.html)")
     # Документ 18, §12: в запуске без Docker управление действует только с самого компьютера (адрес localhost), с телефонов — нет.
-    out(f"Управление (только на этом компьютере): {local}admin.html")
+    out(f"Управление (на этом компьютере): {local}admin.html")
+    if setup_url:
+        out(f"\nПЕРВЫЙ ВХОД ({setup.get('username')}): придумайте ПИН-код на этой странице (действует 30 минут):\n\n    {setup_url}\n")
+    else:
+        out("Забыли ПИН? Запустите «Забыли ПИН.bat» в папке программы.")
     if notice:
         out("\n" + notice)
     out("Остановить: Ctrl+C в этом окне (или просто закройте его).")
     if not no_browser:
         try:
-            d.open_browser(f"{local}index.html")
+            d.open_browser(setup_url or f"{local}admin.html")
         except Exception:           # noqa: BLE001 — не критично
             pass
 
@@ -593,7 +612,9 @@ def _launch(opts: Options, d: Deps, services: list[Service], child_env: dict, st
             out("ВНИМАНИЕ: распознавание по виду не готово (работает только штрихкод): "
                 + "; ".join(str(p) for p in status.get("problems") or []) + ". Журнал: logs/worker.log")
 
-        _show_addresses(d, opts.port, opts.no_browser, notice, tls=bool(tls), public_url=public_url)
+        write_run_mode(lite=opts.lite, port=opts.port, scheme="https" if tls else "http",
+                       database_url=child_env.get("DATABASE_URL"), path=d.root / "data" / "run_mode.json")
+        _show_addresses(d, opts.port, opts.no_browser, notice, tls=bool(tls), public_url=public_url, child_env=child_env)
         reported: set = set()
         while True:
             d.sleep(1.0)

@@ -695,7 +695,12 @@
     "admin.reset_2fa_confirm": "«{name}» foydalanuvchisining ikki bosqichli kirishi tiklansinmi?\nUning barcha seanslari tugaydi; keyingi kirishda u ikki bosqichli kirishni qaytadan sozlaydi.\nAgar telefon oʻgʻirlangan boʻlsa yoki parolni boshqa birov bilishi mumkin boʻlsa, yangi parol ham bering (foydalanuvchini tahrirlash).",
     "admin.reset_2fa_done": "Ikki bosqichli kirish tiklandi",
     "admin.owner_badge": "ega",
-    "items.count": { other: "{n} ta mahsulot" }
+    "items.count": { other: "{n} ta mahsulot" },
+    "server.pin_format": "PIN — aynan 6 ta raqam.",
+    "server.pin_too_simple": "PIN juda oddiy — uni topish oson. Boshqasini o‘ylab toping.",
+    "server.pin_wrong": "PIN noto‘g‘ri.",
+    "server.pin_local_only": "PIN bilan kirish — faqat dastur ishlayotgan kompyuterda. Bu yerda login va parol bilan kiring.",
+    "server.setup_link_invalid": "Havola eskirgan yoki allaqachon ishlatilgan. Dastur papkasidagi «Забыли ПИН.bat» faylini ishga tushiring — yangisi ochiladi.",
   };
   if (root.I18N) root.I18N.add("uz", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

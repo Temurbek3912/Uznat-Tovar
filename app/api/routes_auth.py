@@ -12,6 +12,10 @@
   GET   /api/v1/auth/2fa      — состояние второго фактора;   POST /auth/2fa/setup {password} -> секрет и otpauth://
   POST  /api/v1/auth/2fa/confirm {code} — включить;        POST /auth/2fa/disable {password, code} — выключить
   POST  /api/v1/auth/password {current_password, new_password, code?} — сменить свой пароль -> новый токен (остальные сеансы завершены)
+  GET   /api/v1/auth/local    — открыт ли вход с этого компьютера (ПИН) и кто может войти ПИН-кодом
+  POST  /api/v1/auth/pin      — вход ПИН-кодом {username, pin}: ТОЛЬКО на самом компьютере программы (app/core/local_pin.py)
+  PUT   /api/v1/auth/pin      — задать или сменить свой ПИН {pin, current_pin?};  DELETE /auth/pin — убрать свой ПИН
+  POST  /api/v1/auth/setup/check {token} — для кого ссылка «Придумайте ПИН»;  POST /auth/setup {token, pin} — задать ПИН и войти
   POST  /api/v1/users         — создать пользователя            (только admin)
   GET   /api/v1/users         — список пользователей            (только admin)
   PATCH /api/v1/users/{id}    — роль / активность / магазины / пароль (только admin)
@@ -48,7 +52,7 @@ from app.api.deps import (
     require_recent_auth,
     unauthorized,
 )
-from app.core import secure_transport, temp_password
+from app.core import local_pin, secure_transport, temp_password
 from app.core.config import get_settings
 from app.core.errors import ApiError, from_app_error
 from app.core.mfa_policy import (
@@ -154,8 +158,9 @@ class TokenWithRecovery(BaseModel):
 
 
 class ReauthRequest(BaseModel):
-    password: str = Field(max_length=200)
+    password: str = Field(default="", max_length=200)
     code: str | None = Field(default=None, max_length=20)
+    pin: str | None = Field(default=None, max_length=12)      # на этом компьютере — ПИН вместо пароля и кода
 
 
 class PasswordChange(BaseModel):
@@ -176,6 +181,25 @@ class PasswordChangeRequiredResponse(BaseModel):
 class InitialPassword(BaseModel):
     new_password: str = Field(max_length=200)
     code: str | None = Field(default=None, max_length=20)
+
+
+class PinLoginRequest(BaseModel):
+    username: str = Field(max_length=200)
+    pin: str = Field(max_length=12)
+
+
+class PinSetRequest(BaseModel):
+    pin: str = Field(max_length=12)
+    current_pin: str | None = Field(default=None, max_length=12)
+
+
+class SetupCheckRequest(BaseModel):
+    token: str = Field(max_length=200)
+
+
+class SetupRequest(BaseModel):
+    token: str = Field(max_length=200)
+    pin: str = Field(max_length=12)
 
 
 class PasswordSetResponse(BaseModel):
@@ -348,14 +372,15 @@ def _guarded(request: Request, username: str, action):
 
 
 def _issue(service: AuthService, user: User, role: Role, request: Request, *, mfa: bool,
-           recovery_left: int | None = None) -> TokenResponse:
+           recovery_left: int | None = None, method: str | None = None) -> TokenResponse:
     """Единственное место выдачи обычного сеанса (вход, второй шаг, завершение настройки 2FA) — tests/test_auth_invariants.py.
     Вход программы сеанса — вход ЭТОГО запроса (admin или public): права управления потом действуют только при совпадении."""
     settings = get_settings()
     listener = request_listener(request)
     ttl = _ttl_minutes(role, listener)
     token, _expires_at = service.issue_token(user, ttl, context=_login_context(request), mfa=mfa,
-                                             secret_key=settings.auth_secret_key, scope=SCOPE_FULL, listener=listener)
+                                             secret_key=settings.auth_secret_key, scope=SCOPE_FULL, listener=listener,
+                                             method=method)
     return TokenResponse(access_token=token, expires_in=ttl * 60, username=user.username, role=role, recovery_left=recovery_left)
 
 
@@ -480,6 +505,11 @@ def refresh(user: CurrentUser = Depends(get_current_user), db: Session = Depends
 def reauth(body: ReauthRequest, request: Request, user: CurrentUser = Depends(get_current_user),
            db: Session = Depends(get_db)) -> dict:
     """Подтверждение личности для важных операций: пароль и код из приложения. Неверные — как неудачный вход (лимит попыток)."""
+    if body.pin:
+        _require_this_computer(request)
+        _guarded(request, "pin:" + user.username,
+                 lambda: AuthService(db, actor=_actor(user)).reauthenticate_with_pin(user.id, user.session_id, body.pin))
+        return {"status": "confirmed", "valid_minutes": get_settings().auth_reauth_minutes}
     _guarded(request, user.username,
              lambda: AuthService(db, actor=_actor(user)).reauthenticate(user.id, user.session_id, body.password, body.code,
                                                     get_settings().auth_secret_key))
@@ -884,3 +914,89 @@ def audit_journal(
         row["target"] = names.get(event.target_id) if event.target_type == "user" else None
         out.append(row)
     return out
+
+
+# ------------------------------------------------- ПИН на этом компьютере (решение владельца 2026-11-15, app/core/local_pin.py)
+
+
+def _this_computer(request: Request) -> bool:
+    return local_pin.is_this_computer(request.scope, request.headers)
+
+
+def _require_this_computer(request: Request) -> None:
+    if not _this_computer(request):
+        raise ApiError(status.HTTP_403_FORBIDDEN, "pin_local_only",
+                       "Вход по ПИН-коду — только на компьютере, где работает программа. Здесь войдите логином и паролем")
+
+
+@router.get("/auth/local")
+def local_info(request: Request, db: Session = Depends(get_db)) -> dict:
+    """Что показать на экране входа: с этого ли компьютера открыта страница, кто может войти ПИН-кодом, нужен ли первый вход.
+    С другого устройства — только {"this_computer": false} (имена не выдаются)."""
+    if not _this_computer(request):
+        return {"this_computer": False, "users": [], "setup_needed": False}
+    service = AuthService(db)
+    users = [{"username": u.username, "role": u.role, "is_owner": service.is_owner(u.id)} for u in service.pin_users()]
+    return {"this_computer": True, "users": users, "setup_needed": not users, "pin_length": local_pin.PIN_LENGTH,
+            "idle_minutes": local_pin.PIN_IDLE_MINUTES}
+
+
+@router.post("/auth/pin", response_model=TokenResponse)
+def login_pin(body: PinLoginRequest, request: Request, db: Session = Depends(get_db)) -> TokenResponse:
+    """Вход ПИН-кодом. Ошибки считаются в общем ограничении попыток (отдельный счётчик «pin:логин»); 10 ошибок подряд снимают ПИН.
+    Сеанс считается прошедшим второй фактор: доступ к самому компьютеру — второй признак (решение владельца 2026-11-15)."""
+    _require_this_computer(request)
+    key, client_ip = "pin:" + (body.username or ""), _client_ip(request)
+    _throttle_check(key, client_ip)
+    service = AuthService(db)
+    user = service.login_with_pin(body.username, body.pin)
+    if user is None:
+        login_throttle.record_failure(key, client_ip)
+        raise unauthorized("ПИН неверный", code="pin_wrong")
+    role = parse_role(user.role)
+    if role is None:
+        raise ApiError(status.HTTP_403_FORBIDDEN, "role_unknown", "Роль пользователя не распознана — обратитесь к администратору")
+    login_throttle.record_success(key)
+    return _issue(service, user, role, request, mfa=True, method=local_pin.METHOD_PIN)
+
+
+@router.put("/auth/pin")
+def set_pin(body: PinSetRequest, request: Request, user: CurrentUser = Depends(get_current_user),
+            db: Session = Depends(get_db)) -> dict:
+    """Задать или сменить свой ПИН (если ПИН уже есть — нужен текущий; неверный считается неудачной попыткой)."""
+    _guarded(request, "pin:" + user.username,
+             lambda: AuthService(db, actor=_actor(user)).set_own_pin(user.id, body.pin, body.current_pin))
+    return {"status": "pin_set"}
+
+
+@router.delete("/auth/pin")
+def delete_pin(user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    AuthService(db, actor=_actor(user)).remove_pin(user.id)
+    return {"status": "pin_removed"}
+
+
+@router.post("/auth/setup/check")
+def setup_check(body: SetupCheckRequest, request: Request, db: Session = Depends(get_db)) -> dict:
+    """Действует ли ссылка «Придумайте ПИН» и для кого. Только на этом компьютере."""
+    _require_this_computer(request)
+    user = AuthService(db).setup_link_user(body.token)
+    return {"valid": user is not None, "username": user.username if user is not None else None}
+
+
+@router.post("/auth/setup", response_model=TokenResponse)
+def setup_pin(body: SetupRequest, request: Request, db: Session = Depends(get_db)) -> TokenResponse:
+    """Первый вход или «забыли ПИН»: задать ПИН по одноразовой ссылке и сразу войти. Только на этом компьютере."""
+    _require_this_computer(request)
+    _throttle_check("setup", _client_ip(request))
+    service = AuthService(db)
+    try:
+        user = service.use_setup_link(body.token, body.pin)
+    except AuthServiceError as exc:
+        if getattr(exc, "kind", "") == "unauthorized":
+            login_throttle.record_failure("setup", _client_ip(request))
+        raise from_app_error(exc) from exc
+    role = parse_role(user.role)
+    if role is None:
+        raise ApiError(status.HTTP_403_FORBIDDEN, "role_unknown", "Роль пользователя не распознана — обратитесь к администратору")
+    logger.info("Пользователь %s задал ПИН по ссылке первого входа", user.username)
+    return _issue(service, user, role, request, mfa=True, method=local_pin.METHOD_PIN)

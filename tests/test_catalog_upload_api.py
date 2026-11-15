@@ -258,6 +258,24 @@ def test_patch_changes_name_and_price_but_never_the_sku(env):
     assert resp.json()["expected_price"] is None and resp.json()["name"] == "Кола 0,5 л"
 
 
+def test_patch_sets_and_clears_customer_details(env):
+    """Сведения для карточки покупателя (миграция 0007): ставятся, убираются пустой строкой; длинный текст — отказ без половины."""
+    pid = add_product(env, sku="COLA", name="Кола")
+    h = headers_for(env, "admin")
+    url = f"/api/v1/catalog/products/{pid}"
+    resp = env.client.patch(url, headers=h, json={"country": " Узбекистан ", "manufacturer": "Coca-Cola Ichimligi", "net_content": "0,5 л",
+                                                  "ingredients": "вода,\nсахар", "description": "Газированный напиток", "in_stock": True})
+    body = resp.json()
+    assert resp.status_code == 200 and body["country"] == "Узбекистан" and body["ingredients"] == "вода,\nсахар"
+    assert body["in_stock"] is True and body["net_content"] == "0,5 л" and body["version"] == 2
+    body = env.client.patch(url, headers=h, json={"country": "", "clear_in_stock": True}).json()
+    assert body["country"] is None and body["in_stock"] is None and body["manufacturer"] == "Coca-Cola Ichimligi"
+    bad = env.client.patch(url, headers=h, json={"name": "Новое", "manufacturer": "x" * 500})
+    assert bad.status_code == 422 and bad.json()["code"] == "product_detail_too_long"
+    assert env.client.get("/api/v1/catalog/products?q=Новое", headers=h).json() == []
+    assert env.client.patch(url, headers=h, json={"in_stock": False}).json()["in_stock"] is False
+
+
 def test_patch_rejects_duplicates_bad_prices_and_unknown_products_without_half_applying(env):
     pid = add_product(env, sku="COLA", name="Кола")
     add_product(env, sku="FANTA", name="Фанта")

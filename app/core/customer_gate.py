@@ -29,6 +29,7 @@ CLIENT_IP_HEADERS = ("cf-connecting-ip", "x-forwarded-for", "x-real-ip")
 CUSTOMER_FILES = frozenset({
     "shop.html", "shop.js", "shop.css", "tokens.css", "ui.css", "theme.js", "theme-apply.js", "i18n.js", "i18n.ru.js", "i18n.uz.js",
     "i18n.uz-cyrl.js", "i18n.en.js", "icons.js", "ticket.js", "boot.js", "icons/favicon-32.png", "icons/apple-touch-icon.png",
+    "shop-list.html", "shop-list.js",                    # список товаров магазина (шаг 3 владельца, 2026-11-15)
 })
 PUBLIC_API_PREFIX = "/api/v1/public/"
 SHOP_PAGE = "/ui/shop.html"

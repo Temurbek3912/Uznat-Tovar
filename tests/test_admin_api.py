@@ -26,7 +26,7 @@ from tests.admin_login import admin_entry, admin_token, enable_totp  # noqa: E40
 from app.api import routes_admin, routes_stores  # noqa: E402
 from app.api.routes_auth import router as auth_router  # noqa: E402
 from app.core.security import Role  # noqa: E402
-from app.db.models import (Base, CameraORM, ComplianceReportORM, PlanogramSlotORM, Product, ShelfORM,  # noqa: E402
+from app.db.models import (AuditEvent, Base, CameraORM, ComplianceReportORM, PlanogramSlotORM, Product, ShelfORM,  # noqa: E402
                            ShelfSnapshot, Store)
 from app.db.session import get_db  # noqa: E402
 from app.services.auth_service import AuthService  # noqa: E402
@@ -196,3 +196,41 @@ def test_only_an_empty_store_can_be_deleted(env):
     assert env.client.delete(f"/api/v1/stores/{env.b}/shelves/b-snacks", headers=admin).status_code == 204
     assert env.client.delete(f"/api/v1/stores/{env.b}", headers=admin).status_code == 204
     assert env.client.delete(f"/api/v1/stores/{env.b}", headers=admin).status_code == 404
+
+
+# ------------------------------------------------------------------ карточка для покупателя (шаг 3 владельца)
+
+def test_shop_card_fields_admin_only_saved_audited_and_expiry_refused(env):
+    path = "/api/v1/admin/shop-card"
+    assert env.client.get(path).status_code == 401
+    assert env.client.get(path, headers=H(env, "analyst")).status_code == 403
+    assert env.client.put(path, json={"fields": ["price"]}, headers=H(env, "merch")).status_code == 403
+    admin = H(env)
+    body = env.client.get(path, headers=admin).json()
+    assert body["fields"] == body["default"] == ["price", "net_content", "manufacturer", "country", "in_stock"]
+    assert body["available"] == ["price", "net_content", "manufacturer", "country", "in_stock", "ingredients", "description"]
+    assert body["always"] == ["name", "brand", "category"] and "никогда" in body["expiry_note"]
+    saved = env.client.put(path, json={"fields": ["description", "price"]}, headers=admin)
+    assert saved.status_code == 200 and saved.json()["fields"] == ["price", "description"]
+    assert env.client.get(path, headers=admin).json()["fields"] == ["price", "description"]
+    refused = env.client.put(path, json={"fields": ["price", "expiry_date"]}, headers=admin)
+    assert refused.status_code == 422 and refused.json()["code"] == "card_field_expiry_forbidden"
+    assert env.client.put(path, json={"fields": ["barcode"]}, headers=admin).json()["code"] == "card_field_unknown"
+    assert env.client.get(path, headers=admin).json()["fields"] == ["price", "description"]       # отказ ничего не поменял
+    with env.Session() as db:
+        events = db.query(AuditEvent).filter(AuditEvent.action == "store.card_fields_changed").all()
+        assert len(events) == 1 and '"description"' in events[0].after_json and events[0].target_id == env.a
+
+
+def test_shop_card_creates_a_nameless_store_record_when_there_is_none(env):
+    """Магазины в управлении не заводятся (одна программа — один магазин): нет записи — настройка создаёт её без названия."""
+    admin = H(env)
+    with env.Session() as db:
+        db.query(Store).delete()
+        db.commit()
+    assert env.client.get("/api/v1/admin/shop-card", headers=admin).json()["store"] is None
+    saved = env.client.put("/api/v1/admin/shop-card", json={"fields": ["country"]}, headers=admin)
+    assert saved.status_code == 200 and saved.json()["fields"] == ["country"]
+    with env.Session() as db:
+        (store,) = db.query(Store).all()
+        assert store.name == "" and store.card_fields == '["country"]'

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<title data-i18n="shoplist.title">Товары магазина</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="ui.css">
+<link rel="stylesheet" href="shop.css">
+<script src="theme.js"></script>
+<script src="theme-apply.js"></script>
+</head>
+<body data-page="shop-list">
+<main class="shop shop--list">
+  <header class="shop__head">
+    <div class="shop__brand">
+      <h1 class="shop__title" data-i18n="shoplist.title">Товары магазина</h1>
+      <p class="shop__store" id="storeName" hidden></p>
+    </div>
+    <div id="langHost"></div>
+  </header>
+
+  <a class="btn btn--primary shop__shot" href="shop.html"><span data-icon="camera"></span><span data-i18n="shoplist.to_photo">Узнать товар по фото</span></a>
+
+  <section class="shoplist__bar">
+    <label class="visually-hidden" for="searchInput" data-i18n="shoplist.search_label">Поиск товара</label>
+    <input class="input" id="searchInput" type="search" autocomplete="off" enterkeyhint="search" maxlength="100"
+           data-i18n-attr="placeholder:shoplist.search_ph" placeholder="Название, бренд или штрихкод">
+    <div class="shoplist__cats" id="catHost" role="group" data-i18n-attr="aria-label:shoplist.categories" aria-label="Категории"></div>
+  </section>
+
+  <p class="shop__store" id="countNote" role="status" aria-live="polite"></p>
+  <ul class="shoplist__grid" id="listHost" role="list"></ul>
+  <p class="notice notice--danger" id="listError" role="alert" hidden></p>
+  <button class="btn btn--secondary" id="moreBtn" type="button" hidden data-i18n="shoplist.more">Показать ещё</button>
+
+  <div class="shoplist__sheet" id="sheet" hidden>
+    <div class="shoplist__sheet-box" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+      <h2 class="visually-hidden" id="sheetTitle" data-i18n="shoplist.card">Карточка товара</h2>
+      <div class="shoplist__sheet-photo" id="sheetPhoto" hidden><img id="sheetImg" alt=""></div>
+      <section id="ticketHost"></section>
+      <button class="btn btn--secondary" id="sheetClose" type="button" data-i18n="shoplist.close">Закрыть</button>
+    </div>
+  </div>
+
+  <footer class="shop__privacy">
+    <p data-i18n="shoplist.privacy">Регистрация не нужна. Страница ничего о вас не запоминает.</p>
+  </footer>
+</main>
+<script src="i18n.js"></script>
+<script src="i18n.ru.js"></script>
+<script src="i18n.uz.js"></script>
+<script src="i18n.uz-cyrl.js"></script>
+<script src="i18n.en.js"></script>
+<script src="icons.js"></script>
+<script src="ticket.js"></script>
+<script src="shop.js"></script>
+<script src="shop-list.js"></script>
+<script src="boot.js" data-start="ShopList"></script>
+</body>
+</html>

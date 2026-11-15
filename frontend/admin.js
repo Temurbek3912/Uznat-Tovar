@@ -10,8 +10,15 @@ function trHas(key) { const I = i18n(); return !!(I && typeof I.has === "functio
 
 // ============================ Чистая логика (тестируется в tools/admin_smoke_test.js) ============================
 
-const PAGES = ["products", "users", "system"];
-const PAGE_TITLE_KEYS = {products: "nav.products", users: "admin.page_users", system: "admin.page_system"};
+const PAGES = ["products", "card", "users", "system"];
+const PAGE_TITLE_KEYS = {products: "nav.products", card: "admin.page_card", users: "admin.page_users", system: "admin.page_system"};
+// Поля карточки покупателя (app/services/shop_card.py: CARD_FIELDS). Срока годности здесь нет и не будет — он у каждой партии свой.
+const CARD_FIELDS = ["price", "net_content", "manufacturer", "country", "in_stock", "ingredients", "description"];
+/** Отмеченные поля -> тело PUT /api/v1/admin/shop-card: только известные коды, в порядке карточки. */
+function buildCardFields(checked) {
+  const set = new Set(checked || []);
+  return {fields: CARD_FIELDS.filter((code) => set.has(code))};
+}
 const ROLES = ["admin", "analyst", "merchandiser", "regional_manager", "camera_agent"];
 function roleLabel(role) { return ROLES.includes(role) ? tr("role." + role) : String(role || ""); }
 
@@ -466,7 +473,38 @@ async function renderSystem(main) {
     h("div", {class: "hint mt-8"}, trHas("admin.settings_note") ? tr("admin.settings_note") : d.settings_note)));
 }
 
-const PAGE_RENDERERS = {products: renderProducts, users: renderUsers, system: renderSystem};
+// ============================ Карточка для покупателя ============================
+
+async function renderCard(main) {
+  let d = await call("/api/v1/admin/shop-card");
+  const boxes = {};
+  const list = h("div", {class: "mt-8"});
+  const fill = () => { for (const code of CARD_FIELDS) boxes[code].checked = d.fields.includes(code); };
+  for (const code of CARD_FIELDS) {
+    boxes[code] = h("input", {type: "checkbox", id: `cf_${code}`});
+    list.appendChild(h("label", {class: "chk"}, boxes[code], tr("card." + code)));
+  }
+  fill();
+  const save = async (fields) => {
+    try {
+      d = await call("/api/v1/admin/shop-card", {method: "PUT", body: buildCardFields(fields)});
+      fill();
+      toast(tr("admin.card_saved"), "ok");
+    } catch (e) { fail(e); }
+  };
+  const saveBtn = h("button", {class: "btn", type: "button", id: "cardSave",
+    onclick: () => save(CARD_FIELDS.filter((code) => boxes[code].checked))}, tr("common.save"));
+  const defBtn = h("button", {class: "btn sec", type: "button", id: "cardDefault", onclick: () => save(d.default)}, tr("admin.card_default"));
+  clear(main);
+  main.appendChild(h("div", {class: "card"},
+    h("div", {class: "hint"}, tr("admin.card_hint")),
+    h("div", {class: "mute mt-8"}, tr("admin.card_always")),
+    list,
+    h("div", {class: "hint mt-8"}, h("b", {}, tr("admin.card_expiry"))),
+    h("div", {class: "toolbar mt-10"}, saveBtn, defBtn, h("a", {href: "shop-list.html", target: "_blank", rel: "noopener"}, tr("admin.card_open_list")))));
+}
+
+const PAGE_RENDERERS = {products: renderProducts, card: renderCard, users: renderUsers, system: renderSystem};
 
 async function resetUser2fa(user) {
   if (!(await confirmDialog(tr("admin.reset_2fa_confirm", {name: user.username}), tr("admin.reset_2fa")))) return;

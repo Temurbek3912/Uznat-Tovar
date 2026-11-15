@@ -118,6 +118,21 @@
         <label class="field"><span class="field__label" data-i18n="products.edit_name">Название</span><input class="input" id="editName" type="text" maxlength="120" autocomplete="off"></label>
         <label class="field"><span class="field__label" data-i18n="products.price_label">Цена на ценнике, сум</span><input class="input" id="editPrice" type="text" inputmode="decimal" autocomplete="off"></label>
         <p class="hint" data-i18n="products.edit_price_hint">Оставьте цену пустой, если она не нужна. Фото и распознавание от этого не меняются.</p>
+        <details class="field details-box" id="editDetailsBox">
+          <summary class="field__label" data-i18n="products.details_title">Сведения для покупателя</summary>
+          <p class="hint" data-i18n="products.details_hint">Что из этого видит покупатель — выбирается в управлении («Карточка для покупателя»). Пустое поле не показывается.</p>
+          <label class="field"><span class="field__label" data-i18n="card.net_content">Вес или объём</span><input class="input" id="editNetContent" type="text" maxlength="120" autocomplete="off" data-i18n-attr="placeholder:products.net_content_ph" placeholder="0,5 л"></label>
+          <label class="field"><span class="field__label" data-i18n="card.manufacturer">Производитель</span><input class="input" id="editManufacturer" type="text" maxlength="120" autocomplete="off"></label>
+          <label class="field"><span class="field__label" data-i18n="card.country">Страна</span><input class="input" id="editCountry" type="text" maxlength="120" autocomplete="off"></label>
+          <label class="field"><span class="field__label" data-i18n="card.in_stock">Наличие</span>
+            <select class="input" id="editInStock">
+              <option value="" data-i18n="products.in_stock_unset">Не указано</option>
+              <option value="yes" data-i18n="card.in_stock_yes">Есть в наличии</option>
+              <option value="no" data-i18n="card.in_stock_no">Нет в наличии</option>
+            </select></label>
+          <label class="field"><span class="field__label" data-i18n="card.ingredients">Состав</span><textarea class="input" id="editIngredients" rows="3" maxlength="2000"></textarea></label>
+          <label class="field"><span class="field__label" data-i18n="card.description">Описание</span><textarea class="input" id="editDescription" rows="3" maxlength="2000"></textarea></label>
+        </details>
         <div class="field">
           <span class="field__label" data-i18n="products.codes">Штрих-коды товара</span>
           <div class="tags" id="editCodes"></div>

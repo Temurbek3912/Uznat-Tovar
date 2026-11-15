@@ -1,7 +1,8 @@
 /* «Ценник» — карточка ответа на экране «Узнать товар». Одна функция рисует все исходы узнавания; данные в разметку не подставляются
    строкой (только textContent), поэтому название товара из базы безопасно. Тексты берутся через deps.t (i18n.js), значки — через Icons.
    Ответ сервера (app/services/identify_service.py): {status: matched | uncertain | not_in_catalog | unknown | empty_catalog, product, candidates, guess}.
-   Необязательные поля товара: category (категория) и fields — [{label, value}], уже переведённые на язык интерфейса (у каждой категории свой набор).
+   Необязательные поля товара: category (категория), fields — [{label, value}], уже переведённые на язык интерфейса (у каждой категории свой набор),
+   hide_price — магазин не показывает цену покупателю (блока цены нет). deps.browse — товар выбран из списка (shop-list.js): без отметки «Узнали» и ссылки «Это не тот товар».
    Ticket.render(document, hostElement, view, deps):
      view = {state, product, candidates, guess, message}; state — idle | searching | matched | uncertain | not_in_catalog | unknown | empty_catalog | camera_error | error
      deps = {t, onPick(candidate), onAdd(), onRetry(), onPhoto(), onWrong(), onMore(product), maxSpecs}
@@ -71,7 +72,7 @@
     if (state === "matched" && product) {
       var head = node(doc, "div", "ticket__head");
       head.appendChild(node(doc, "span", "ticket__brand", product.brand || ""));
-      head.appendChild(chip("ok", "check", t("ticket.match")));
+      if (!deps.browse) head.appendChild(chip("ok", "check", t("ticket.match")));
       card.appendChild(head);
       card.appendChild(node(doc, "h2", "ticket__name", product.name || ""));
       if (product.category) card.appendChild(node(doc, "p", "ticket__category", product.category));
@@ -87,16 +88,20 @@
         card.appendChild(specs);
         if (fields.length > (deps.maxSpecs || MAX_SPECS)) card.appendChild(link(t("ticket.more"), function () { call(deps.onMore, product); }));
       }
-      var priceText = formatPrice(product.expected_price);
-      var price = node(doc, "div", priceText ? "ticket__price" : "ticket__price ticket__price--none");
-      if (priceText) {
-        price.appendChild(node(doc, "span", "ticket__amount", priceText));
-        price.appendChild(node(doc, "span", "ticket__unit", t("ticket.price_unit")));
-      } else price.appendChild(node(doc, "span", "", t("ticket.no_price")));
-      card.appendChild(price);
-      var actions = node(doc, "div", "ticket__actions");
-      actions.appendChild(link(t("ticket.wrong"), function () { call(deps.onWrong); }));
-      card.appendChild(actions);
+      if (!product.hide_price) {                                  // магазин не показывает цену покупателю — блока цены нет совсем
+        var priceText = formatPrice(product.expected_price);
+        var price = node(doc, "div", priceText ? "ticket__price" : "ticket__price ticket__price--none");
+        if (priceText) {
+          price.appendChild(node(doc, "span", "ticket__amount", priceText));
+          price.appendChild(node(doc, "span", "ticket__unit", t("ticket.price_unit")));
+        } else price.appendChild(node(doc, "span", "", t("ticket.no_price")));
+        card.appendChild(price);
+      }
+      if (!deps.browse) {
+        var actions = node(doc, "div", "ticket__actions");
+        actions.appendChild(link(t("ticket.wrong"), function () { call(deps.onWrong); }));
+        card.appendChild(actions);
+      }
     } else if (state === "uncertain") {
       card.appendChild(node(doc, "div", "ticket__head")).appendChild(chip("notice", "help", t("ticket.similar")));
       card.appendChild(node(doc, "h2", "ticket__title", t("ticket.pick")));

@@ -13,3 +13,28 @@
 .shop__privacy { font-size: .9rem; color: var(--ink-muted); border-top: 1px solid var(--line); padding-top: 12px; }
 .shop__privacy p { margin: 0; }
 .visually-hidden { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+/* Ссылка на список товаров и страница «Товары магазина» (shop-list.html) */
+.shop__catalog-link { justify-content: center; min-height: 52px; font-size: 1.05rem; }
+.shop--list { max-width: 760px; }
+.shoplist__bar { display: flex; flex-direction: column; gap: 10px; position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 8px 0; }
+.shoplist__bar .input { min-height: 48px; font-size: 1.05rem; }
+.shoplist__cats { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.shoplist__cats .chip--filter { flex: 0 0 auto; white-space: nowrap; }
+.shoplist__cats .chip--filter[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.shoplist__grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.shoplist__item { width: 100%; height: 100%; display: flex; flex-direction: column; gap: 6px; padding: 8px; text-align: left; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; cursor: pointer; font: inherit; }
+.shoplist__item:hover { background: var(--surface-2); }
+.shoplist__pic { display: flex; align-items: center; justify-content: center; aspect-ratio: 1; border-radius: 8px; background: var(--surface-2); overflow: hidden; }
+.shoplist__pic img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.shoplist__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.shoplist__brand { font-size: .85rem; color: var(--ink-muted); overflow-wrap: anywhere; }
+.shoplist__name { font-weight: 600; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.shoplist__price { font-weight: 600; color: var(--ink); }
+.shoplist__sheet { position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, .45); display: flex; align-items: flex-end; justify-content: center; }
+.shoplist__sheet[hidden] { display: none; }
+.shoplist__sheet-box { width: 100%; max-width: 560px; max-height: 92vh; overflow-y: auto; background: var(--bg); border-radius: 16px 16px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 12px; }
+.shoplist__sheet-box .ticket { border-radius: 12px; }
+.shoplist__sheet-photo { display: flex; justify-content: center; background: var(--surface-2); border-radius: 12px; max-height: 260px; overflow: hidden; }
+.shoplist__sheet-photo img { max-width: 100%; max-height: 260px; object-fit: contain; display: block; }
+body[data-sheet="open"] { overflow: hidden; }
+@media (min-width: 600px) { .shoplist__sheet { align-items: center; } .shoplist__sheet-box { border-radius: 16px; } }

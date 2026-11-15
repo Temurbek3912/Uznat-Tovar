@@ -21,9 +21,48 @@
     "ticket.wrong": "shop.wrong",
   };
 
-  /** Ответ сервера -> вид карточки ticket.js. Цена у покупателя — поле price; карточка ждёт expected_price. */
+  // Сведения карточки в порядке показа (app/services/shop_card.py: CARD_FIELDS без цены). Срока годности здесь нет никогда.
+  var DETAIL_ORDER = ["net_content", "manufacturer", "country", "in_stock", "ingredients", "description"];
+  var MAX_SPECS = DETAIL_ORDER.length;
+
+  /** Публичная карточка сервера -> товар для ticket.js. Цена у покупателя — поле price (ключа нет — магазин цену не показывает:
+      hide_price); сведения (details) остаются как есть, подписи подставляет withFields на языке страницы. */
+  function toProduct(p) {
+    if (!p) return null;
+    var out = { name: p.name, brand: p.brand, category: p.category, details: p.details && typeof p.details === "object" ? p.details : {} };
+    if (Object.prototype.hasOwnProperty.call(p, "price")) out.expected_price = p.price; else out.hide_price = true;
+    return out;
+  }
+
+  /** Товар -> копия с fields [{label, value}] для ticket.js: подписи и «есть / нет в наличии» — на языке страницы. */
+  function withFields(product, t) {
+    if (!product) return product;
+    var details = product.details || {}, fields = [];
+    DETAIL_ORDER.forEach(function (code) {
+      if (!Object.prototype.hasOwnProperty.call(details, code)) return;
+      var value = details[code];
+      if (code === "in_stock") value = t(value ? "card.in_stock_yes" : "card.in_stock_no");
+      else value = String(value === null || value === undefined ? "" : value).trim();
+      if (value) fields.push({ label: t("card." + code), value: value });
+    });
+    var copy = {};
+    Object.keys(product).forEach(function (k) { copy[k] = product[k]; });
+    copy.fields = fields;
+    return copy;
+  }
+
+  /** Вид карточки с подписями полей на языке страницы (для отрисовки). */
+  function localize(view, t) {
+    if (!view || (view.state !== "matched" && view.state !== "uncertain")) return view;
+    var copy = {};
+    Object.keys(view).forEach(function (k) { copy[k] = view[k]; });
+    copy.product = withFields(view.product, t);
+    return copy;
+  }
+
+  /** Ответ сервера -> вид карточки ticket.js. */
   function toView(body) {
-    var card = function (p) { return p ? { name: p.name, brand: p.brand, category: p.category, expected_price: p.price } : null; };
+    var card = toProduct;
     var status = body && body.status;
     if (status === "matched" && body.product) return { state: "matched", product: card(body.product) };
     if (status === "uncertain" && body.product) {
@@ -67,8 +106,8 @@
     var state = { view: { state: "idle" }, busy: false, previewUrl: null, lastFile: null };
 
     function draw() {
-      Ticket.render(doc, $("ticketHost"), state.view, {
-        t: t, icons: Icons,
+      Ticket.render(doc, $("ticketHost"), localize(state.view, t), {
+        t: t, icons: Icons, maxSpecs: MAX_SPECS,
         onPick: function (c) { state.view = { state: "matched", product: c }; draw(); },
         onRetry: function () { $("cameraInput").click(); },
         onPhoto: function () { $("cameraInput").click(); },
@@ -148,7 +187,8 @@
     return { send: send, state: state, draw: draw };
   }
 
-  var api = { start: start, helpers: { toView: toView, errorKey: errorKey, fitSize: fitSize, CUSTOMER_TEXT: CUSTOMER_TEXT } };
+  var api = { start: start, helpers: { toView: toView, toProduct: toProduct, withFields: withFields, localize: localize,
+                                        errorKey: errorKey, fitSize: fitSize, CUSTOMER_TEXT: CUSTOMER_TEXT, MAX_SPECS: MAX_SPECS } };
   root.Shop = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

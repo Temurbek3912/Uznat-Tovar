@@ -317,6 +317,20 @@ def make_thumbnail(jpeg: bytes, side: int = THUMB_SIDE) -> bytes:
     return encode_jpeg(load_rgb(jpeg), max_side=side)
 
 
+def cached_thumbnail(source: Path) -> bytes:
+    """Миниатюра фото-файла с кэшем рядом (thumb-<3 знака имени>.jpg): нет кэша — пересчитать и попробовать сохранить.
+    Кэш — удобство, не обязанность: не записался — просто пересчитаем в следующий раз."""
+    cached = source.with_name(f"thumb-{source.name[:3]}.jpg")
+    if cached.is_file():
+        return cached.read_bytes()
+    content = make_thumbnail(source.read_bytes())
+    try:
+        cached.write_bytes(content)
+    except OSError:
+        pass
+    return content
+
+
 # --------------------------------------------------------------------------- папки и ссылки
 
 

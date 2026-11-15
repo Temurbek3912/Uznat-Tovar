@@ -52,6 +52,31 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+IMPORTED_SUBDIR = "catalog-imported"      # внутри media_root: копии фото импорта каталога (для показа покупателю и пересборки)
+
+
+def keep_import_copy(media_root: Path, folder: str, source: Path, sha256: str) -> str | None:
+    """Копия фото импорта внутри программы — байт в байт (SHA-256 записи о фото остаётся верным): media_root/catalog-imported/
+    <папка товара>/<первые 16 знаков SHA-256>.<расширение>. Возвращает storage_path (путь внутри media_root) или None, если
+    содержимое файла не совпало с SHA-256 записи. Папку импорта не трогает; уже скопированное второй раз не пишет.
+    Папку catalog-imported не просматривает ни перенос фото, ни сверка индекса: копия не становится «новым фото»."""
+    import os
+
+    source = Path(source)
+    suffix = source.suffix.lower() if source.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp") else ".jpg"
+    rel = f"{IMPORTED_SUBDIR}/{folder}/{sha256[:16]}{suffix}"
+    dest = Path(media_root) / rel
+    if dest.is_file() and sha256_file(dest) == sha256:
+        return rel
+    if sha256_file(source) != sha256:
+        return None
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".part")
+    tmp.write_bytes(source.read_bytes())
+    os.replace(tmp, dest)
+    return rel
+
+
 def vector_to_bytes(vector) -> bytes:
     return np.asarray(vector, dtype="<f4").ravel().tobytes()
 

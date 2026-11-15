@@ -283,3 +283,5 @@ a.btn { text-decoration: none; text-align: center; }                      /* ÐºÐ
   .topbar { flex-wrap: wrap; row-gap: var(--sp-2); }
   .topbar__title { flex: 1 1 100%; }
 }
+textarea.input { min-height: 5rem; padding: var(--sp-2) var(--sp-3); resize: vertical; }
+.details-box > summary { cursor: pointer; }

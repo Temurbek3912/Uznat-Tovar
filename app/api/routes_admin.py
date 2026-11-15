@@ -4,6 +4,8 @@
 
   GET /api/v1/admin/system                       состояние: БД, очередь, воркер, диск, настройки (только чтение)
   GET /api/v1/admin/products?q=&limit=&offset=   каталог товаров для таблицы «Товары»
+  GET /api/v1/admin/shop-card                    какие поля карточки видит покупатель в этом магазине
+  PUT /api/v1/admin/shop-card                    выбрать поля ({"fields": [...]}); срок годности включить нельзя (журнал действий)
 """
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
@@ -18,8 +21,10 @@ from app.api.deps import require_permission
 from app.core import text_search
 from app.core.config import get_settings, resolve_project_path
 from app.core.security import CurrentUser, Permission
-from app.db.models import Product
+from app.core.errors import ApiError
+from app.db.models import Product, Store
 from app.db.session import get_db
+from app.services import audit, shop_card
 from app.services.admin_service import (
     dir_usage,
     disk_free,
@@ -97,3 +102,47 @@ def products(q: str = "", limit: int = 50, offset: int = 0, db: Session = Depend
     return {"total": total, "limit": limit, "offset": offset,
             "items": [{"id": p.id, "sku": p.sku, "name": p.name, "brand": p.brand, "category": p.category,
                        "expected_price": p.expected_price} for p in page]}
+
+
+class CardFieldsIn(BaseModel):
+    fields: list[str]
+
+
+def _store(db: Session) -> Store | None:
+    return db.query(Store).order_by(Store.name).first()      # одна запись Store — «этот магазин» (как у входа покупателя)
+
+
+def _card_payload(store: Store | None) -> dict:
+    return {"fields": list(shop_card.store_fields(store)), "available": list(shop_card.CARD_FIELDS),
+            "default": list(shop_card.DEFAULT_FIELDS), "always": ["name", "brand", "category"], "store": store.name if store else None,
+            "expiry_note": shop_card.EXPIRY_REFUSAL}
+
+
+@router.get("/shop-card")
+def get_shop_card(db: Session = Depends(get_db), _user: CurrentUser = Depends(_admin)) -> dict:
+    """Поля карточки покупателя: выбранные (fields), все возможные (available), по умолчанию (default). Название, бренд и
+    категория видны всегда. Срока годности в списке нет и не будет (app/services/shop_card.py)."""
+    return _card_payload(_store(db))
+
+
+@router.put("/shop-card")
+def put_shop_card(body: CardFieldsIn, db: Session = Depends(get_db), user: CurrentUser = Depends(_admin)) -> dict:
+    try:
+        fields = shop_card.validate_fields(body.fields)
+    except shop_card.CardFieldsError as exc:
+        raise ApiError(422, exc.code, exc.message) from exc
+    store = _store(db)
+    if store is None:
+        # Записи магазина ещё нет (магазины в управлении не заводятся: одна программа — один магазин): создаём её без названия —
+        # на странице покупателя пустое название не показывается. Иначе настройку было бы некуда сохранить.
+        store = Store(name="", address="", format="supermarket")
+        db.add(store)
+        db.flush()
+    before = list(shop_card.store_fields(store))
+    store.card_fields = shop_card.dump_fields(fields)
+    if before != list(fields):
+        audit.record(db, "store.card_fields_changed", actor=audit.AuditActor(user.id, "api"), target_type="store",
+                     target_id=store.id, store_id=store.id, before={"fields": before}, after={"fields": list(fields)})
+    db.commit()
+    db.refresh(store)
+    return _card_payload(store)

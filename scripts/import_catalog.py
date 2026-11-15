@@ -34,8 +34,9 @@ MAX_LISTED = 30
 class SqlCatalogRepo:
     """Реальный репозиторий товаров на SQLAlchemy. Каждый товар фиксируется отдельным commit: сбой одного не откатывает остальные."""
 
-    def __init__(self, db):
+    def __init__(self, db, media_root=None):
         self.db = db
+        self.media_root = media_root            # есть — фото импорта копируются в программу (data/catalog-imported)
 
     def existing_products(self) -> dict[str, ExistingProduct]:
         from app.db.models import Product
@@ -66,11 +67,22 @@ class SqlCatalogRepo:
             raise
 
     def remember_photos(self, product_id: str, sku: str, photos, vectors, signature: dict | None) -> None:
-        """Записи о фото (product_images) и векторы в кэш (image_embeddings). Файлы импорта лежат вне программы: путь
-        хранения не записывается, только SHA-256, имя и размер; источник вектора — «import:<SHA-256>»."""
-        from app.services.product_images import PhotoInfo, PhotoRegistry
+        """Записи о фото (product_images) и векторы в кэш (image_embeddings). Источник вектора — «import:<SHA-256>».
+        Копия фото кладётся в программу (media_root/catalog-imported, байт в байт) — так фото видно в списке товаров
+        покупателя и на странице «Товары», даже если папку импорта потом удалят. Копия не удалась — фото всё равно
+        записывается (без пути хранения, как раньше)."""
+        from app.services.catalog_upload import folder_name
+        from app.services.product_images import PhotoInfo, PhotoRegistry, keep_import_copy
+
+        def stored(c):
+            if self.media_root is None:
+                return None
+            try:
+                return keep_import_copy(self.media_root, folder_name(sku), c.path, c.sha256)
+            except OSError:
+                return None
         infos = [PhotoInfo(sha256=c.sha256, source_ref=f"import:{c.sha256}", original_name=f"{sku}/{c.path.name}",
-                           width=c.width or None, height=c.height or None) for c in photos]
+                           storage_path=stored(c), width=c.width or None, height=c.height or None) for c in photos]
         try:
             PhotoRegistry(self.db).remember(product_id, infos, vectors, signature)
         except Exception:
@@ -161,7 +173,8 @@ def main(argv: list[str] | None = None, out=print) -> int:
     manifest = Manifest.load(manifest_path)
     db = SessionLocal()
     try:
-        repo = SqlCatalogRepo(db)
+        from app.core.config import resolve_project_path  # noqa: PLC0415
+        repo = SqlCatalogRepo(db, media_root=resolve_project_path(settings.media_root))
         plan = build_plan(folders, metas, manifest, checks, repo.existing_products(), require_csv=args.require_csv)
         warnings += plan.warnings
         errors += plan.errors

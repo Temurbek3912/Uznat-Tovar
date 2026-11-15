@@ -12,7 +12,7 @@ function test(name, fn) { fn(); passed++; console.log("ok  ", name); }
 
 test("ответ сервера -> карточка: цена покупателя (price) попадает в поле карточки, служебных полей нет", () => {
   const v = H.toView({ status: "matched", by: "barcode", product: { name: "Кола", brand: "B", category: "Напитки", price: 9900 } });
-  assert.deepStrictEqual(v, { state: "matched", product: { name: "Кола", brand: "B", category: "Напитки", expected_price: 9900 } });
+  assert.deepStrictEqual(v, { state: "matched", product: { name: "Кола", brand: "B", category: "Напитки", details: {}, expected_price: 9900 } });
   const u = H.toView({ status: "uncertain", product: { name: "A", price: null }, candidates: [{ name: "A" }, { name: "B" }] });
   assert.strictEqual(u.state, "uncertain"); assert.deepStrictEqual(u.candidates.map((c) => c.name), ["A", "B"]);
   assert.deepStrictEqual(H.toView({ status: "unknown" }), { state: "unknown" });
@@ -21,6 +21,24 @@ test("ответ сервера -> карточка: цена покупател
   assert.deepStrictEqual(H.toView({ status: "not_in_catalog", guess: { name: "", kind: "" } }), { state: "unknown" });
   assert.deepStrictEqual(H.toView(null), { state: "unknown" });
   assert.deepStrictEqual(H.toView({ status: "matched", product: null }), { state: "unknown" });
+});
+
+test("поля карточки магазина: нет ключа price — блока цены нет; сведения — с подписями на языке страницы, по порядку", () => {
+  const t = (k) => ({ "card.net_content": "Объём", "card.country": "Страна", "card.in_stock": "Наличие", "card.in_stock_yes": "Есть",
+                      "card.in_stock_no": "Нет", "card.ingredients": "Состав" })[k] || k;
+  const noPrice = H.toProduct({ name: "A", brand: "", category: "", details: {} });
+  assert.strictEqual(noPrice.hide_price, true); assert.ok(!("expected_price" in noPrice));
+  const withNullPrice = H.toProduct({ name: "A", price: null, details: {} });
+  assert.strictEqual(withNullPrice.hide_price, undefined); assert.strictEqual(withNullPrice.expected_price, null);
+  const p = H.withFields(H.toProduct({ name: "A", price: 1, details: { ingredients: "вода", country: "Узбекистан", in_stock: false, net_content: " 0,5 л " } }), t);
+  assert.deepStrictEqual(p.fields, [{ label: "Объём", value: "0,5 л" }, { label: "Страна", value: "Узбекистан" },
+    { label: "Наличие", value: "Нет" }, { label: "Состав", value: "вода" }]);
+  const unknownKey = H.withFields(H.toProduct({ name: "A", details: { expiry_date: "2027-01-01" } }), t);
+  assert.deepStrictEqual(unknownKey.fields, [], "срок годности (и любое неизвестное поле) не показывается, даже если пришёл");
+  const v = H.localize({ state: "matched", product: H.toProduct({ name: "A", details: { country: "UZ" } }) }, t);
+  assert.deepStrictEqual(v.product.fields, [{ label: "Страна", value: "UZ" }]);
+  assert.deepStrictEqual(H.localize({ state: "unknown" }, t), { state: "unknown" });
+  assert.ok(!/expir|srok|годност/i.test(src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "")), "shop.js: срока годности нет в коде показа");
 });
 
 test("ошибки — понятными словами: частота с секундами, размер, фото, связь, прочее", () => {
@@ -44,7 +62,8 @@ test("уменьшение снимка: длинная сторона не бо
 test("тексты покупателя есть на всех четырёх языках; подмены карточки ведут на существующие ключи", () => {
   const keys = new Set();
   for (const m of html.matchAll(/data-i18n="([^"]+)"/g)) keys.add(m[1]);
-  for (const m of src.matchAll(/"(shop\.[a-z_]+)"/g)) keys.add(m[1]);
+  for (const m of src.matchAll(/"((?:shop|card)\.[a-z_]+)"/g)) keys.add(m[1]);
+  ["net_content", "manufacturer", "country", "in_stock", "ingredients", "description", "price"].forEach((c) => keys.add("card." + c));
   Object.values(H.CUSTOMER_TEXT).forEach((k) => keys.add(k));
   for (const lang of ["ru", "uz", "uz-cyrl", "en"]) {
     const dict = fs.readFileSync(path.join(__dirname, "..", "frontend", `i18n.${lang}.js`), "utf8");
@@ -60,6 +79,7 @@ test("без innerHTML/eval; снимок уходит только на сво�
   assert.ok(!/https?:\/\//.test(src.replace(/\/\*[\s\S]*?\*\//g, "")), "shop.js: внешний адрес");
   assert.ok(!/<script>(?!<\/script>)/.test(html) && !html.includes("password") && !html.includes("auth.js"));
   assert.ok(html.includes('capture="environment"'), "камера телефона по <input capture> — работает без HTTPS");
+  assert.ok(html.includes('href="shop-list.html"'), "со страницы снимка — ссылка на список товаров магазина");
 });
 
 console.log(`\n${passed} passed`);

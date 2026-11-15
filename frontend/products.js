@@ -68,6 +68,25 @@
     if (code) body.add_barcode = code;
     return body;
   }
+  // Сведения для покупателя (миграция 0007): поле формы -> поле товара. Пустая строка — «убрать» (сервер хранит пусто).
+  var DETAIL_INPUTS = { net_content: "editNetContent", manufacturer: "editManufacturer", country: "editCountry",
+                        ingredients: "editIngredients", description: "editDescription" };
+  /** Сведения из формы -> добавка к телу PATCH: только изменённые относительно товара (original). Пустая строка — убрать.
+      Наличие: "yes"/"no" -> in_stock, "" -> clear_in_stock («не указано»). */
+  function buildDetailsBody(values, original) {
+    var body = {}, was = original || {};
+    values = values || {};
+    Object.keys(DETAIL_INPUTS).forEach(function (code) {
+      var now = String(values[code] || "").trim();
+      if (now !== String(was[code] || "").trim()) body[code] = now;
+    });
+    var stock = String(values.in_stock || "");
+    if (stock !== stockValue(was.in_stock)) {
+      if (stock === "yes") body.in_stock = true; else if (stock === "no") body.in_stock = false; else body.clear_in_stock = true;
+    }
+    return body;
+  }
+  function stockValue(v) { return v === true ? "yes" : v === false ? "no" : ""; }
   function photoName(file, index) { return file && file.name ? file.name : "photo-" + (index + 1) + ".jpg"; }
 
   // ---------------------------------------------------------------- страница
@@ -82,7 +101,7 @@
     var sleep = function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); };
 
     // ----- состояние
-    var chosen = [], busy = false, addOpen = false, editingId = null, editingCodes = [], addPhotosFor = null;
+    var chosen = [], busy = false, addOpen = false, editingId = null, editingCodes = [], editingDetails = {}, addPhotosFor = null;
     var progress = null;                       // null | {type: "uploading" | "studying" | "slow" | "fail" | "done", ...}
     var lastTask = null, items = [], capped = false, dupState = null, editingName = "";
     var msgs = {};                             // id -> {key, params} | {text}: сообщения хранятся логически и перерисовываются при смене языка
@@ -388,6 +407,12 @@
       renderEditCodes(); renderEditTitle(); $("editBarcode").value = "";
       $("editName").value = p.name || "";
       $("editPrice").value = p.expected_price === null || p.expected_price === undefined ? "" : String(p.expected_price).replace(".", ",");
+      editingDetails = { in_stock: p.in_stock };
+      Object.keys(DETAIL_INPUTS).forEach(function (code) {
+        editingDetails[code] = p[code] || "";
+        if ($(DETAIL_INPUTS[code])) $(DETAIL_INPUTS[code]).value = p[code] || "";
+      });
+      if ($("editInStock")) $("editInStock").value = stockValue(p.in_stock);
       setMsg("editError", null); show("editCard", true);
       forgetImages(); loadImages(p.id);
       var first = $("editName"); if (first.focus) first.focus();
@@ -497,6 +522,11 @@
       if (!editingId) return Promise.resolve();
       var id = editingId, body = buildEditBody($("editName").value, $("editPrice").value, $("editBarcode").value);
       if (editingVersion !== null) body.expected_version = editingVersion;   // товар успели изменить — сервер ответит 409, а не перезапишет
+      if ($("editInStock")) {
+        var values = { in_stock: $("editInStock").value };
+        Object.keys(DETAIL_INPUTS).forEach(function (code) { values[code] = $(DETAIL_INPUTS[code]) ? $(DETAIL_INPUTS[code]).value : ""; });
+        Object.assign(body, buildDetailsBody(values, editingDetails));
+      }
       setMsg("editError", null); $("editSave").disabled = true;
       return apiFetch("/api/v1/catalog/products/" + encodeURIComponent(id), { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(function (res) {
         if (res.status === 403) { showAccess(); return null; }
@@ -650,7 +680,7 @@
 
   return {
     start: start, fitSize: fitSize, photosHint: photosHint, submitState: submitState, describeApiError: describeApiError, pollDelay: pollDelay,
-    barcodeFromSearch: barcodeFromSearch, buildEditBody: buildEditBody, photoName: photoName,
+    barcodeFromSearch: barcodeFromSearch, buildEditBody: buildEditBody, buildDetailsBody: buildDetailsBody, stockValue: stockValue, photoName: photoName,
     MAX_PHOTOS: MAX_PHOTOS, GOOD_PHOTOS: GOOD_PHOTOS, MAX_SIDE: MAX_SIDE, PAGE_SIZE: PAGE_SIZE, MAX_ITEMS: MAX_ITEMS, TUNING: TUNING
   };
 });

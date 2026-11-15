@@ -48,11 +48,15 @@ def test_sql_expression_for_the_routes_and_for_psql_are_the_same_chain():
 
 def test_routes_use_the_normalized_search_with_escape():
     from pathlib import Path
-    root = Path(__file__).resolve().parents[1] / "app" / "api"
-    for name in ("routes_catalog.py", "routes_admin.py"):
-        text = (root / name).read_text(encoding="utf-8")
-        assert "text_search.like_pattern(q)" in text and "escape=text_search.ESCAPE" in text, name
-        assert ".ilike(" not in text, name                       # старый ILIKE без экранирования не вернулся
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    # поиск каталога и списка покупателя — общий (app/services/product_search.py), админки — свой
+    for path in (app_dir / "services" / "product_search.py", app_dir / "api" / "routes_admin.py"):
+        text = path.read_text(encoding="utf-8")
+        assert "text_search.like_pattern(q)" in text and "escape=text_search.ESCAPE" in text, path.name
+        assert ".ilike(" not in text, path.name                  # старый ILIKE без экранирования не вернулся
+    for name in ("routes_catalog.py", "routes_public.py"):
+        text = (app_dir / "api" / name).read_text(encoding="utf-8")
+        assert "apply_search(db, query," in text and ".ilike(" not in text, name
 
 
 PG_URL = os.environ.get("FULL_BACKUP_TEST_DB_URL", "")

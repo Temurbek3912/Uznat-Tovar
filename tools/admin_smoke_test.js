@@ -138,13 +138,19 @@ async function test(name, fn) {
     for (const gone of ["cameras", "overview", "stores", "evil"]) assert.strictEqual(run(`pageFromHash("#/${gone}")`), "products", gone);
     assert.strictEqual(run(`pageFromHash("")`), "products");
   });
+  await test("карточка покупателя: в настройке только известные поля по порядку, срока годности нет и подделать нельзя", () => {
+    assert.strictEqual(run(`JSON.stringify(buildCardFields(["description", "price", "expiry_date", "country"]))`),
+      JSON.stringify({fields: ["price", "country", "description"]}));
+    assert.strictEqual(run(`JSON.stringify(buildCardFields(null))`), JSON.stringify({fields: []}));
+    assert.ok(!/expir|srok/i.test(run(`CARD_FIELDS.join(",")`)));
+  });
   await test("форматтер размера: нет данных не превращается в 0", () => {
     assert.strictEqual(run(`fmtBytes(0)`), "0 Б");
     assert.strictEqual(run(`fmtBytes(1536)`), "1.5 КБ");
     assert.strictEqual(run(`fmtBytes(null)`), "—");
   });
-  await test("меню админки: ровно «Товары», «Пользователи», «Система»; ссылок на удалённые страницы нет", () => {
-    assert.deepStrictEqual(Array.from(html.matchAll(/data-page="(\w+)"/g), (m) => m[1]), ["products", "users", "system"]);
+  await test("меню админки: ровно «Товары», «Карточка для покупателя», «Пользователи», «Система»; ссылок на удалённые страницы нет", () => {
+    assert.deepStrictEqual(Array.from(html.matchAll(/data-page="(\w+)"/g), (m) => m[1]), ["products", "card", "users", "system"]);
     for (const gone of ["capture.html", "dashboard.html", "review.html", "setup.html", "#/overview", "#/cameras", "#/stores"]) {
       assert.ok(!html.includes(gone), `в админке не должно остаться: ${gone}`);
     }

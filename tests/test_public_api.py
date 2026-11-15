@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import io
 import os
 import subprocess
@@ -128,6 +129,7 @@ def env(monkeypatch, tmp_path):
     yield e
     fs.set_frame_store(None)
     routes_public.rate_limit.reset()
+    routes_public.browse_limit.reset()
 
 
 def identify(e, data=None, *, multipart=False, ip=None):
@@ -144,7 +146,8 @@ def test_known_barcode_gives_only_public_fields_without_login_over_plain_http(en
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body == {"status": "matched", "by": "barcode", "candidates": [],
-                    "product": {"name": "Кола 0,5 л", "brand": "Coca-Cola", "category": "Напитки", "price": 9900.0}}
+                    "product": {"name": "Кола 0,5 л", "brand": "Coca-Cola", "category": "Напитки", "price": 9900.0,
+                                "details": {}}}
     for secret in (env.cola, "COLA", "internal-ref", EAN, "score"):
         assert secret not in resp.text
     assert env.queued == []                                            # штрихкод — без очереди и без модели
@@ -166,7 +169,7 @@ def test_uncertain_shows_public_candidates_and_unknown_or_demo_say_not_found(env
                             "demo_mode": False}
     body = identify(env).json()
     assert body["status"] == "uncertain" and [c["name"] for c in body["candidates"]] == ["Кола 0,5 л", "Фанта 0,5 л"]
-    assert all(set(c) == {"name", "brand", "category", "price"} for c in body["candidates"])
+    assert all(set(c) == {"name", "brand", "category", "price", "details"} for c in body["candidates"])
     env.answer = {"status": "unknown", "product": None, "candidates": [{"id": "x"}], "demo_mode": False}
     assert identify(env).json() == {"status": "unknown", "by": None, "product": None, "candidates": []}
     env.answer = {"status": "empty_catalog", "product": None, "candidates": [], "demo_mode": False}
@@ -197,7 +200,8 @@ def test_rate_limit_per_device(env):
 
 def test_store_info_has_name_and_languages_but_not_the_address(env):
     body = env.client.get("/api/v1/public/store").json()
-    assert body == {"name": "Магазин у дома", "languages": ["ru", "uz", "uz-Cyrl", "en"]}
+    assert body == {"name": "Магазин у дома", "languages": ["ru", "uz", "uz-Cyrl", "en"],
+                    "card_fields": ["price", "net_content", "manufacturer", "country", "in_stock"]}
 
 
 # ------------------------------------------------------------------ вход покупателя: что на нём есть, а чего нет
@@ -220,6 +224,8 @@ for method, path in (("get", "/api/v1/auth/me"), ("get", "/api/v1/catalog/produc
                      ("get", "/api/v1/stores"), ("get", "/api/v1/admin/system")):
     assert getattr(c, method)(path).status_code in (403, 404), path          # 403 — раньше маршрута: незащищённый канал
 assert c.get("/ui/shop.html").status_code == 200 and c.get("/ui/shop.js").status_code == 200
+assert c.get("/ui/shop-list.html").status_code == 200 and c.get("/ui/shop-list.js").status_code == 200
+assert {"/api/v1/public/products", "/api/v1/public/categories", "/api/v1/public/photo/{ref}"} <= schema, schema
 for page in ("/ui/admin.html", "/ui/index.html", "/ui/products.html", "/ui/admin.js", "/ui/auth.js", "/ui/", "/ui/../app/main.py"):
     assert c.get(page).status_code == 404, page
 assert c.post("/api/v1/auth/login", data={"username": "a", "password": "b"}).status_code in (403, 404, 405)
@@ -245,3 +251,83 @@ def test_barcode_of_an_archived_product_is_not_a_match(env):
     assert resp.status_code == 200
     assert resp.json()["status"] != "matched" and "Кола" not in resp.text
     assert len(env.queued) == 1                                        # штрихкод не узнан — кадр ушёл на поиск по виду
+
+
+# ------------------------------------------------------------------ список товаров покупателя и поля карточки магазина (шаг 3)
+
+def _browse_reset(env):
+    env.routes.browse_limit.reset()
+
+
+def test_product_list_search_category_paging_and_no_archived(env):
+    _browse_reset(env)
+    with env.Session() as db:
+        db.add_all([Product(sku="WATER", name="Вода Ёлочка", brand="Nestle", category="Вода"),
+                    Product(sku="OLD", name="Старая кола", brand="X", category="Напитки", status="archived")])
+        db.commit()
+    body = env.client.get("/api/v1/public/products").json()
+    assert body["total"] == 3 and [i["name"] for i in body["items"]] == ["Вода Ёлочка", "Кола 0,5 л", "Фанта 0,5 л"]
+    assert body["next_offset"] is None
+    for secret in ("COLA", "internal-ref", EAN, "Старая"):
+        assert secret not in str(body)
+    assert all(set(i) == {"name", "brand", "category", "price", "details", "ref", "has_photo"} for i in body["items"])
+    assert [i["name"] for i in env.client.get("/api/v1/public/products", params={"q": "елочка"}).json()["items"]] == ["Вода Ёлочка"]
+    assert [i["name"] for i in env.client.get("/api/v1/public/products", params={"q": EAN}).json()["items"]] == ["Кола 0,5 л"]
+    assert env.client.get("/api/v1/public/products", params={"q": "FANTA"}).json()["total"] == 0   # по артикулу — нет (служебный)
+    cat = env.client.get("/api/v1/public/products", params={"category": "Напитки"}).json()
+    assert [i["name"] for i in cat["items"]] == ["Кола 0,5 л", "Фанта 0,5 л"]
+    page = env.client.get("/api/v1/public/products", params={"limit": 1, "offset": 1}).json()
+    assert [i["name"] for i in page["items"]] == ["Кола 0,5 л"] and page["next_offset"] == 2
+    cats = env.client.get("/api/v1/public/categories").json()
+    assert cats == {"items": [{"name": "Вода", "count": 1}, {"name": "Напитки", "count": 2}]}      # архив не считается
+
+
+def test_card_shows_only_the_fields_the_shop_enabled_and_never_expiry(env):
+    _browse_reset(env)
+    with env.Session() as db:
+        cola = db.get(Product, env.cola)
+        cola.country, cola.manufacturer, cola.ingredients, cola.in_stock = "Узбекистан", "Coca-Cola Ichimligi", "вода, сахар", True
+        db.query(Store).one().card_fields = json.dumps(["country", "in_stock", "expiry_date"])     # срок вписан руками в базу
+        db.commit()
+    assert env.client.get("/api/v1/public/store").json()["card_fields"] == ["country", "in_stock"]
+    item = next(i for i in env.client.get("/api/v1/public/products").json()["items"] if i["name"] == "Кола 0,5 л")
+    assert item["details"] == {"country": "Узбекистан", "in_stock": True}
+    assert "price" not in item and "9900" not in str(item)                                    # цену магазин не показывает
+    card = identify(env, barcode_jpeg()).json()["product"]
+    assert card == {"name": "Кола 0,5 л", "brand": "Coca-Cola", "category": "Напитки",
+                    "details": {"country": "Узбекистан", "in_stock": True}}
+    assert "вода, сахар" not in str(card) and "expiry" not in str(card)
+
+
+def test_product_photo_thumbnail_only_for_listed_products(env, monkeypatch):
+    _browse_reset(env)
+    from app.services import catalog_upload as cu
+
+    media = env.tmp_path / "media"
+    monkeypatch.setattr(env.routes, "_media_root", lambda: media)
+    folder = cu.uploads_root(media) / cu.folder_name("COLA")
+    folder.mkdir(parents=True)
+    (folder / "001-abcdef123456.jpg").write_bytes(jpeg(5, 800, 600))
+    files = cu.list_photo_files(cu.uploads_root(media), "COLA")
+    assert files, "имя файла фото должно подходить под шаблон каталога"
+    items = {i["name"]: i for i in env.client.get("/api/v1/public/products").json()["items"]}
+    assert items["Кола 0,5 л"]["has_photo"] is True and items["Фанта 0,5 л"]["has_photo"] is False
+    resp = env.client.get(f"/api/v1/public/photo/{items['Кола 0,5 л']['ref']}")
+    assert resp.status_code == 200 and resp.headers["content-type"] == "image/jpeg"
+    assert max(Image.open(io.BytesIO(resp.content)).size) <= 400
+    assert env.client.get(f"/api/v1/public/photo/{items['Фанта 0,5 л']['ref']}").status_code == 404
+    assert env.client.get("/api/v1/public/photo/ghost").json()["code"] == "public_photo_not_found"
+    with env.Session() as db:
+        db.get(Product, env.cola).status = "archived"
+        db.commit()
+    assert env.client.get(f"/api/v1/public/photo/{env.cola}").status_code == 404              # товар в архиве — фото нет
+
+
+def test_browsing_has_its_own_rate_limit(env):
+    _browse_reset(env)
+    limit = env.routes.BROWSE_PER_DEVICE_PER_MINUTE
+    codes = {env.client.get("/api/v1/public/categories").status_code for _ in range(limit)}
+    assert codes == {200}
+    blocked = env.client.get("/api/v1/public/products")
+    assert blocked.status_code == 429 and blocked.json()["code"] == "public_browse_limited"
+    _browse_reset(env)

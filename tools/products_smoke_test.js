@@ -159,6 +159,12 @@ const sorted = (a) => a.slice().sort();
     for (const bad of ["?barcode=abc", "?barcode=123", "?barcode=47800012345621234", "?barcode=<script>", "", "?x=1"]) assert.strictEqual(Products.barcodeFromSearch(bad), "", bad);
     assert.deepStrictEqual(Products.buildEditBody("А", "", ""), { name: "А", clear_price: true });
     assert.deepStrictEqual(Products.buildEditBody("А", " 1500,5 ", " 4780001234562 "), { name: "А", expected_price: "1500,5", add_barcode: "4780001234562" });
+    // сведения для покупателя: уходят только изменённые; пустое — «убрать»; наличие — да/нет/не указано
+    assert.deepStrictEqual(Products.buildDetailsBody({ country: " Узбекистан ", manufacturer: "", in_stock: "" }, { manufacturer: "", in_stock: null }), { country: "Узбекистан" });
+    assert.deepStrictEqual(Products.buildDetailsBody({ manufacturer: "", in_stock: "no" }, { manufacturer: "Нон", in_stock: true }), { manufacturer: "", in_stock: false });
+    assert.deepStrictEqual(Products.buildDetailsBody({ in_stock: "" }, { in_stock: false }), { clear_in_stock: true });
+    assert.deepStrictEqual(Products.buildDetailsBody({ in_stock: "yes" }, {}), { in_stock: true });
+    assert.strictEqual(Products.stockValue(true), "yes"); assert.strictEqual(Products.stockValue(false), "no"); assert.strictEqual(Products.stockValue(undefined), "");
   });
 
   // ============================================================ вход и права

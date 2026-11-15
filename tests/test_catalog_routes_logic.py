@@ -22,7 +22,8 @@ from PIL import Image
 
 MISSING = object()
 FAKED = ["fastapi", "sqlalchemy", "sqlalchemy.orm", "sqlalchemy.exc", "pydantic", "app.api.deps", "app.core.config", "app.db.models",
-         "app.db.session", "app.worker", "app.api.routes_catalog", "app.core.errors"]
+         "app.db.session", "app.worker", "app.api.routes_catalog", "app.core.errors",
+         "app.services.product_search"]   # поиск каталога (общий с покупателем): заново, на подставных sqlalchemy и моделях
 
 
 def _fake_require_permission(perm):

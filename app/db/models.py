@@ -32,6 +32,9 @@ class Store(Base):
     name: Mapped[str] = mapped_column(String)
     address: Mapped[str] = mapped_column(String)
     format: Mapped[str] = mapped_column(String)  # hypermarket | supermarket | convenience
+    # Миграция 0007: какие поля карточки видит покупатель (JSON-список кодов, app/services/shop_card.py); NULL — набор по умолчанию.
+    # Срока годности в этом списке не бывает никогда (решение владельца 2026-11-14: он у каждой партии свой).
+    card_fields: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ShelfORM(Base):
@@ -73,6 +76,13 @@ class Product(Base):
     status: Mapped[str] = mapped_column(String(16), default=PRODUCT_ACTIVE, server_default=PRODUCT_ACTIVE, index=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")   # номер правки: защита от тихой перезаписи
+    # Миграция 0007: сведения для карточки покупателя (показ — по настройке магазина, Store.card_fields). Все необязательные.
+    manufacturer: Mapped[str | None] = mapped_column(String, nullable=True)      # производитель
+    country: Mapped[str | None] = mapped_column(String, nullable=True)           # страна производства
+    net_content: Mapped[str | None] = mapped_column(String, nullable=True)       # вес или объём как на упаковке: «0,5 л», «200 г»
+    ingredients: Mapped[str | None] = mapped_column(Text, nullable=True)         # состав
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)         # описание
+    in_stock: Mapped[bool | None] = mapped_column(Boolean, nullable=True)        # есть в наличии; NULL — не указано
 
 
 class ProductBarcodeORM(Base):

@@ -26,12 +26,10 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
-from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_permission
-from app.core import text_search
 from app.core.app_errors import AppError
 from app.core.config import get_settings, resolve_project_path
 from app.core.errors import ApiError, from_app_error, from_catalog_error, reason
@@ -46,9 +44,7 @@ from app.services.barcode import (
     decode_image,
     explain_invalid,
     normalize_code,
-    partial_digits,
     plan_links,
-    search_keys,
 )
 from app.services.catalog_upload import (
     DEFAULT_BRAND,
@@ -65,13 +61,15 @@ from app.services.catalog_upload import (
     find_duplicate,
     list_photo_files,
     make_sku,
-    make_thumbnail,
+    cached_thumbnail,
     normalize_photo,
     parse_price,
     save_photos,
     uploads_root,
 )
 from app.services.frame_lifecycle import FRAME_TTL_SECONDS
+from app.services import shop_card
+from app.services.product_search import apply_search
 from app.services.product_images import (
     DISPLAY,
     REFERENCE,
@@ -109,6 +107,13 @@ class ProductSummary(BaseModel):
     cover_image_id: str | None = None    # фото для миниатюры (витринное, иначе первый эталон); None — нет файла в программе
     status: str = PRODUCT_ACTIVE         # active — в каталоге; archived — в архиве (не распознаётся, покупатель не видит)
     version: int = 1                     # номер правки: прислать в expected_version, чтобы не перезаписать чужую правку
+    # сведения для карточки покупателя (миграция 0007; что из них видит покупатель — настройка магазина, app/services/shop_card.py)
+    manufacturer: str | None = None
+    country: str | None = None
+    net_content: str | None = None
+    ingredients: str | None = None
+    description: str | None = None
+    in_stock: bool | None = None
 
 
 class ImageUpdate(BaseModel):
@@ -129,6 +134,14 @@ class ProductUpdate(BaseModel):
     clear_price: bool = False
     add_barcode: str | None = None                # привязать ещё один штрих-код (проверяется контрольная цифра и занятость)
     remove_barcode: str | None = None             # отвязать штрих-код (ошибочно привязанный)
+    # сведения для покупателя: присланное заменяет прежнее, пустая строка — убрать; in_stock: true/false, clear_in_stock — «не указано»
+    manufacturer: str | None = None
+    country: str | None = None
+    net_content: str | None = None
+    ingredients: str | None = None
+    description: str | None = None
+    in_stock: bool | None = None
+    clear_in_stock: bool = False
     expected_version: int | None = None           # версия, которую видел человек; товар успели изменить — 409, а не перезапись
 
 
@@ -159,6 +172,7 @@ def _summary(product: Product, barcodes: list[str] | None = None, photos: PhotoS
         id=product.id, sku=product.sku, name=product.name, brand=product.brand, category=product.category,
         expected_price=product.expected_price, photo_count=count, barcodes=sorted(barcodes or []),
         reference_count=refs, cover_image_id=cover, status=product.status or PRODUCT_ACTIVE, version=product.version or 1,
+        **{code: getattr(product, code, None) for code in shop_card.TEXT_FIELDS}, in_stock=getattr(product, "in_stock", None),
     )
 
 
@@ -302,22 +316,9 @@ async def search_products(
         query = query.filter(Product.status == status)
     elif status != "all":
         raise ApiError(422, "product_status_invalid", "Состояние товара: active (в каталоге), archived (в архиве) или all.")
-    pattern = text_search.like_pattern(q)
-    exact_codes = search_keys(q)
-    if pattern:
-        conditions = [text_search.sql_normalized(col, func).like(pattern, escape=text_search.ESCAPE)
-                      for col in (Product.sku, Product.name, Product.brand)]
-        by_code = db.query(ProductBarcodeORM.product_id)
-        digits = partial_digits(q)
-        if exact_codes:
-            conditions.append(Product.id.in_(by_code.filter(ProductBarcodeORM.barcode.in_(exact_codes))))
-        if digits:
-            conditions.append(Product.id.in_(by_code.filter(
-                ProductBarcodeORM.barcode.like(f"%{text_search.escape_like(digits)}%", escape=text_search.ESCAPE))))
-        query = query.filter(or_(*conditions))
+    query, exact = apply_search(db, query, q)
     order = (Product.created_at.desc(), Product.sku) if sort == "new" else (Product.sku,)
-    if exact_codes:                                   # точное совпадение штрихкода — первым
-        exact = Product.id.in_(db.query(ProductBarcodeORM.product_id).filter(ProductBarcodeORM.barcode.in_(exact_codes)))
+    if exact is not None:                             # точное совпадение штрихкода — первым
         order = (exact.desc(), *order)
     products = query.order_by(*order).offset(offset).limit(limit).all()
     ids = [p.id for p in products]
@@ -460,6 +461,14 @@ def update_product(
             changes["expected_price"] = None
         elif body.expected_price is not None:
             changes["expected_price"] = parse_price(body.expected_price)
+        for code in shop_card.TEXT_FIELDS:
+            value = getattr(body, code)
+            if value is not None:
+                changes[code] = shop_card.clean_detail(code, value)
+        if body.clear_in_stock:
+            changes["in_stock"] = None
+        elif body.in_stock is not None:
+            changes["in_stock"] = bool(body.in_stock)
         add_code = remove_code = link = None
         if body.add_barcode is not None and body.add_barcode.strip():
             add_code = normalize_code(body.add_barcode)
@@ -475,6 +484,8 @@ def update_product(
                 raise ApiError(404, "barcode_not_on_product", "Такого штрих-кода у этого товара нет.")
     except InputError as exc:
         raise from_catalog_error(422, exc) from exc
+    except shop_card.CardFieldsError as exc:
+        raise ApiError(422, exc.code, exc.message) from exc
     adding = bool(add_code) and db.get(ProductBarcodeORM, add_code) is None
     _apply_product_changes(db, product, changes, link, add_code if adding else None)
     try:
@@ -613,15 +624,7 @@ def product_photo(
     if size == "full":
         content = source.read_bytes()
     else:
-        cached = source.with_name(f"thumb-{source.name[:3]}.jpg")
-        if cached.is_file():
-            content = cached.read_bytes()
-        else:
-            content = make_thumbnail(source.read_bytes())
-            try:
-                cached.write_bytes(content)
-            except OSError:
-                pass                                   # миниатюра — удобство, не обязанность: без кэша просто пересчитаем
+        content = cached_thumbnail(source)
     return Response(content=content, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
 
 

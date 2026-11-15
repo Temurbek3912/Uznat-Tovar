@@ -1,0 +1,266 @@
+"""
+Тестовый каталог магазина из открытых баз (Open Food / Beauty / Products Facts): товары, которые продаются в стране, — с названием,
+брендом, видом товара (категорией), штрихкодом и фото. Папка получается в формате scripts/import_catalog.py.
+
+    python -m scripts.fetch_open_catalog --country uzbekistan --barcode-prefix 478 --out data/test-catalog-uz
+    python -m scripts.import_catalog --dir data/test-catalog-uz
+    python -m scripts.fetch_open_catalog --link-barcodes --out data/test-catalog-uz      # штрихкоды -> товары в базе
+
+Только для проверки: фото в открытых базах сняты покупателями, по 1–5 на товар, 400 px. Цен в открытых базах почти нет — цена пустая.
+Артикул каждого товара — «UZ-<штрихкод>» (по приставке тестовые товары легко найти и убрать). Повторный запуск докачивает недостающее.
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import html
+import re
+import json
+import time
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+USER_AGENT = "UznatTovar/1.0 (store product lookup)"
+SEARCH = "https://search.openfoodfacts.org/search"          # поиск по всей Open Food Facts (обычный /api/v2/search бывает недоступен)
+OTHER_BASES = ("https://world.openbeautyfacts.org", "https://world.openproductsfacts.org")
+IMAGE_HOSTS = {
+    "off": "https://images.openfoodfacts.org", "obf": "https://images.openbeautyfacts.org",
+    "opf": "https://images.openproductsfacts.org",
+}
+FIELDS = "code,product_name,product_name_ru,product_name_uz,product_name_en,brands,quantity,categories_tags,images"
+MAX_PHOTOS = 5
+LANG_ORDER = ("ru", "uz", "en", "")
+
+
+def _get_json(url: str, timeout: float = 60.0, tries: int = 3) -> dict:
+    for attempt in range(tries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.load(r)
+        except Exception:  # noqa: BLE001
+            if attempt == tries - 1:
+                raise
+            time.sleep(3 * (attempt + 1))
+    return {}
+
+
+def _image_dir(code: str) -> str:
+    return "/".join([code[0:3], code[3:6], code[6:9], code[9:]]) if len(code) > 8 else code
+
+
+def photo_ids(images: dict) -> list[str]:
+    """Номера фото товара: сначала выбранные «лицевая сторона», затем остальные загруженные (по порядку), без повторов."""
+    images = images or {}
+    first = [str(v.get("imgid")) for k, v in images.items() if k.startswith("front") and isinstance(v, dict) and v.get("imgid")]
+    rest = sorted((k for k in images if k.isdigit()), key=int)
+    out: list[str] = []
+    for i in first + rest:
+        if i not in out and i in images:
+            out.append(i)
+    return out[:MAX_PHOTOS]
+
+
+def _text(value) -> str:
+    return re.sub(r"\s+", " ", html.unescape(html.unescape(str(value or "")))).strip(" ;,")
+
+
+def good_name(name: str) -> bool:
+    """Название, а не мусор: хотя бы 3 буквы (не «3913», не «1»)."""
+    return len(re.findall(r"[^\W\d_]", name)) >= 3
+
+
+def product_name(p: dict) -> str:
+    for lang in LANG_ORDER:
+        name = _text(p.get(f"product_name_{lang}" if lang else "product_name"))
+        if good_name(name):
+            qty = _text(p.get("quantity"))
+            return f"{name} {qty}".strip() if qty and qty.lower() not in name.lower() else name
+    return ""
+
+
+def brand_of(p: dict) -> str:
+    brands = p.get("brands") or ""
+    if isinstance(brands, list):
+        brands = ", ".join(brands)
+    brand = _text(str(brands).split(",")[0])
+    return brand if good_name(brand) else ""
+
+
+def category_of(p: dict, first_photo: Path | None = None) -> str:
+    """Категория из открытой базы; её нет — вид по первому фото малой моделью (app/pipeline/kind_classifier.py, порог из настроек)."""
+    from app.services.product_kinds import kind_for_categories  # noqa: PLC0415
+    kind = kind_for_categories(list(p.get("categories_tags") or []))
+    if not kind and first_photo is not None:
+        kind = _photo_kind(first_photo)
+    return RU_KINDS.get(kind or "", "")
+
+
+_classifier = None
+
+
+def _photo_kind(path: Path) -> str:
+    global _classifier
+    try:
+        from app.core.config import get_settings  # noqa: PLC0415
+        from app.pipeline.kind_classifier import get_classifier  # noqa: PLC0415
+        settings = get_settings()
+        if _classifier is None:
+            _classifier = get_classifier(settings) or False
+        if not _classifier:
+            return ""
+        score = _classifier.classify_jpeg(path.read_bytes())
+        return score.kind if score.kind and score.score >= settings.naming_kind_min_score else ""
+    except Exception:  # noqa: BLE001 — вид — только удобство
+        return ""
+
+
+RU_KINDS = {
+    "drink": "Напитки", "dairy": "Молочные продукты", "sweets": "Сладости", "snack": "Снеки", "tea_coffee": "Чай и кофе",
+    "grocery": "Бакалея", "sauce": "Соусы и специи", "canned": "Консервы", "bakery": "Хлеб и выпечка",
+    "meat_fish": "Мясо и рыба", "fruit_veg": "Овощи и фрукты", "frozen": "Заморозка", "baby": "Детские товары",
+    "medicine": "Лекарства", "cosmetics": "Косметика и гигиена", "cleaning": "Бытовая химия", "home": "Товары для дома",
+    "pet": "Товары для животных", "tobacco": "Табак", "clothing": "Одежда", "footwear": "Обувь", "bags": "Сумки",
+    "accessories": "Аксессуары", "electronics": "Электроника", "stationery": "Канцтовары", "toy": "Игрушки",
+}
+
+
+def search_off(query: str) -> list[dict]:
+    out, page = [], 1
+    while True:
+        url = f"{SEARCH}?{urllib.parse.urlencode({'q': query, 'page_size': 100, 'page': page, 'fields': FIELDS})}"
+        data = _get_json(url)
+        hits = data.get("hits") or []
+        out += [dict(h, _src="off") for h in hits]
+        if page >= int(data.get("page_count") or 1) or not hits:
+            return out
+        page += 1
+        time.sleep(1)
+
+
+def search_other(base: str, country: str, src: str) -> list[dict]:
+    out, page = [], 1
+    while True:
+        q = urllib.parse.urlencode({"countries_tags_en": country, "page_size": 100, "page": page, "fields": FIELDS})
+        data = _get_json(f"{base}/api/v2/search?{q}")
+        prods = data.get("products") or []
+        out += [dict(p, _src=src) for p in prods]
+        if len(out) >= int(data.get("count") or 0) or not prods:
+            return out
+        page += 1
+        time.sleep(2)
+
+
+def collect(country: str, prefix: str) -> list[dict]:
+    found: dict[str, dict] = {}
+    batches = [search_off(f'countries_tags:"en:{country}"')]
+    if prefix:
+        batches.append([p for p in search_off(f"code:{prefix}*") if len(str(p.get("code", ""))) == 13])
+    for base, src in zip(OTHER_BASES, ("obf", "opf")):
+        try:
+            batches.append(search_other(base, country, src))
+        except Exception as exc:  # noqa: BLE001
+            print(f"  {base}: недоступна ({type(exc).__name__}) — пропускаю")
+    for batch in batches:
+        for p in batch:
+            code = str(p.get("code") or "").strip()
+            if code.isdigit() and len(code) in (8, 12, 13) and code not in found:
+                found[code] = p
+    return list(found.values())
+
+
+def download(url: str, path: Path) -> bool:
+    if path.is_file() and path.stat().st_size > 0:
+        return True
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = r.read()
+    except Exception:  # noqa: BLE001
+        return False
+    if len(data) < 2000:
+        return False
+    path.write_bytes(data)
+    return True
+
+
+def fetch(out: Path, country: str, prefix: str) -> None:
+    out.mkdir(parents=True, exist_ok=True)
+    print(f"Ищу товары: страна {country}" + (f", штрихкоды {prefix}…" if prefix else ""))
+    products = collect(country, prefix)
+    print(f"Найдено товаров: {len(products)}")
+    rows, photos = [], 0
+    for n, p in enumerate(products, 1):
+        code, name = str(p["code"]), product_name(p)
+        ids = photo_ids(p.get("images") or {})
+        if not name or not ids:
+            continue
+        sku = f"UZ-{code}"
+        folder = out / sku
+        folder.mkdir(exist_ok=True)
+        got = 0
+        for i in ids:
+            url = f"{IMAGE_HOSTS[p['_src']]}/images/products/{_image_dir(code)}/{i}.400.jpg"
+            if download(url, folder / f"{i}.jpg"):
+                got += 1
+            time.sleep(0.15)
+        if not got:
+            folder.rmdir()
+            continue
+        photos += got
+        barcode = "0" + code if len(code) == 12 else code          # UPC-A хранится как EAN-13 с нулём (app/services/barcode.py)
+        first = folder / f"{ids[0]}.jpg"
+        rows.append({"sku": sku, "name": name[:200], "brand": brand_of(p), "category": category_of(p, first if first.is_file() else None),
+                     "price": "", "barcode": barcode})
+        if n % 50 == 0:
+            print(f"  {n}/{len(products)}: товаров с фото {len(rows)}, фото {photos}")
+    with (out / "products.csv").open("w", encoding="utf-8-sig", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["sku", "name", "brand", "category", "price"], delimiter=";", extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+    with (out / "barcodes.csv").open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(["sku", "barcode"])
+        w.writerows([(r["sku"], r["barcode"]) for r in rows])
+    print(f"Готово: {len(rows)} товаров, {photos} фото -> {out}")
+
+
+def link_barcodes(out: Path) -> None:
+    """Штрихкоды из barcodes.csv -> таблица штрихкодов базы (товар уже загружен scripts/import_catalog.py). Занятые коды не трогаются."""
+    from app.db.models import Product, ProductBarcodeORM  # noqa: PLC0415
+    from app.db.session import SessionLocal  # noqa: PLC0415
+    with (out / "barcodes.csv").open(encoding="utf-8") as f:
+        pairs = [(r["sku"], r["barcode"]) for r in csv.DictReader(f, delimiter=";")]
+    db = SessionLocal()
+    added = skipped = 0
+    try:
+        ids = {p.sku: p.id for p in db.query(Product.sku, Product.id).filter(Product.sku.in_([s for s, _ in pairs])).all()}
+        taken = {b for (b,) in db.query(ProductBarcodeORM.barcode).filter(ProductBarcodeORM.barcode.in_([c for _, c in pairs])).all()}
+        for sku, code in pairs:
+            if sku not in ids or code in taken:
+                skipped += 1
+                continue
+            db.add(ProductBarcodeORM(barcode=code, product_id=ids[sku]))
+            added += 1
+        db.commit()
+    finally:
+        db.close()
+    print(f"Штрихкоды: привязано {added}, пропущено {skipped}")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--out", default="data/test-catalog-uz")
+    ap.add_argument("--country", default="uzbekistan")
+    ap.add_argument("--barcode-prefix", default="478", help="штрихкоды производителей страны (Узбекистан — 478); пусто — не искать")
+    ap.add_argument("--link-barcodes", action="store_true", help="только привязать штрихкоды уже загруженных товаров")
+    args = ap.parse_args()
+    if args.link_barcodes:
+        link_barcodes(Path(args.out))
+    else:
+        fetch(Path(args.out), args.country, args.barcode_prefix)
+
+
+if __name__ == "__main__":
+    main()

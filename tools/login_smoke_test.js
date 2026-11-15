@@ -34,7 +34,10 @@ function boot(opts) {
     "/auth/transport": () => json(200, { secure: true, required: true }),
     "/auth/me": () => json(200, ADMIN_ME),
   }, opts.server || {});
+  const listeners = {};
   const win = {
+    addEventListener: (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); },
+    fire: (type) => (listeners[type] || []).forEach((fn) => fn({})),
     document: doc, sessionStorage: makeStorage(opts.session), localStorage: makeStorage(),
     location: { protocol: "http:", origin: "http://localhost:8000", pathname: "/ui/login.html", search: opts.search || "", hash: opts.hash || "",
                 replace: (u) => replaced.push(u), assign: (u) => replaced.push("assign:" + u) },
@@ -184,6 +187,19 @@ const type = (s, id, value) => { s.$(id).value = value; s.$(id).dispatch("input"
     assert.deepStrictEqual(t.replaced, ["products.html"]);
     const u = boot({ search: "?next=identify.html&why=expired" }); await u.ready();
     assert.strictEqual(u.$("pinError").textContent, DICTS.ru["signin.session_ended"]);
+  });
+
+  await test("ссылка «Придумайте ПИН» в уже открытой вкладке входа (меняется только #) — сразу «Придумайте ПИН»; прочие # — ничего", async () => {
+    const s = boot({ server: { "/auth/setup/check": () => json(200, { valid: true, username: "admin" }) } });
+    await s.ready();
+    assert.ok(s.shown("pinView"));
+    s.win.location.hash = "#other"; s.win.fire("hashchange"); await flush();
+    assert.ok(s.shown("pinView") && !s.calls.some((c) => c.p === "/auth/setup/check"));
+    s.win.location.hash = "#setup=TOKEN_abcdef123"; s.win.fire("hashchange");
+    await s.app.ready; await flush();
+    assert.ok(s.shown("setupView") && !s.shown("pinView"));
+    assert.deepStrictEqual(s.history, ["/ui/login.html"], "токен убран из адреса");
+    assert.strictEqual(s.$("setupPinLabel").textContent, DICTS.ru["signin.enter_new_pin"]);
   });
 
   console.log(`\n${passed} passed`);

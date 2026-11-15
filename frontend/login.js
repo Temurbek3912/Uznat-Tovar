@@ -211,9 +211,18 @@
     $("toPassword").addEventListener("click", function () { setMsg("pinError", null); setView("pass"); });
     $("toPin").addEventListener("click", function () { setMsg("passError", null); setView("pin"); });
     $("forgotBtn").addEventListener("click", function () { show("forgotHint", true); });
+    // Ссылку «Придумайте ПИН» открыли в уже открытой вкладке входа: меняется только «#setup=…», страница не перезагружается.
+    var ctl = { state: state };
+    if (win.addEventListener) win.addEventListener("hashchange", function () {
+      if (!setupToken(win.location.hash)) return;
+      state.setup = null; state.setupStep = 1; state.firstPin = "";
+      setMsg("setupError", null); setMsg("pinError", null); setMsg("passError", null);
+      ctl.ready = boot();
+    });
     // Уже вошли (вкладка с сеансом): сразу дальше, без повторного входа.
     var ready = auth.getToken() ? auth.me().then(function (r) { return r.status === "ok" ? goNext() : boot(); }) : boot();
-    return { ready: ready, state: state };
+    ctl.ready = ready;
+    return ctl;
   }
 
   return { start: start, safeNext: safeNext, startPage: startPage, setupToken: setupToken, onlyDigits: onlyDigits, PAGES: PAGES };

@@ -28,7 +28,7 @@ from app.core.public_url import validate_public_base_url
 
 MODES = ("off", "tailscale", "cloudflare", "manual")
 SHOP_PATH = "ui/shop.html"
-TAILSCALE_PATHS = (r"C:\Program Files\Tailscale\tailscale.exe",)
+TAILSCALE_PATHS = (r"C:\Program Files\Tailscale\tailscale.exe", r"D:\Programs\Tailscale\tailscale.exe")
 CLOUDFLARED_PATHS = (r"C:\Program Files (x86)\cloudflared\cloudflared.exe", r"C:\Program Files\cloudflared\cloudflared.exe")
 
 

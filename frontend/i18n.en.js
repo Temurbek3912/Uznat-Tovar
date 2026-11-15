@@ -110,6 +110,8 @@
     "kind.cleaning": "Household cleaning products",
     "kind.home": "Household goods",
     "kind.clothing": "Clothing",
+    "kind.bags": "Bags and backpacks",
+    "kind.accessories": "Accessories (watches, glasses, jewelry)",
     "kind.footwear": "Footwear",
     "kind.electronics": "Electronics",
     "kind.stationery": "Stationery",

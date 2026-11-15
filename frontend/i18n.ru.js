@@ -110,6 +110,8 @@
     "kind.cleaning": "Бытовая химия",
     "kind.home": "Товары для дома",
     "kind.clothing": "Одежда",
+    "kind.bags": "Сумки и рюкзаки",
+    "kind.accessories": "Аксессуары (часы, очки, украшения)",
     "kind.footwear": "Обувь",
     "kind.electronics": "Электроника",
     "kind.stationery": "Канцтовары",

@@ -111,6 +111,8 @@
     "kind.cleaning": "Маиший кимё",
     "kind.home": "Уй-рўзғор буюмлари",
     "kind.clothing": "Кийим",
+    "kind.bags": "Сумкалар ва рюкзаклар",
+    "kind.accessories": "Аксессуарлар (соат, кўзойнак, тақинчоқлар)",
     "kind.footwear": "Пойабзал",
     "kind.electronics": "Электроника",
     "kind.stationery": "Канцелярия моллари",

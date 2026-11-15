@@ -110,6 +110,8 @@
     "kind.cleaning": "Maishiy kimyo",
     "kind.home": "Uy-roʻzgʻor buyumlari",
     "kind.clothing": "Kiyim",
+    "kind.bags": "Sumkalar va ryukzaklar",
+    "kind.accessories": "Aksessuarlar (soat, koʻzoynak, taqinchoqlar)",
     "kind.footwear": "Poyabzal",
     "kind.electronics": "Elektronika",
     "kind.stationery": "Kanselyariya mollari",

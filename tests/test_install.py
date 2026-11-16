@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
+import zipfile
 import sys
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -305,11 +306,14 @@ def test_package_name_and_dirty_tree_warning(tmp_path):
             return NS(returncode=0, stdout="92b0103abcdef\n", stderr="")
         if argv[1] == "status":
             return NS(returncode=0, stdout=" M app/main.py\n?? new.txt\n", stderr="")
-        Path(argv[argv.index("-o") + 1]).write_bytes(b"zip")
+        if argv[1] == "log":
+            return NS(returncode=0, stdout="2026-11-16 10:00\n", stderr="")
+        with zipfile.ZipFile(argv[argv.index("-o") + 1], "w") as z:
+            z.writestr("uznat-tovar/app/main.py", "x")
         return NS(returncode=0, stdout="", stderr="")
     assert make_package.main(["--out", str(tmp_path)], run=fake_run, out=lines.append, root=tmp_path) == 0
     assert "1 изменённых" in lines[0] and "Установить.bat" in lines[-1]
-    assert calls[-1][:4] == ["git", "archive", "--format=zip", "--prefix=uznat-tovar/"]
+    assert calls[2][:4] == ["git", "archive", "--format=zip", "--prefix=uznat-tovar/"]
 
 
 def test_package_leaves_out_tests_and_old_docs():

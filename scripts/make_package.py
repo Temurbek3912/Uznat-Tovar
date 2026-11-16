@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 import time
@@ -20,6 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PREFIX = "uznat-tovar/"
 CLIENT_FILE = "google_client.json"
+VERSION_FILE = "version.json"
 
 
 def package_name(commit: str, today: str) -> str:
@@ -54,8 +56,23 @@ def main(argv: list[str] | None = None, run=subprocess.run, out=print, root: Pat
     else:
         out(f"ВНИМАНИЕ: нет файла {CLIENT_FILE} — кнопки «Подключить Google Диск» в магазинах не будет "
             "(как его получить — docs/GOOGLE_DRIVE_SETUP.md).")
-    out(f"Готово: {target} ({target.stat().st_size / 2**20:.1f} МБ). В магазине: распаковать, дважды щёлкнуть «Установить.bat».")
+    add_version(target, commit=head.stdout.strip(), date=commit_date(git))
+    out(f"Готово: {target} ({target.stat().st_size / 2**20:.1f} МБ). В магазине: распаковать, дважды щёлкнуть "
+        "«Установить.bat» (новый магазин) или «Обновить.bat» (программа уже стоит — данные останутся).")
     return 0
+
+
+def commit_date(git) -> str:
+    res = git("log", "-1", "--format=%cd", "--date=format:%Y-%m-%d %H:%M")
+    return (res.stdout or "").strip() if res.returncode == 0 else time.strftime("%Y-%m-%d %H:%M")
+
+
+def add_version(archive: Path, *, commit: str, date: str) -> None:
+    """version.json: какая это версия и из каких файлов она состоит — «Обновить.bat» убирает файлы, которых в новой нет."""
+    with zipfile.ZipFile(archive, "a") as z:
+        files = sorted(n[len(PREFIX):] for n in z.namelist() if n.startswith(PREFIX) and not n.endswith("/"))
+        data = {"commit": commit, "date": date, "files": files}
+        z.writestr(PREFIX + VERSION_FILE, json.dumps(data, ensure_ascii=False, indent=1))
 
 
 if __name__ == "__main__":

@@ -436,6 +436,8 @@ def test_package_carries_the_google_client_file(tmp_path):
             return NS(returncode=0, stdout="91b1d16abcdef\n", stderr="")
         if argv[1] == "status":
             return NS(returncode=0, stdout="", stderr="")
+        if argv[1] == "log":                       # дата версии для version.json (scripts/update.py)
+            return NS(returncode=0, stdout="2026-11-16 10:00\n", stderr="")
         with zipfile.ZipFile(argv[argv.index("-o") + 1], "w") as z:
             z.writestr("uznat-tovar/app/main.py", "x")
         return NS(returncode=0, stdout="", stderr="")

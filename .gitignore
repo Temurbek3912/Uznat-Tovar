@@ -33,3 +33,6 @@ dist/
 
 # Клиент программы у Google для кнопки «Подключить Google Диск» (docs/GOOGLE_DRIVE_SETUP.md): в архив кладёт scripts/make_package.py
 google_client.json
+
+# Версия программы у магазина (пишет «Обновить.bat», scripts/update.py)
+/version.json

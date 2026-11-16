@@ -187,3 +187,103 @@ def test_ask_vision_returns_the_raw_answer_even_when_it_would_be_rejected():
 def test_names_overlap_ignores_accents_on_latin_letters():
     assert pn.names_overlap(pn.Guess(name="Nescafe Gold", brand="Nescafe"), {"name": "Кофе", "brand": "Nescafé"})
     assert pn._tokens("Nestlé") == pn._tokens("Nestle")
+
+
+# ---------------------------------------------------------------- «найдено по виду» сверяется с надписью на этикетке
+
+FOUND = {"status": "matched", "by": "look", "score": 0.904,
+         "product": {"id": "m1", "name": "Montella Daily ichimlik suvi 1.5l", "brand": "", "score": 0.904},
+         "candidates": [{"id": "m1", "name": "Montella Daily ichimlik suvi 1.5l", "brand": "", "score": 0.904},
+                        {"id": "h", "name": "Hydrolife 1,5 л", "brand": "Hydrolife", "score": 0.895},
+                        {"id": "w", "name": "Вода питьевая 0,5 л", "brand": "", "score": 0.884}]}
+
+
+def _label(monkeypatch, guess, calls=None):
+    def read(jpeg, lang, settings, **kw):
+        if calls is not None:
+            calls.append(jpeg)
+        return guess
+    monkeypatch.setattr(pn, "read_label", read)
+    monkeypatch.setattr(pn, "agreed_kind", lambda g, *a, **k: g)
+
+
+def test_found_by_look_but_label_names_another_brand_is_not_in_catalog(monkeypatch):
+    _label(monkeypatch, pn.Guess("Santal water", "Santal", "vision", sure=True, kind="drink"))
+    out = routes_catalog.add_outside_name(dict(FOUND), b"j", [], "ru")
+    assert out["status"] == "not_in_catalog" and out["product"] is None and out["candidates"] == []
+    assert out["guess"] == {"name": "Santal water", "brand": "Santal", "source": "vision", "kind": "drink"}
+
+
+def test_found_by_look_and_label_agrees_with_the_first_stays_found(monkeypatch):
+    _label(monkeypatch, pn.Guess("Montella Daily", "Montella", "vision", sure=True))
+    found = dict(FOUND)
+    assert routes_catalog.add_outside_name(found, b"j", [], "ru") is found
+
+
+def test_found_by_look_and_label_names_the_second_shows_it_first_as_similar(monkeypatch):
+    _label(monkeypatch, pn.Guess("Hydrolife", "Hydrolife", "vision", sure=True))
+    out = routes_catalog.add_outside_name(dict(FOUND), b"j", [], "ru")
+    assert out["status"] == "uncertain" and out["product"]["id"] == "h" and out["score"] == 0.895
+    assert [c["id"] for c in out["candidates"]] == ["h", "m1", "w"]
+
+
+def test_found_by_look_unsure_or_no_model_or_barcode_or_demo_is_untouched(monkeypatch):
+    calls = []
+    _label(monkeypatch, None, calls)                                   # модель не уверена, выключена или её нет
+    found = dict(FOUND)
+    assert routes_catalog.add_outside_name(found, b"j", [], "ru") is found and calls == [b"j"]
+    _label(monkeypatch, pn.Guess("Santal water", "Santal", sure=True), calls)
+    by_code = {**FOUND, "by": "barcode"}
+    assert routes_catalog.add_outside_name(by_code, b"j", [], "ru") is by_code
+    demo = {**FOUND, "demo_mode": True}
+    assert routes_catalog.add_outside_name(demo, b"j", [], "ru") is demo
+    assert calls == [b"j"]                                             # по штрихкоду и в демо модель не спрашивали
+
+
+def test_read_label_takes_only_a_sure_name_and_waits_briefly(monkeypatch):
+    monkeypatch.setattr(pn, "_label_pause_until", 0.0)
+    calls = []
+    sure = {"is_product": True, "name": "Santal water", "brand": "Santal", "confidence": "high", "kind": "drink"}
+    slow = types.SimpleNamespace(**{**vars(SETTINGS), "naming_vision_timeout_seconds": 40.0})
+    guess = pn.read_label(_jpeg(), "ru", slow, http_post=_vision(sure, calls))
+    assert guess.name == "Santal water" and guess.sure and calls[0][2] == pn.LABEL_CHECK_TIMEOUT
+    assert pn.read_label(_jpeg(), "ru", SETTINGS, http_post=_vision({**sure, "confidence": "medium"})) is None
+    off = types.SimpleNamespace(**{**vars(SETTINGS), "naming_enabled": False})
+    no_url = types.SimpleNamespace(**{**vars(SETTINGS), "naming_vision_url": ""})
+    assert pn.read_label(_jpeg(), "ru", off, http_post=_vision(sure, calls)) is None
+    assert pn.read_label(_jpeg(), "ru", no_url, http_post=_vision(sure, calls)) is None
+    assert len(calls) == 1                                             # выключена или нет адреса — модель не спрашивали
+
+
+def test_read_label_pauses_after_the_model_did_not_answer(monkeypatch):
+    monkeypatch.setattr(pn, "_label_pause_until", 0.0)
+    tries = []
+
+    def down(url, payload, timeout):
+        tries.append(1)
+        raise TimeoutError()
+    assert pn.read_label(_jpeg(), "ru", SETTINGS, http_post=down) is None
+    assert pn.read_label(_jpeg(), "ru", SETTINGS, http_post=down) is None
+    assert len(tries) == 1                                             # вторую минуту не ждём на каждом кадре
+
+
+def test_found_by_look_with_a_clear_lead_is_not_checked(monkeypatch):
+    calls = []
+    _label(monkeypatch, pn.Guess("Santal water", "Santal", sure=True), calls)
+    clear = {**FOUND, "candidates": [FOUND["candidates"][0], {**FOUND["candidates"][1], "score": 0.70}]}
+    assert routes_catalog.add_outside_name(clear, b"j", [], "ru") is clear and calls == []   # отрыв 0,2 — модель не спрашиваем
+
+
+def test_found_by_look_a_common_word_with_another_candidate_is_not_a_switch(monkeypatch):
+    _label(monkeypatch, pn.Guess("Santal питьевая вода", "Santal", "vision", sure=True))
+    found = dict(FOUND)
+    assert routes_catalog.add_outside_name(found, b"j", [], "ru") is found   # «вода» есть у третьего, но марка другая — не спорим
+
+
+def test_names_overlap_tolerates_small_misreadings_and_greek_or_ukrainian_letters():
+    assert pn.names_overlap(pn.Guess("ВКУСОВИЛ ХАШБЕРАУН", "ВКУСОВИЛ"), {"name": "Хашбраун 400 g", "brand": "ВкусВилл"})
+    assert pn.names_overlap(pn.Guess("ΚΟΛΙΟΣ ΠΙΤΕΣ", "ΚΟΛΙΟΣ"), {"name": "Пита греческая", "brand": "Kolios"})
+    assert pn.names_overlap(pn.Guess("Дошірак", "Дошірак"), {"name": "DOCHURAK 90 g", "brand": "Doshirak"})
+    assert not pn.names_overlap(pn.Guess("Santal water", "Santal"), {"name": "Montella Daily", "brand": "Montella"})
+    assert not pn.names_overlap(pn.Guess("Coke"), {"name": "Coka", "brand": ""})            # короткие слова — только точно
+    assert not pn.brand_overlap(pn.Guess("Santal вода", "Santal"), {"name": "Вода питьевая", "brand": "Не указан"})

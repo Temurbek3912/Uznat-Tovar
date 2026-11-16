@@ -765,9 +765,20 @@ def add_outside_name(result: dict, jpeg: bytes | None, codes: list[str], lang: s
     «Похоже» (uncertain) тоже проверяется: поиск по виду путает похожие упаковки разных товаров (банка Red Bull «похожа» на банку
     Coca-Cola). Если название назвало ДРУГОЙ товар — ни одного общего слова с кандидатами — а модель уверена (high), это
     not_in_catalog; иначе ответ «похоже» остаётся как был (выбор за человеком).
+    «Найдено» по виду (matched, by="look") тоже сверяется с надписью на этикетке (read_label: только модель, коротко), потому что
+    похожие бутылки разных марок близки по виду (вода Santal «нашлась» как Montella, 0,90). Только если второй товар близко по
+    счёту (LABEL_CHECK_MAX_GAP). Модель уверена и название:
+      - не похоже ни на один кандидат -> not_in_catalog с догадкой;
+      - похоже на другой кандидат, а не на первый -> uncertain с ним первым (общее слово может быть общим — «вода», «zero»,
+        поэтому не «найдено», а «похоже»: выбор за человеком);
+      - похоже на первый, модель не уверена, модели нет — ответ как был.
     При заглушке вместо модели (demo_mode) поиск по каталогу недостоверен: «нет в базе» сказать нельзя — ничего не добавляем."""
     status = result.get("status")
-    if result.get("demo_mode") or status not in ("unknown", "empty_catalog", "uncertain"):
+    if result.get("demo_mode"):
+        return result
+    if status == "matched" and result.get("by") == "look":
+        return _check_label(result, jpeg, lang)
+    if status not in ("unknown", "empty_catalog", "uncertain"):
         return result
     from app.services.product_namer import name_product, names_overlap     # noqa: PLC0415
     guess = name_product(jpeg, codes, lang, get_settings())
@@ -779,6 +790,42 @@ def add_outside_name(result: dict, jpeg: bytes | None, codes: list[str], lang: s
         candidates = [result.get("product") or {}] + list(result.get("candidates") or [])
         if any(names_overlap(guess, c) for c in candidates if c):
             return result
+    return {**result, "status": "not_in_catalog", "guess": guess.as_dict(), "product": None, "candidates": []}
+
+
+# Сверка надписи у «найдено» — только в «тесных» случаях: второй товар близко по счёту. Замер 2026-11-16 (150 снимков, как с
+# телефона): у всех верных ответов, которые сверка ломала (модель на тёмном снимке уверенно «читала» другую марку), отрыв был
+# ≥ 0,12; у воды Santal, «найденной» как Montella, — 0,01. При 0,08 потерь нет, а модель спрашивается на ~15 % кадров.
+LABEL_CHECK_MAX_GAP = 0.08
+
+
+def _gap(result: dict) -> float:
+    first = result.get("product") or {}
+    rivals = [c.get("score") or 0.0 for c in (result.get("candidates") or []) if c and c.get("id") != first.get("id")]
+    return float(first.get("score", result.get("score")) or 0.0) - max(rivals) if rivals else 1.0
+
+
+def _check_label(result: dict, jpeg: bytes | None, lang: str) -> dict:
+    """«Найдено» по виду -> сверка с надписью (см. add_outside_name)."""
+    if _gap(result) >= LABEL_CHECK_MAX_GAP:
+        return result
+    from app.services.product_namer import agreed_kind, brand_overlap, names_overlap, read_label     # noqa: PLC0415
+    settings = get_settings()
+    guess = read_label(jpeg, lang, settings)
+    if guess is None:
+        return result
+    first = result.get("product") or {}
+    if names_overlap(guess, first):
+        return result
+    others = [c for c in (result.get("candidates") or []) if c and c.get("id") != first.get("id")]
+    if any(names_overlap(guess, c) and not brand_overlap(guess, c) for c in others):
+        return result                     # общее слово с другим кандидатом («сок», «вода»), но не марка — не спорим
+    other = next((c for c in others if brand_overlap(guess, c)), None)
+    if other is not None:
+        rest = [c for c in (result.get("candidates") or []) if c and c.get("id") != other.get("id")]
+        return {**result, "status": "uncertain", "product": other, "score": other.get("score", result.get("score")),
+                "candidates": [other, *rest]}
+    guess = agreed_kind(guess, jpeg, settings) if jpeg else guess
     return {**result, "status": "not_in_catalog", "guess": guess.as_dict(), "product": None, "candidates": []}
 
 

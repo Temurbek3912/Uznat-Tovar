@@ -21,6 +21,7 @@ import json
 import logging
 import re
 import threading
+import time
 import unicodedata
 import urllib.error
 import urllib.request
@@ -132,8 +133,13 @@ _TRANSLIT = str.maketrans({
     "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "x", "ц": "s",
     "ч": "ch", "ш": "sh", "щ": "sh", "ъ": "", "ы": "i", "ь": "", "э": "e", "ю": "yu", "я": "ya", "ў": "o", "қ": "q", "ғ": "g",
     "ҳ": "h", "c": "k", "ʻ": "", "'": "",
+    # украинские/казахские буквы и греческий (упаковки из Греции, Кипра): «Дошірак» = Doshirak, «ΚΟΛΙΟΣ» = Kolios
+    "і": "i", "ї": "i", "є": "e", "ґ": "g", "ә": "a", "ө": "o", "ү": "u", "ұ": "u", "ң": "n",
+    "α": "a", "β": "b", "γ": "g", "δ": "d", "ε": "e", "ζ": "z", "η": "i", "θ": "th", "ι": "i", "κ": "k", "λ": "l", "μ": "m",
+    "ν": "n", "ξ": "x", "ο": "o", "π": "p", "ρ": "r", "σ": "s", "ς": "s", "τ": "t", "υ": "y", "φ": "f", "χ": "h", "ψ": "ps",
+    "ω": "o", "ά": "a", "έ": "e", "ή": "i", "ί": "i", "ό": "o", "ύ": "y", "ώ": "o",
 })
-_STOP = {"the", "and", "with", "for", "original", "classic", "ml", "gr", "kg", "pcs"}
+_STOP = {"the", "and", "with", "for", "original", "classic", "ml", "gr", "kg", "pcs", "ukazan"}   # «Не указан» — марка не записана
 
 
 def _tokens(text: str) -> set[str]:
@@ -146,9 +152,39 @@ def _tokens(text: str) -> set[str]:
 def names_overlap(guess: Guess, candidate: dict) -> bool:
     """Есть ли у названия от модели/открытой базы общее слово с товаром из базы (латиница и кириллица сравниваются в одной записи:
     «Кока-Кола» и «Coca-Cola» совпадают). Нужна, чтобы не спорить с поиском по виду, когда речь об одном и том же товаре."""
-    mine = _tokens(f"{guess.name} {guess.brand}")
-    theirs = _tokens(f"{candidate.get('name', '')} {candidate.get('brand', '')}")
-    return bool(mine & theirs)
+    return _close_sets(_tokens(f"{guess.name} {guess.brand}"), _tokens(f"{candidate.get('name', '')} {candidate.get('brand', '')}"))
+
+
+def brand_overlap(guess: Guess, candidate: dict) -> bool:
+    """Марка, прочитанная моделью, есть в названии или марке товара из базы (общие слова вроде «сок», «вода» не в счёт)."""
+    return _close_sets(_tokens(guess.brand), _tokens(f"{candidate.get('name', '')} {candidate.get('brand', '')}"))
+
+
+def _close_sets(mine: set[str], theirs: set[str]) -> bool:
+    return any(_close(a, b) for a in mine for b in theirs)
+
+
+def _close(a: str, b: str) -> bool:
+    """Одно слово с опечаткой модели: «vkusovil» и «vkusvill», «rjannie» и «rjanie». Короткие слова — только точно."""
+    if a == b:
+        return True
+    short = min(len(a), len(b))
+    if short < 5:
+        return False
+    allowed = 1 if short < 8 else 2
+    return abs(len(a) - len(b)) <= allowed and _distance(a, b, allowed) <= allowed
+
+
+def _distance(a: str, b: str, limit: int) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        if min(cur) > limit:
+            return limit + 1
+        prev = cur
+    return prev[-1]
 
 
 def lookup_barcode(code: str, lang: str = "ru", http_get: HttpGet | None = None) -> Guess | None:
@@ -369,6 +405,41 @@ def name_product(jpeg: bytes | None, codes: list[str], lang: str, settings,
         guess = accept_answer(answer, str(getattr(settings, "naming_min_confidence", "high") or "high"), with_kind=True)
         return _agreed_kind(guess, jpeg, settings, classify)
     return kind_by_small_model(jpeg, settings, classify)
+
+
+LABEL_CHECK_TIMEOUT = 6.0       # проверка надписи у «найдено по виду» не должна задерживать ответ: модель не успела — ответ как был
+LABEL_CHECK_PAUSE = 60.0        # модель не ответила — следующую минуту не спрашиваем (не ждать по 6 с на каждом кадре)
+_label_pause_until = 0.0
+
+
+def read_label(jpeg: bytes | None, lang: str, settings, http_post: HttpPost | None = None) -> Guess | None:
+    """Быстрая проверка надписи для ответа «найдено по виду»: только большая модель по кадру, без открытых баз и малой модели,
+    с коротким ожиданием. Возвращает только УВЕРЕННОЕ название (high) или None (модели нет, выключена, не уверена, не успела)."""
+    global _label_pause_until
+    if not jpeg or not getattr(settings, "naming_enabled", False):
+        return None
+    url = getattr(settings, "naming_vision_url", "") or ""
+    if not url or time.monotonic() < _label_pause_until:
+        return None
+    timeout = min(LABEL_CHECK_TIMEOUT, float(getattr(settings, "naming_vision_timeout_seconds", LABEL_CHECK_TIMEOUT)))
+    post = http_post or _http_post_json
+
+    def timed_post(u: str, payload: dict, t: float) -> dict:
+        global _label_pause_until
+        try:
+            return post(u, payload, t)
+        except Exception:
+            _label_pause_until = time.monotonic() + LABEL_CHECK_PAUSE
+            raise
+
+    answer = ask_vision(jpeg, lang, url, getattr(settings, "naming_vision_model", "") or "", timeout, http_post=timed_post)
+    guess = accept_answer(answer, "high")
+    return guess if guess is not None and guess.sure else None
+
+
+def agreed_kind(guess: Guess | None, jpeg: bytes, settings, classify: KindFn | None = None) -> Guess | None:
+    """Вид товара в догадке остаётся, только если с ним согласна малая модель (см. _agreed_kind)."""
+    return _agreed_kind(guess, jpeg, settings, classify)
 
 
 def normalize_lang(value: str | None) -> str:

@@ -14,3 +14,8 @@ constraints*.txt  text eol=lf
 *.png             binary
 *.ico             binary
 *.ttf             binary
+# Архив для магазина (scripts/make_package.py, git archive): без тестов и старых документов
+/tests/**             export-ignore
+/docs/archive/**      export-ignore
+/docs/archive_audit/** export-ignore
+/docs/mockups/**      export-ignore

@@ -476,10 +476,21 @@ def _show_addresses(d: Deps, port: int, no_browser: bool, notice: str | None = N
 # ------------------------------------------------------------------ основной сценарий
 
 
+def local_hf_home(root: Path, environ: dict) -> dict[str, str]:
+    """Модели в папке программы (models/hf — их скачивает установщик магазина, scripts/install.py): использовать их, если
+    HF_HOME не задан явно. Нет папки — как раньше (общая папка моделей пользователя)."""
+    local = root / "models" / "hf"
+    return {"HF_HOME": str(local)} if local.is_dir() and not environ.get("HF_HOME") else {}
+
+
 def run(opts: Options, deps: Deps | None = None, services: list[Service] | None = None) -> int:
     d = deps or Deps()
     out = d.out
     out("Запуск демонстрации «Узнать товар»...")
+    hf_env = local_hf_home(d.root, d.environ)
+    if hf_env:
+        d.environ.update(hf_env)
+        d.apply_env(hf_env)
 
     if opts.check:
         out("Предстартовая проверка...")

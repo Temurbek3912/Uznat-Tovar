@@ -27,3 +27,6 @@ models/detector/*.pt
 *.part
 .claude/settings.local.json
 models/index/
+
+# Архивы программы для магазинов (scripts/make_package.py)
+dist/

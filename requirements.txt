@@ -31,6 +31,7 @@ ultralytics>=8.3.0      # детекция; >=8.3.0 нужен для весов
 torch>=2.3
 torchvision>=0.18
 transformers>=4.42      # DINOv2 / CLIP эмбеддинги
+huggingface-hub>=0.23   # скачать модели заранее (scripts/fetch_models.py, установщик магазина); ставится и вместе с transformers
 faiss-cpu>=1.8          # векторный индекс (замена: pgvector)
 pytesseract>=0.3.10     # OCR ценников (F11) — требует системный пакет tesseract-ocr,
                         # это НЕ ставится через pip: apt-get install tesseract-ocr

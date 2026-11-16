@@ -90,7 +90,7 @@
       err.textContent = text; setHidden(err, !text);
       err.className = loginMsg && loginMsg.ok ? "notice" : "notice notice--danger";      // «пароль установлен» — не ошибка
       err.setAttribute("role", loginMsg && loginMsg.ok ? "status" : "alert");
-      renderSecurity(); renderCustomerQr();
+      renderSecurity(); renderCustomerQr(); renderBackup();
     }
     function revealRail() { /* меню рисует shell.js по правам */ }
     function refreshAccount() {
@@ -103,8 +103,9 @@
           loadSecurity().catch(report);
           loadPin().catch(report);
           loadCustomerQr().catch(report);
+          if (Array.isArray(me.permissions) && me.permissions.indexOf("store:manage") >= 0) loadBackup().catch(report); else bkp.data = null;
         } else {
-          account.name = null; revealRail([]); resetSecurity(); cqr.data = null;
+          account.name = null; revealRail([]); resetSecurity(); cqr.data = null; bkp.data = null;
           loginMsg = r.status === "expired" ? { key: "login.expired" } : r.status === "error" ? { key: r.key } : null;
         }
         renderAccount();
@@ -151,6 +152,49 @@
           return null;
         });
       }, function () { cqr.msg = { key: "error.network" }; renderCustomerQr(); return null; });
+    }
+    // Резервная копия магазина (облегчённый режим, app/services/lite_backup.py, 2026-11-16): когда была, куда, «Сделать копию сейчас».
+    // Только администратору (право store:manage); в полном режиме (Docker) сервер отвечает available: false — блока нет.
+    var bkp = { data: null, msg: null, timer: null };
+    function renderBackup() {
+      var d = bkp.data, shown = account.name !== null && !!d && d.available === true;
+      setHidden($("backupGroup"), !shown);
+      if (!shown) return;
+      $("bkpLast").textContent = d.running ? t("bkp.running") : d.last_ok ? t("bkp.last_ok", { when: when(String(d.last_ok)) }) : t("bkp.never");
+      var list = $("bkpPlaces"); clear(list);
+      (Array.isArray(d.destinations) ? d.destinations : []).forEach(function (p) {
+        var li = doc.createElement("li");
+        li.textContent = t(p.kind === "cloud" ? "bkp.place_cloud" : "bkp.place_local", { path: String(p.path || ""), n: Number(p.copies) || 0 });
+        list.appendChild(li);
+      });
+      setHidden($("bkpNoCloud"), !!d.cloud);
+      var err = d.last_error && !d.running ? t("bkp.failed", { error: String(d.last_error) }) : "";
+      $("bkpError").textContent = err; setHidden($("bkpError"), !err);
+      var msg = bkp.msg ? t(bkp.msg.key, bkp.msg.params) : "";
+      $("bkpMsg").textContent = msg; setHidden($("bkpMsg"), !msg);
+      $("bkpNowBtn").disabled = !!d.running;
+    }
+    function loadBackup() {
+      if (bkp.timer && win.clearTimeout) win.clearTimeout(bkp.timer);
+      bkp.timer = null;
+      return api("/api/v1/admin/backup").then(function (r) {
+        var was = !!(bkp.data && bkp.data.running);
+        bkp.data = r.res.ok && r.data && typeof r.data === "object" ? r.data : null;
+        if (was && bkp.data && !bkp.data.running) bkp.msg = bkp.data.last_error ? null : { key: "bkp.done" };
+        renderBackup();
+        // пока копия идёт — спрашивать раз в 3 секунды, чтобы показать итог
+        if (bkp.data && bkp.data.running && win.setTimeout) bkp.timer = win.setTimeout(function () { loadBackup().catch(report); }, 3000);
+      });
+    }
+    function backupNow() {
+      bkp.msg = null; $("bkpNowBtn").disabled = true;
+      return api("/api/v1/admin/backup", "POST").then(function (r) {
+        if (r.res.status === 409 && r.data && r.data.code === "backup_running") bkp.msg = { key: "bkp.running" };
+        else if (!r.res.ok) bkp.msg = problemOf(r);
+        else { bkp.msg = { key: "bkp.started" }; if (bkp.data) bkp.data.running = true; }
+        renderBackup();
+        return r.res.ok ? loadBackup() : null;
+      }, function () { bkp.msg = { key: "error.network" }; renderBackup(); return null; });
     }
     // ПИН-код для входа на этом компьютере (сервер принимает его только отсюда — app/core/local_pin.py).
     var pinState = { shown: false, has: false, msg: null, pwOpen: false, pwMsg: null };
@@ -448,7 +492,7 @@
     $("autoToggle").checked = cfg.auto;
     relabel(); renderThemeSwitch();
     renderAccount();
-    I18N.onChange(function () { relabel(); renderThemeSwitch(); renderAccount(); renderSecurity(); renderPin(); renderCustomerQr(); $("rail").setAttribute("aria-label", t("nav.menu")); });
+    I18N.onChange(function () { relabel(); renderThemeSwitch(); renderAccount(); renderSecurity(); renderPin(); renderCustomerQr(); renderBackup(); $("rail").setAttribute("aria-label", t("nav.menu")); });
 
     $("themeBtn").addEventListener("click", function () { Theme.next(); relabel(); renderThemeSwitch(); });
     $("autoToggle").addEventListener("change", storeSettings);
@@ -459,6 +503,7 @@
     $("pinPwForm").addEventListener("submit", guard(savePinPassword));
     $("logoutBtn").addEventListener("click", guard(doLogout));
     $("cqrPrintBtn").addEventListener("click", guard(downloadCustomerQr));
+    $("bkpNowBtn").addEventListener("click", guard(backupNow));
     $("mfaEnableBtn").addEventListener("click", function () { securityStep("setup"); var p = $("mfaSetupPass"); if (p && p.focus) p.focus(); });
     $("mfaDisableBtn").addEventListener("click", function () { securityStep("disable"); var p = $("mfaDisablePass"); if (p && p.focus) p.focus(); });
     $("mfaSetupForm").addEventListener("submit", guard(startSetup));

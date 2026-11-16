@@ -750,7 +750,22 @@
     "cqr.none": "Manzil aniqlanmadi: kompyuter tarmoqqa ulanmagan.",
     "cqr.print": "Chop etish uchun yuklab olish",
     "cqr.downloaded": "{file} fayli «Yuklanmalar» papkasiga saqlandi. Uni oddiy varaqda chop eting.",
-    "server.customer_url_unknown": "Xaridor sahifasining manzili aniqlanmadi: kompyuter tarmoqqa ulanmagan."
+    "server.customer_url_unknown": "Xaridor sahifasining manzili aniqlanmadi: kompyuter tarmoqqa ulanmagan.",
+    "bkp.title": "Zaxira nusxa",
+    "bkp.hint": "Dastur har kuni oʻzi tovarlar, rasmlar va xodimlarning nusxasini saqlaydi. Kompyuter buzilsa, hammasini qaytarish mumkin.",
+    "bkp.last_ok": "Oxirgi nusxa: {when}.",
+    "bkp.never": "Hali nusxa olinmagan. Birinchisi dastur ishga tushgandan 10 daqiqa keyin olinadi — yoki «Hozir nusxa olish» tugmasini bosing.",
+    "bkp.running": "Nusxa olinmoqda… Dasturdan foydalanaverishingiz mumkin.",
+    "bkp.place_local": "Shu kompyuterda: {path} (nusxalar: {n})",
+    "bkp.place_cloud": "Bulutda: {path} (nusxalar: {n})",
+    "bkp.no_cloud": "Bulut ulanmagan: hozir nusxalar faqat shu kompyuterda, u buzilsa, nusxalar ham yoʻqoladi. Kompyuter uchun bepul «Google Drive» dasturini oʻrnating va doʻkonning Google akkauntiga kiring — nusxalar oʻzi bulutga keta boshlaydi.",
+    "bkp.failed": "Oxirgi nusxa olinmadi: {error}",
+    "bkp.done": "Nusxa tayyor.",
+    "bkp.started": "Nusxa olish boshlandi. Bu bir necha daqiqa vaqt olishi mumkin.",
+    "bkp.now": "Hozir nusxa olish",
+    "bkp.restore_hint": "Nusxadan qaytarish: dasturni yoping va dastur papkasidagi «Восстановить из копии.bat» faylini ishga tushiring.",
+    "server.backup_running": "Nusxa allaqachon olinmoqda.",
+    "server.backup_unavailable": "Dasturdan nusxa faqat yengil rejimda olinadi."
   };
   if (root.I18N) root.I18N.add("uz", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

@@ -79,6 +79,10 @@ class Settings(BaseSettings):
     ml_threads: int = 0
     # Свой файл индекса каталога (облегчённый режим хранит данные отдельно: data/lite). Пусто — из config.yaml.
     catalog_index_path: str = ""
+    # Резервная копия облегчённого режима (app/services/lite_backup.py): своя папка на компьютере (пусто — backups/magazin
+    # программы) и папка облака (пусто — найти «Google Диск для компьютера»; off — без облака).
+    backup_local_dir: str = ""
+    backup_cloud_dir: str = ""
 
     # Локальное хранилище снимков полок (см. app/api/routes_upload.py).
     # Относительный путь резолвится через resolve_project_path() относительно

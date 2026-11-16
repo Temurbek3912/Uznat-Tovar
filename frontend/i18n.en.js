@@ -750,7 +750,22 @@
     "cqr.none": "The address is unknown: this computer is not connected to a network.",
     "cqr.print": "Download for printing",
     "cqr.downloaded": "{file} has been saved to Downloads. Print it on a regular sheet of paper.",
-    "server.customer_url_unknown": "The customer page address is unknown: this computer is not connected to a network."
+    "server.customer_url_unknown": "The customer page address is unknown: this computer is not connected to a network.",
+    "bkp.title": "Backup",
+    "bkp.hint": "Once a day the program saves a copy of the products, photos and staff by itself. If the computer breaks, everything can be brought back.",
+    "bkp.last_ok": "Last copy: {when}.",
+    "bkp.never": "No copies yet. The first one is made 10 minutes after the program starts — or press “Back up now”.",
+    "bkp.running": "Making a copy… You can keep using the program.",
+    "bkp.place_local": "On this computer: {path} (copies: {n})",
+    "bkp.place_cloud": "In the cloud: {path} (copies: {n})",
+    "bkp.no_cloud": "The cloud is not connected: the copies are only on this computer, and if it breaks they are lost with it. Install the free “Google Drive for desktop” app and sign in to the shop's Google account — the copies will start going to the cloud by themselves.",
+    "bkp.failed": "The last copy failed: {error}",
+    "bkp.done": "The copy is ready.",
+    "bkp.started": "The copy has started. It may take a few minutes.",
+    "bkp.now": "Back up now",
+    "bkp.restore_hint": "To bring the data back from a copy: close the program and run “Восстановить из копии.bat” in the program folder.",
+    "server.backup_running": "A copy is already being made.",
+    "server.backup_unavailable": "A copy from the program can only be made in lite mode."
   };
   if (root.I18N) root.I18N.add("en", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

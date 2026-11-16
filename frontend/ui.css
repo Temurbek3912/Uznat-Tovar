@@ -170,6 +170,7 @@ a.btn { text-decoration: none; text-align: center; }                      /* ÐºÐ
 .mfa-qr.cqr-img { width: 240px; height: 240px; }
 .cqr-url { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--fs-s); word-break: break-all; user-select: all; }
 .cqr-url[hidden] { display: none; }
+.bkp-places { margin: 0; padding-left: 1.2em; font-size: var(--fs-s); word-break: break-word; }
 .secret { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--fs-l); letter-spacing: 0.06em; word-break: break-all; user-select: all; }
 .recovery { margin: 0; padding-left: 1.6em; columns: 2; column-gap: var(--sp-5); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--fs-l); user-select: all; }
 .recovery li { padding: 2px 0; break-inside: avoid; }

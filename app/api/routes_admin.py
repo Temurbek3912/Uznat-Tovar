@@ -6,6 +6,8 @@
   GET /api/v1/admin/products?q=&limit=&offset=   каталог товаров для таблицы «Товары»
   GET /api/v1/admin/shop-card                    какие поля карточки видит покупатель в этом магазине
   PUT /api/v1/admin/shop-card                    выбрать поля ({"fields": [...]}); срок годности включить нельзя (журнал действий)
+  GET /api/v1/admin/backup                       резервная копия магазина: когда была, куда (облегчённый режим)
+  POST /api/v1/admin/backup                      сделать копию сейчас (в фоне)
 """
 from __future__ import annotations
 
@@ -146,3 +148,36 @@ def put_shop_card(body: CardFieldsIn, db: Session = Depends(get_db), user: Curre
     db.commit()
     db.refresh(store)
     return _card_payload(store)
+
+
+# ----------------------------------------------------------------------------------------------------------- резервная копия
+
+def _backups():
+    from app.services import lite_backup
+    try:
+        return lite_backup.service_from_settings(get_settings())
+    except lite_backup.BackupError:
+        return None
+
+
+@router.get("/backup")
+def backup_status(_user: CurrentUser = Depends(_admin)) -> dict:
+    """Резервная копия магазина (облегчённый режим, app/services/lite_backup.py): когда была, куда, идёт ли сейчас.
+    В полном режиме (Docker) — {"available": false}: там копию делает scripts/full_backup.py."""
+    service = _backups()
+    if service is None:
+        return {"available": False}
+    return service.status()
+
+
+@router.post("/backup", status_code=202)
+def backup_now(db: Session = Depends(get_db), user: CurrentUser = Depends(_admin)) -> dict:
+    """«Сделать копию сейчас»: копия идёт в фоне; ход — GET /backup (running)."""
+    service = _backups()
+    if service is None:
+        raise ApiError(409, "backup_unavailable", "Копию из программы можно сделать только в облегчённом режиме.")
+    if not service.start_now():
+        raise ApiError(409, "backup_running", "Копия уже делается.")
+    audit.record(db, "backup.requested", actor=audit.AuditActor(user.id, "api"), target_type="backup")
+    db.commit()
+    return {"started": True}

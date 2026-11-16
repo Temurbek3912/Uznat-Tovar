@@ -155,7 +155,7 @@ function boot(opts) {
   });
 
   await test("вход: удачный вход — запрос в форме, токен в sessionStorage, пароль очищен и нигде не хранится, появились имя и пункты меню", async () => {
-    const s = boot({ fetch: route({ "/auth/login": () => json(200, { access_token: "tok-9", token_type: "bearer" }), "/auth/me": () => json(200, ADMIN), "/catalog/customer-qr": () => json(404, {}) }) }); await s.ready();
+    const s = boot({ fetch: route({ "/auth/login": () => json(200, { access_token: "tok-9", token_type: "bearer" }), "/auth/me": () => json(200, ADMIN), "/catalog/customer-qr": () => json(404, {}), "/admin/backup": () => json(404, {}) }) }); await s.ready();
     await s.submit("admin1", "se&cret 1");
     assert.strictEqual(s.session.getItem("shelf_audit_token"), "tok-9");
     const login = s.calls[0]; assert.strictEqual(login.url, "http://app/api/v1/auth/login"); assert.strictEqual(login.opts.method, "POST");
@@ -176,7 +176,7 @@ function boot(opts) {
 
   await test("выход: токен стирается сразу (до ответа сервера), серверу уходит прежний токен, затем — на страницу входа", async () => {
     let release; const gate = new Promise((r) => { release = r; });
-    const s = boot({ token: "tok-11", fetch: route({ "/auth/me": () => json(200, ADMIN), "/catalog/customer-qr": () => json(404, {}), "/auth/logout": async () => { await gate; return json(200, {}); } }) }); await s.ready();
+    const s = boot({ token: "tok-11", fetch: route({ "/auth/me": () => json(200, ADMIN), "/catalog/customer-qr": () => json(404, {}), "/admin/backup": () => json(404, {}), "/auth/logout": async () => { await gate; return json(200, {}); } }) }); await s.ready();
     assert.ok(s.shown("accountInfo"));
     s.$("logoutBtn").click(); await flush();
     assert.strictEqual(s.session.getItem("shelf_audit_token"), null, "стёрт сразу, не дожидаясь сервера");
@@ -509,6 +509,42 @@ function boot(opts) {
     assert.ok(!s.shown("customerQrGroup")); assert.deepStrictEqual(s.errors, []);
     const anon = boot(); await anon.ready();
     assert.ok(!anon.shown("customerQrGroup"));
+  });
+
+  await test("резервная копия (2026-11-16): блок только у администратора в облегчённом режиме; места, облако, ошибка, «Сделать копию сейчас»", async () => {
+    let status = { available: true, running: false, last_ok: "2026-11-16T03:00:00+05:00", last_error: "", cloud: false,
+                   destinations: [{ kind: "local", path: "D:\Узнать\backups\magazin\Узнать товар — копии", copies: 3 }] };
+    const log = [];
+    const s = boot({ token: "tok", fetch: async (url, o) => {
+      const p = url.replace(/^.*\/api\/v1/, ""), m = (o && o.method) || "GET";
+      if (p === "/admin/backup") log.push(m);
+      if (p === "/auth/me") return json(200, { username: "admin1", role: "admin", permissions: ["catalog:read", "store:manage"] });
+      if (p === "/admin/backup" && m === "GET") return json(200, status);
+      if (p === "/admin/backup" && m === "POST") { status = Object.assign({}, status, { running: true }); return json(202, { started: true }); }
+      return json(404, {});
+    } });
+    await s.ready(); await flush();
+    assert.ok(s.shown("backupGroup") && s.shown("bkpNoCloud") && !s.shown("bkpError"));
+    assert.ok(s.$("bkpLast").textContent.startsWith("Последняя копия:"));
+    assert.strictEqual(s.$("bkpPlaces").children.length, 1);
+    assert.ok(s.$("bkpPlaces").children[0].textContent.includes("(копий: 3)"));
+    await s.click("bkpNowBtn");
+    assert.deepStrictEqual(log, ["GET", "POST", "GET"]);
+    assert.strictEqual(s.$("bkpLast").textContent, DICTS.ru["bkp.running"]); assert.ok(s.$("bkpNowBtn").disabled);
+    status = Object.assign({}, status, { running: false, cloud: true, last_error: "Мало места",
+                                          destinations: status.destinations.concat([{ kind: "cloud", path: "G:\Мой диск\Узнать товар — копии", copies: 1 }]) });
+    await s.app.reload(); await flush();
+    assert.ok(!s.shown("bkpNoCloud") && s.shown("bkpError") && !s.$("bkpNowBtn").disabled);
+    assert.strictEqual(s.$("bkpError").textContent, "Последняя копия не получилась: Мало места");
+    assert.ok(s.$("bkpPlaces").children[1].textContent.startsWith("В облаке:"));
+    status = { available: false };
+    await s.app.reload(); await flush();
+    assert.ok(!s.shown("backupGroup"), "полный режим — блока нет");
+    assert.deepStrictEqual(s.errors, []);
+    const calls = [];
+    const kassir = boot({ token: "tok", fetch: async (url) => { calls.push(url); return url.endsWith("/auth/me") ? json(200, { username: "k", role: "merchandiser", permissions: ["catalog:read"] }) : json(404, {}); } });
+    await kassir.ready(); await flush();
+    assert.ok(!kassir.shown("backupGroup") && !calls.some((u) => u.includes("/admin/backup")), "у продавца блока нет и запроса нет");
   });
 
   console.log(`\n${passed} passed`);

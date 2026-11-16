@@ -69,6 +69,17 @@
           <p class="notice" id="cqrMsg" role="status" hidden></p>
           <div><button class="btn btn--secondary" id="cqrPrintBtn" type="button" data-i18n="cqr.print" hidden>Скачать для печати</button></div>
         </div>
+        <div class="settings__group" id="backupGroup" hidden>
+          <h2 class="ticket__title" data-i18n="bkp.title">Резервная копия</h2>
+          <p class="hint" data-i18n="bkp.hint">Раз в сутки программа сама сохраняет копию товаров, фото и сотрудников. Если компьютер сломается, данные можно вернуть.</p>
+          <p id="bkpLast" role="status"></p>
+          <ul class="bkp-places" id="bkpPlaces"></ul>
+          <p class="notice" id="bkpNoCloud" data-i18n="bkp.no_cloud" hidden>Облако не подключено: копии сейчас только на этом компьютере.</p>
+          <p class="notice notice--danger" id="bkpError" role="alert" hidden></p>
+          <p class="notice" id="bkpMsg" role="status" hidden></p>
+          <div><button class="btn btn--secondary" id="bkpNowBtn" type="button" data-i18n="bkp.now">Сделать копию сейчас</button></div>
+          <p class="hint" data-i18n="bkp.restore_hint">Вернуть данные из копии: закройте программу и запустите «Восстановить из копии.bat» в папке программы.</p>
+        </div>
         <div class="settings__group" id="pinGroup" hidden>
           <h2 class="ticket__title" data-i18n="pin.title">ПИН-код для входа на этом компьютере</h2>
           <p class="hint" id="pinStatus" role="status"></p>

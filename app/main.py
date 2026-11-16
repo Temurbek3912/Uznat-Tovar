@@ -48,12 +48,21 @@ async def lifespan(_app):
     media_root = resolve_project_path(settings.media_root)
     sweeper = PeriodicSweeper(lambda: sweep_frames(media_root))
     sweeper.start()
+    backups = None
     if settings.lite_mode:
         # облегчённый режим (документ 11, §10): отдельного воркера нет — модели грузятся здесь, в фоне (API отвечает сразу)
         import threading
 
         from app.worker import start_in_process
         threading.Thread(target=start_in_process, name="lite-ml-init", daemon=True).start()
+        # резервная копия магазина раз в сутки (app/services/lite_backup.py): в папку программы и в облако, если найдено
+        from app.services import lite_backup
+        try:
+            backups = lite_backup.service_from_settings(settings)
+        except lite_backup.BackupError as exc:
+            logger.warning("Резервная копия выключена: %s", exc)
+        if backups is not None:
+            backups.start()
     elif settings.naming_enabled and settings.naming_kind_model:
         # полный режим: малая модель «вид товара» (документ 07, §10.7) — в фоне, чтобы первый снимок покупателя её не ждал
         import threading
@@ -64,6 +73,8 @@ async def lifespan(_app):
         yield
     finally:
         sweeper.stop()
+        if backups is not None:
+            backups.stop(timeout=1.0)
 
 
 app = FastAPI(

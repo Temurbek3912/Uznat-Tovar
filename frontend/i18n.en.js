@@ -814,7 +814,7 @@
     "assistant.your_question": "Your question",
     "assistant.placeholder": "For example: how many products have no photo?",
     "assistant.send": "Send",
-    "assistant.new_chat": "New conversation",
+    "assistant.new_chat": "Clear history",
     "assistant.thinking": "The assistant is thinking… usually 5–30 seconds.",
     "assistant.you": "You",
     "assistant.bot": "Assistant",
@@ -833,7 +833,12 @@
     "server.assistant_model_unreachable": "The AI model is not responding. It may still be loading — try again in a minute.",
     "server.assistant_bad_answer": "The assistant could not answer this question. Try asking differently.",
     "server.assistant_busy": "The assistant is busy: the model is recognising products for customers. Everything else works — ask again in a few seconds.",
-    "server.assistant_empty": "Type a question."
+    "server.assistant_empty": "Type a question.",
+    "assistant.clear_confirm": "Clear the conversation history? The assistant will forget everything you talked about and start over.",
+    "assistant.memory": "The assistant remembers the conversation: {percent}% full",
+    "assistant.memory_full": "Memory is {percent}% full — the assistant will forget older messages. Start a new conversation with “Clear history”.",
+    "assistant.memory_label": "Assistant memory",
+    "assistant.forgotten": "The assistant no longer remembers this"
   };
   if (root.I18N) root.I18N.add("en", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

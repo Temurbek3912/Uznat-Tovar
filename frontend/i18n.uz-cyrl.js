@@ -815,7 +815,7 @@
     "assistant.your_question": "Саволингиз",
     "assistant.placeholder": "Масалан: нечта маҳсулотда расм йўқ?",
     "assistant.send": "Юбориш",
-    "assistant.new_chat": "Янги суҳбат",
+    "assistant.new_chat": "Тарихни тозалаш",
     "assistant.thinking": "Ёрдамчи ўйлаяпти… одатда 5–30 сония.",
     "assistant.you": "Сиз",
     "assistant.bot": "Ёрдамчи",
@@ -834,7 +834,12 @@
     "server.assistant_model_unreachable": "Сунъий интеллект модели жавоб бермаяпти. Эҳтимол, у ҳали юкланмоқда — бир дақиқадан кейин уриниб кўринг.",
     "server.assistant_bad_answer": "Ёрдамчи бу саволга жавоб бера олмади. Бошқача сўраб кўринг.",
     "server.assistant_busy": "Ёрдамчи банд: модель ҳозир харидорлар учун маҳсулотларни аниқлаяпти. Асосий функсиялар ишлайди — бир неча сониядан кейин яна сўранг.",
-    "server.assistant_empty": "Саволингизни ёзинг."
+    "server.assistant_empty": "Саволингизни ёзинг.",
+    "assistant.clear_confirm": "Суҳбат тарихини тозалайсизми? Ёрдамчи гаплашганларингизни унутади ва қайтадан бошлайди.",
+    "assistant.memory": "Ёрдамчи суҳбатни эслаб туради: {percent} % тўлган",
+    "assistant.memory_full": "Хотира {percent} % тўлган — ёрдамчи эски хабарларни унутади. «Тарихни тозалаш» тугмаси билан янги суҳбат бошланг.",
+    "assistant.memory_label": "Ёрдамчи хотираси",
+    "assistant.forgotten": "Ёрдамчи буни энди эсламайди"
   };
   if (typeof module === "object" && module.exports) module.exports = dict;
   if (root.I18N) root.I18N.add("uz-Cyrl", dict);

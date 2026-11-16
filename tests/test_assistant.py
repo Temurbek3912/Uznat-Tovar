@@ -270,7 +270,10 @@ def test_routes_are_for_the_owner_only(client, monkeypatch):
     assert client.get("/api/v1/assistant/status", headers=client.analyst).status_code == 403
     body = {"messages": [{"role": "user", "content": "привет"}], "lang": "ru"}
     assert client.post("/api/v1/assistant/chat", json=body, headers=client.analyst).status_code == 403
-    assert client.get("/api/v1/assistant/status", headers=client.owner).json() == {"available": True, "mode": "read", "reason": None}
+    memory = {"max_messages": A.MAX_HISTORY, "max_chars": A.MAX_HISTORY_CHARS,
+              "max_message_chars": A.MAX_MESSAGE_CHARS}
+    assert client.get("/api/v1/assistant/status", headers=client.owner).json() == {"available": True, "mode": "read", "reason": None,
+                                                                                  "memory": memory}
 
     model = FakeModel({"action": "answer", "tool": "", "args": {}, "text": "Здравствуйте!"})
     real_chat = A.chat

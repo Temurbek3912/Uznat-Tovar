@@ -814,7 +814,7 @@
     "assistant.your_question": "Ваш вопрос",
     "assistant.placeholder": "Например: сколько товаров без фото?",
     "assistant.send": "Отправить",
-    "assistant.new_chat": "Новый разговор",
+    "assistant.new_chat": "Очистить историю",
     "assistant.thinking": "Помощник думает… обычно 5–30 секунд.",
     "assistant.you": "Вы",
     "assistant.bot": "Помощник",
@@ -833,7 +833,12 @@
     "server.assistant_model_unreachable": "Модель ИИ не отвечает. Возможно, она ещё загружается — попробуйте через минуту.",
     "server.assistant_bad_answer": "Помощник не смог ответить на этот вопрос. Попробуйте спросить по-другому.",
     "server.assistant_busy": "Помощник занят: модель сейчас узнаёт товары для покупателей. Основные функции работают — спросите ещё раз через несколько секунд.",
-    "server.assistant_empty": "Напишите вопрос."
+    "server.assistant_empty": "Напишите вопрос.",
+    "assistant.clear_confirm": "Очистить историю разговора? Помощник забудет всё, о чём вы говорили, и начнёт заново.",
+    "assistant.memory": "Помощник помнит разговор: заполнено {percent} %",
+    "assistant.memory_full": "Память заполнена на {percent} % — старые сообщения помощник забудет. Начните новый разговор кнопкой «Очистить историю».",
+    "assistant.memory_label": "Память помощника",
+    "assistant.forgotten": "Помощник это уже не помнит"
   };
   if (root.I18N) root.I18N.add("ru", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

@@ -82,6 +82,11 @@ def mask_secrets(text: str) -> str:
     return text
 
 
+def memory_limits() -> dict:
+    """Сколько разговора помощник помнит — по этим же числам страница рисует индикатор памяти (clean_history ниже)."""
+    return {"max_messages": MAX_HISTORY, "max_chars": MAX_HISTORY_CHARS, "max_message_chars": MAX_MESSAGE_CHARS}
+
+
 def clean_history(messages) -> list[dict]:
     """Реплики со страницы -> только роли user/assistant, только текст, с ограничением длины; последней должна быть реплика
     пользователя. Ошибка — ValueError с понятным текстом."""

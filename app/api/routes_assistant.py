@@ -42,7 +42,7 @@ class ChatIn(BaseModel):
 @router.get("/status")
 def assistant_status(_user: CurrentUser = Depends(require_permission(Permission.ASSISTANT_USE))) -> dict:
     available = bool(assistant.model_address(get_settings()))
-    return {"available": available, "mode": "read", "reason": None if available else "disabled"}
+    return {"available": available, "mode": "read", "reason": None if available else "disabled", "memory": assistant.memory_limits()}
 
 
 @router.post("/chat")

@@ -12,6 +12,7 @@
   var STORE_KEY = "assistant_chat";
   var MAX_KEPT = 40;           // реплик в памяти вкладки
   var MAX_SENT = 8;            // реплик уходит на сервер (сервер всё равно возьмёт не больше)
+  var QUESTION_RESERVE = 100;  // символов памяти оставить новому вопросу (обычный вопрос короче)
   var EXAMPLES = ["assistant.example_photo", "assistant.example_dupes", "assistant.example_price"];
 
   /** Реплики из памяти вкладки -> только {role: user|assistant, content: строка}, не больше MAX_KEPT. */
@@ -25,12 +26,35 @@
   }
   function toSend(log) { return log.slice(-MAX_SENT).map(function (m) { return { role: m.role, content: m.content }; }); }
 
+  /** Сколько разговора помощник запомнит к следующему вопросу — по тем же правилам, что сервер (app/services/assistant.py,
+      clean_history): последние max_messages реплик вместе с новым вопросом, не больше max_chars символов (свежие важнее),
+      разговор в памяти начинается с вопроса. Новому вопросу оставлено место: одна реплика и QUESTION_RESERVE символов.
+      limits — из GET /assistant/status (memory). Возвращает
+      {percent: 0..100, full: заполнено ≥ 80 %, forgotten: сколько первых реплик log помощник уже не помнит}. */
+  function memory(log, limits) {
+    var lim = limits || {}, maxMsg = lim.max_messages | 0, maxChars = lim.max_chars | 0, maxOne = lim.max_message_chars | 0;
+    var room = maxChars - Math.min(QUESTION_RESERVE, Math.floor(maxChars / 2));
+    if (!log.length || maxMsg < 2 || room < 1) return { percent: 0, full: false, forgotten: 0 };
+    var start = Math.max(0, log.length - (maxMsg - 1)), total = 0, i;        // одно место — новому вопросу
+    for (i = log.length - 1; i >= start; i--) {
+      var len = String(log[i].content).trim().length;
+      if (maxOne > 0) len = Math.min(len, maxOne);
+      if (total + len > room) break;
+      total += len;
+    }
+    var first = i + 1;
+    while (first < log.length && log[first].role !== "user") first++;      // сервер выбрасывает ответы без вопроса в начале
+    var kept = log.length - first;
+    var percent = first > 0 ? 100 : Math.min(100, Math.round(100 * Math.max(total / room, kept / (maxMsg - 1))));
+    return { percent: percent, full: percent >= 80, forgotten: first };
+  }
+
   function start(win) {
     var doc = win.document, I18N = win.I18N, Auth = win.Auth, Icons = win.Icons, Theme = win.Theme;
     var $ = function (id) { return doc.getElementById(id); };
     var t = function (key, params) { return I18N.t(key, params); };
     var auth = Auth.create(win);
-    var log = [], busy = false, status = null;      // status: {key, params} | {text} — строка под перепиской
+    var log = [], busy = false, status = null, limits = null;      // status: {key, params} | {text} — строка под перепиской
 
     function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
     function setHidden(el, hidden) { if (hidden) el.setAttribute("hidden", ""); else el.removeAttribute("hidden"); }
@@ -43,9 +67,10 @@
     function render() {
       var host = $("log");
       clear(host);
-      log.forEach(function (m) {
+      var mem = memory(log, limits);
+      log.forEach(function (m, idx) {
         var item = doc.createElement("div");
-        item.className = "chat__msg chat__msg--" + (m.role === "user" ? "user" : "bot");
+        item.className = "chat__msg chat__msg--" + (m.role === "user" ? "user" : "bot") + (idx < mem.forgotten ? " chat__msg--forgotten" : "");
         var who = doc.createElement("div");
         who.className = "chat__who"; who.textContent = t(m.role === "user" ? "assistant.you" : "assistant.bot");
         var body = doc.createElement("div");
@@ -58,6 +83,11 @@
             return I18N.has("assistant.tool." + n) ? t("assistant.tool." + n) : n; }).join(", ") });
           item.appendChild(seen);
         }
+        if (idx < mem.forgotten) {
+          var gone = doc.createElement("div");
+          gone.className = "chat__seen"; gone.textContent = t("assistant.forgotten");
+          item.appendChild(gone);
+        }
         host.appendChild(item);
       });
       var ex = $("examples");
@@ -69,6 +99,13 @@
         b.addEventListener("click", function () { $("question").value = t(key); send(); });
         ex.appendChild(b);
       });
+      var bar = $("memBar");
+      bar.style.width = mem.percent + "%";
+      $("memMeter").setAttribute("aria-valuenow", String(mem.percent));
+      $("memory").className = "chat__memory" + (mem.full ? " chat__memory--full" : "");
+      $("memText").textContent = mem.full ? t("assistant.memory_full", { percent: mem.percent })
+                                          : t("assistant.memory", { percent: mem.percent });
+      setHidden($("memory"), !limits);
       var st = $("status");
       st.textContent = msgText(status); setHidden(st, !status);
       $("sendBtn").disabled = busy; $("question").disabled = busy;
@@ -127,6 +164,7 @@
         if (!res.ok) { note("error.generic"); return; }
         return res.json().then(function (data) {
           if (!data.available) { note("server.assistant_disabled"); return; }
+          limits = data.memory && typeof data.memory === "object" ? data.memory : null;
           setHidden($("chatArea"), false); load(); render();
         });
       }, function () { note("error.network"); });
@@ -141,9 +179,14 @@
     $("question").addEventListener("keydown", function (e) {            // Enter — отправить, Shift+Enter — новая строка
       if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
     });
-    $("newBtn").addEventListener("click", function () { log = []; save(); status = null; render(); });
+    $("newBtn").addEventListener("click", function () {                  // очистить историю: больше 2 реплик — сначала спросить
+      if (busy) return;
+      if (log.length > 2 && win.confirm && !win.confirm(t("assistant.clear_confirm"))) return;
+      log = []; save(); status = null; render();
+      if ($("question").focus) $("question").focus();
+    });
     return { ready: init(), send: send };
   }
 
-  return { start: start, cleanLog: cleanLog, toSend: toSend, STORE_KEY: STORE_KEY };
+  return { start: start, cleanLog: cleanLog, toSend: toSend, memory: memory, QUESTION_RESERVE: QUESTION_RESERVE, STORE_KEY: STORE_KEY };
 });

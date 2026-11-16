@@ -814,7 +814,7 @@
     "assistant.your_question": "Savolingiz",
     "assistant.placeholder": "Masalan: nechta mahsulotda rasm yoʻq?",
     "assistant.send": "Yuborish",
-    "assistant.new_chat": "Yangi suhbat",
+    "assistant.new_chat": "Tarixni tozalash",
     "assistant.thinking": "Yordamchi oʻylayapti… odatda 5–30 soniya.",
     "assistant.you": "Siz",
     "assistant.bot": "Yordamchi",
@@ -833,7 +833,12 @@
     "server.assistant_model_unreachable": "Sunʼiy intellekt modeli javob bermayapti. Ehtimol, u hali yuklanmoqda — bir daqiqadan keyin urinib koʻring.",
     "server.assistant_bad_answer": "Yordamchi bu savolga javob bera olmadi. Boshqacha soʻrab koʻring.",
     "server.assistant_busy": "Yordamchi band: model hozir xaridorlar uchun mahsulotlarni aniqlayapti. Asosiy funksiyalar ishlaydi — bir necha soniyadan keyin yana soʻrang.",
-    "server.assistant_empty": "Savolingizni yozing."
+    "server.assistant_empty": "Savolingizni yozing.",
+    "assistant.clear_confirm": "Suhbat tarixini tozalaysizmi? Yordamchi gaplashganlaringizni unutadi va qaytadan boshlaydi.",
+    "assistant.memory": "Yordamchi suhbatni eslab turadi: {percent} % toʻlgan",
+    "assistant.memory_full": "Xotira {percent} % toʻlgan — yordamchi eski xabarlarni unutadi. «Tarixni tozalash» tugmasi bilan yangi suhbat boshlang.",
+    "assistant.memory_label": "Yordamchi xotirasi",
+    "assistant.forgotten": "Yordamchi buni endi eslamaydi"
   };
   if (root.I18N) root.I18N.add("uz", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

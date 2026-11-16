@@ -28,6 +28,10 @@
         <div class="chat__log" id="log" role="log" aria-live="polite"></div>
         <div class="chat__examples" id="examples"></div>
         <p class="hint" id="status" aria-live="polite" hidden></p>
+        <div class="chat__memory" id="memory" hidden>
+          <div class="chat__meter" id="memMeter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" data-i18n-attr="aria-label:assistant.memory_label"><div class="chat__meter-bar" id="memBar"></div></div>
+          <p class="chat__memory-text" id="memText"></p>
+        </div>
         <form class="chat__form" id="form">
           <label class="field">
             <span class="field__label" data-i18n="assistant.your_question">Ваш вопрос</span>
@@ -35,7 +39,7 @@
           </label>
           <div class="chat__actions">
             <button type="submit" class="btn btn--primary" id="sendBtn" data-i18n="assistant.send">Отправить</button>
-            <button type="button" class="btn btn--secondary" id="newBtn" data-i18n="assistant.new_chat">Новый разговор</button>
+            <button type="button" class="btn btn--secondary" id="newBtn" data-i18n="assistant.new_chat">Очистить историю</button>
           </div>
         </form>
         <p class="hint" data-i18n="assistant.caution">Это ответ ИИ: важное проверьте на странице «Товары».</p>

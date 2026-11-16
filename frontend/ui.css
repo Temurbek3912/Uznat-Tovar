@@ -348,3 +348,10 @@ button.rail__item { width: 100%; background: none; border: 0; font: inherit; fon
 .chat__examples { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 .chat__form { display: flex; flex-direction: column; gap: var(--sp-2); }
 .chat__actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.chat__msg--forgotten { opacity: .55; }
+.chat__memory { display: flex; flex-direction: column; gap: var(--sp-1); }
+.chat__meter { height: 8px; border-radius: var(--r-pill); background: var(--surface-2); border: 1px solid var(--line); overflow: hidden; }
+.chat__meter-bar { height: 100%; width: 0; background: var(--action); transition: width var(--dur); }
+.chat__memory--full .chat__meter-bar { background: var(--danger); }
+.chat__memory-text { margin: 0; font-size: var(--fs-xs); color: var(--ink-muted); }
+.chat__memory--full .chat__memory-text { color: var(--ink); }

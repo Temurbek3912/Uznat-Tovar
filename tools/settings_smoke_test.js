@@ -155,7 +155,7 @@ function boot(opts) {
   });
 
   await test("вход: удачный вход — запрос в форме, токен в sessionStorage, пароль очищен и нигде не хранится, появились имя и пункты меню", async () => {
-    const s = boot({ fetch: route({ "/auth/login": () => json(200, { access_token: "tok-9", token_type: "bearer" }), "/auth/me": () => json(200, ADMIN) }) }); await s.ready();
+    const s = boot({ fetch: route({ "/auth/login": () => json(200, { access_token: "tok-9", token_type: "bearer" }), "/auth/me": () => json(200, ADMIN), "/catalog/customer-qr": () => json(404, {}) }) }); await s.ready();
     await s.submit("admin1", "se&cret 1");
     assert.strictEqual(s.session.getItem("shelf_audit_token"), "tok-9");
     const login = s.calls[0]; assert.strictEqual(login.url, "http://app/api/v1/auth/login"); assert.strictEqual(login.opts.method, "POST");
@@ -176,7 +176,7 @@ function boot(opts) {
 
   await test("выход: токен стирается сразу (до ответа сервера), серверу уходит прежний токен, затем — на страницу входа", async () => {
     let release; const gate = new Promise((r) => { release = r; });
-    const s = boot({ token: "tok-11", fetch: route({ "/auth/me": () => json(200, ADMIN), "/auth/logout": async () => { await gate; return json(200, {}); } }) }); await s.ready();
+    const s = boot({ token: "tok-11", fetch: route({ "/auth/me": () => json(200, ADMIN), "/catalog/customer-qr": () => json(404, {}), "/auth/logout": async () => { await gate; return json(200, {}); } }) }); await s.ready();
     assert.ok(s.shown("accountInfo"));
     s.$("logoutBtn").click(); await flush();
     assert.strictEqual(s.session.getItem("shelf_audit_token"), null, "стёрт сразу, не дожидаясь сервера");
@@ -482,6 +482,33 @@ function boot(opts) {
     assert.strictEqual(s.session.getItem("shelf_audit_token"), "tok2", "новый сеанс заменил прежний");
     assert.ok(!s.shown("pinPwForm"));
     for (const id of ["pinPwPin", "pinPwNew", "pinPwRepeat"]) assert.strictEqual(s.$(id).value, "", id);
+  });
+
+  await test("QR-код для покупателей (2026-11-16): после входа — адрес, картинка и «Скачать для печати»; без входа и при ошибке — блока нет", async () => {
+    const qr = "data:image/svg+xml;base64,PHN2Zy8+";
+    let reply = json(200, { url: "https://shop.example.ts.net/ui/shop.html", source: "internet", qr });
+    const s = boot({ token: "tok", fetch: async (url) => {
+      const p = url.replace(/^.*\/api\/v1/, "");
+      if (p === "/auth/me") return json(200, { username: "kassir", role: "merchandiser", permissions: ["catalog:read"] });
+      if (p === "/catalog/customer-qr") return reply;
+      return json(404, {});
+    } });
+    await s.ready(); await flush();
+    assert.ok(s.shown("customerQrGroup") && s.shown("cqrImg") && s.shown("cqrPrintBtn"));
+    assert.strictEqual(s.$("cqrImg").getAttribute("src"), qr);
+    assert.strictEqual(s.$("cqrUrl").textContent, "https://shop.example.ts.net/ui/shop.html");
+    assert.strictEqual(s.$("cqrHint").textContent, DICTS.ru["cqr.internet"]);
+    reply = json(200, { url: "http://192.168.1.5:8000/ui/shop.html", source: "wifi", qr: "javascript:alert(1)" });
+    await s.app.reload(); await flush();
+    assert.strictEqual(s.$("cqrHint").textContent, DICTS.ru["cqr.wifi"]); assert.ok(!s.shown("cqrImg"), "чужая картинка не показывается");
+    reply = json(200, { url: "", source: "none", qr: "" });
+    await s.app.reload(); await flush();
+    assert.ok(s.shown("customerQrGroup") && !s.shown("cqrPrintBtn") && !s.shown("cqrUrl")); assert.strictEqual(s.$("cqrHint").textContent, DICTS.ru["cqr.none"]);
+    reply = json(500, {});
+    await s.app.reload(); await flush();
+    assert.ok(!s.shown("customerQrGroup")); assert.deepStrictEqual(s.errors, []);
+    const anon = boot(); await anon.ready();
+    assert.ok(!anon.shown("customerQrGroup"));
   });
 
   console.log(`\n${passed} passed`);

@@ -21,6 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import logging
+import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
@@ -68,7 +69,7 @@ from app.services.catalog_upload import (
     uploads_root,
 )
 from app.services.frame_lifecycle import FRAME_TTL_SECONDS
-from app.services import shop_card
+from app.services import customer_qr, shop_card
 from app.services.product_search import apply_search
 from app.services.product_images import (
     DISPLAY,
@@ -643,6 +644,35 @@ def _images_payload(db: Session, product: Product) -> dict:
     return {"product_id": product.id, "name": product.name, "photo_count": len(images),
             "reference_count": summary.references if summary else 0, "cover_image_id": cover,
             "images": [_image_out(i, cover) for i in images]}
+
+
+def _customer_address(request: Request) -> customer_qr.CustomerAddress:
+    port = request.url.port or (443 if request.url.scheme == "https" else 80)
+    return customer_qr.customer_address(public_url=os.environ.get(customer_qr.ENV_PUBLIC_URL), lan_ip=customer_qr.lan_ip(),
+                                        port=port, scheme=request.url.scheme)
+
+
+@router.get("/customer-qr")
+def customer_qr_info(
+    request: Request,
+    _user: CurrentUser = Depends(require_permission(Permission.CATALOG_READ)),
+) -> dict:
+    """Какой адрес сейчас в QR для покупателей (вход из интернета или Wi-Fi магазина) и сам QR — для любого сотрудника."""
+    address = _customer_address(request)
+    return {"url": address.url, "source": address.source, "qr": customer_qr.qr_svg_data_uri(address.url)}
+
+
+@router.get("/customer-qr/print.png")
+def customer_qr_print(
+    request: Request,
+    _user: CurrentUser = Depends(require_permission(Permission.CATALOG_READ)),
+) -> Response:
+    """Лист A4 с крупным QR и надписями для печати (картинка PNG, строится в памяти)."""
+    address = _customer_address(request)
+    if not address.url:
+        raise ApiError(409, "customer_url_unknown", "Адрес страницы покупателя не определён: компьютер не подключён к сети.")
+    return Response(customer_qr.print_sheet_png(address.url), media_type="image/png",
+                    headers={"Content-Disposition": 'attachment; filename="qr-pokupatel.png"', "Cache-Control": "no-store"})
 
 
 @router.get("/products/{product_id}/images")

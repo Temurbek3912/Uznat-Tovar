@@ -744,6 +744,13 @@
     "pinpw.pin": "Your PIN (to confirm)",
     "pinpw.save": "Save password",
     "pinpw.saved": "Password saved. On other devices, sign in with your username and this password. You have been signed out on other devices.",
+    "cqr.title": "QR code for customers",
+    "cqr.internet": "The QR code now holds the internet address: customers do not need the shop Wi-Fi. Print it and put it up by the shelves.",
+    "cqr.wifi": "Internet access is off: this QR code opens only on a phone connected to the shop Wi-Fi. To let customers in without Wi-Fi, start the program with internet access.",
+    "cqr.none": "The address is unknown: this computer is not connected to a network.",
+    "cqr.print": "Download for printing",
+    "cqr.downloaded": "{file} has been saved to Downloads. Print it on a regular sheet of paper.",
+    "server.customer_url_unknown": "The customer page address is unknown: this computer is not connected to a network."
   };
   if (root.I18N) root.I18N.add("en", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

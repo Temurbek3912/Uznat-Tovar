@@ -90,7 +90,7 @@
       err.textContent = text; setHidden(err, !text);
       err.className = loginMsg && loginMsg.ok ? "notice" : "notice notice--danger";      // «пароль установлен» — не ошибка
       err.setAttribute("role", loginMsg && loginMsg.ok ? "status" : "alert");
-      renderSecurity();
+      renderSecurity(); renderCustomerQr();
     }
     function revealRail() { /* меню рисует shell.js по правам */ }
     function refreshAccount() {
@@ -102,8 +102,9 @@
           revealRail(Array.isArray(me.permissions) ? me.permissions : []);
           loadSecurity().catch(report);
           loadPin().catch(report);
+          loadCustomerQr().catch(report);
         } else {
-          account.name = null; revealRail([]); resetSecurity();
+          account.name = null; revealRail([]); resetSecurity(); cqr.data = null;
           loginMsg = r.status === "expired" ? { key: "login.expired" } : r.status === "error" ? { key: r.key } : null;
         }
         renderAccount();
@@ -115,6 +116,41 @@
       if (evt && evt.preventDefault) evt.preventDefault();
       auth.goLogin("");
       return Promise.resolve(null);
+    }
+    // QR-код страницы покупателя (просьба владельца 2026-11-16): какой адрес сейчас в QR и лист для печати — любому сотруднику.
+    var cqr = { data: null, msg: null };
+    function renderCustomerQr() {
+      var d = cqr && cqr.data, shown = account.name !== null && !!d;
+      setHidden($("customerQrGroup"), !shown);
+      if (!shown) return;
+      var hasUrl = !!d.url, img = /^data:image\/svg\+xml;base64,/.test(d.qr || "") ? d.qr : "";
+      $("cqrHint").textContent = t(d.source === "internet" ? "cqr.internet" : d.source === "wifi" ? "cqr.wifi" : "cqr.none");
+      if (img) $("cqrImg").setAttribute("src", img); else $("cqrImg").removeAttribute("src");
+      $("cqrImg").setAttribute("alt", t("cqr.title"));
+      setHidden($("cqrImg"), !img);
+      $("cqrUrl").textContent = d.url || ""; setHidden($("cqrUrl"), !hasUrl);
+      setHidden($("cqrPrintBtn"), !hasUrl);
+      var msg = cqr.msg ? t(cqr.msg.key, cqr.msg.params) : "";
+      $("cqrMsg").textContent = msg; setHidden($("cqrMsg"), !msg);
+    }
+    function loadCustomerQr() {
+      return api("/api/v1/catalog/customer-qr").then(function (r) {
+        cqr.data = r.res.ok && r.data && typeof r.data === "object" ? { url: String(r.data.url || ""), source: String(r.data.source || "none"), qr: String(r.data.qr || "") } : null;
+        renderCustomerQr();
+      });
+    }
+    function downloadCustomerQr() {
+      cqr.msg = null; renderCustomerQr();
+      return win.fetch(auth.apiBase() + "/api/v1/catalog/customer-qr/print.png", { headers: auth.authHeaders() }).then(function (res) {
+        if (!res.ok) { cqr.msg = { key: "login.failed", params: { reason: "HTTP " + res.status } }; renderCustomerQr(); return null; }
+        return res.blob().then(function (blob) {
+          var href = win.URL.createObjectURL(blob), a = doc.createElement("a");
+          a.href = href; a.download = "qr-pokupatel.png"; doc.body.appendChild(a); a.click(); doc.body.removeChild(a);
+          win.setTimeout(function () { win.URL.revokeObjectURL(href); }, 1000);
+          cqr.msg = { key: "cqr.downloaded", params: { file: "qr-pokupatel.png" } }; renderCustomerQr();
+          return null;
+        });
+      }, function () { cqr.msg = { key: "error.network" }; renderCustomerQr(); return null; });
     }
     // ПИН-код для входа на этом компьютере (сервер принимает его только отсюда — app/core/local_pin.py).
     var pinState = { shown: false, has: false, msg: null, pwOpen: false, pwMsg: null };
@@ -412,7 +448,7 @@
     $("autoToggle").checked = cfg.auto;
     relabel(); renderThemeSwitch();
     renderAccount();
-    I18N.onChange(function () { relabel(); renderThemeSwitch(); renderAccount(); renderSecurity(); renderPin(); $("rail").setAttribute("aria-label", t("nav.menu")); });
+    I18N.onChange(function () { relabel(); renderThemeSwitch(); renderAccount(); renderSecurity(); renderPin(); renderCustomerQr(); $("rail").setAttribute("aria-label", t("nav.menu")); });
 
     $("themeBtn").addEventListener("click", function () { Theme.next(); relabel(); renderThemeSwitch(); });
     $("autoToggle").addEventListener("change", storeSettings);
@@ -422,6 +458,7 @@
     $("pinPwOpenBtn").addEventListener("click", openPinPassword);
     $("pinPwForm").addEventListener("submit", guard(savePinPassword));
     $("logoutBtn").addEventListener("click", guard(doLogout));
+    $("cqrPrintBtn").addEventListener("click", guard(downloadCustomerQr));
     $("mfaEnableBtn").addEventListener("click", function () { securityStep("setup"); var p = $("mfaSetupPass"); if (p && p.focus) p.focus(); });
     $("mfaDisableBtn").addEventListener("click", function () { securityStep("disable"); var p = $("mfaDisablePass"); if (p && p.focus) p.focus(); });
     $("mfaSetupForm").addEventListener("submit", guard(startSetup));

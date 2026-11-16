@@ -61,6 +61,14 @@
             <div><button class="btn btn--secondary" id="logoutBtn" type="button" data-i18n="settings.sign_out">Выйти</button></div>
           </div>
         </div>
+        <div class="settings__group" id="customerQrGroup" hidden>
+          <h2 class="ticket__title" data-i18n="cqr.title">QR-код для покупателей</h2>
+          <p class="hint" id="cqrHint" role="status"></p>
+          <img class="mfa-qr cqr-img" id="cqrImg" alt="" width="240" height="240" hidden>
+          <p class="cqr-url" id="cqrUrl" hidden></p>
+          <p class="notice" id="cqrMsg" role="status" hidden></p>
+          <div><button class="btn btn--secondary" id="cqrPrintBtn" type="button" data-i18n="cqr.print" hidden>Скачать для печати</button></div>
+        </div>
         <div class="settings__group" id="pinGroup" hidden>
           <h2 class="ticket__title" data-i18n="pin.title">ПИН-код для входа на этом компьютере</h2>
           <p class="hint" id="pinStatus" role="status"></p>

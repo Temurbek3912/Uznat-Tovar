@@ -375,6 +375,7 @@ def apply_public_plan(plan, d: "Deps", opts: "Options", settings, child_env: dic
         return None
     child_env.update(plan.env)
     child_env["CUSTOMER_PORT"] = str(port)
+    child_env["CUSTOMER_PUBLIC_URL"] = plan.shop_url     # сотрудники видят этот адрес и QR в «Настройках» (app/services/customer_qr.py)
     d.out(f"Вход покупателя из интернета ({plan.mode}): {plan.shop_url}")
     return port
 

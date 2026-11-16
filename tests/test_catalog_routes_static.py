@@ -24,6 +24,8 @@ EXPECTED = {
     ("PATCH", "/products/{product_id}/images/{image_id}"): "CATALOG_WRITE",  # вывести из эталонов / витринное — только admin
     ("POST", "/products/{product_id}/status"): "CATALOG_WRITE",              # убрать в архив / вернуть — только admin
     ("POST", "/identify"): "CATALOG_READ",
+    ("GET", "/customer-qr"): "CATALOG_READ",                # QR страницы покупателя — любому сотруднику (2026-11-16)
+    ("GET", "/customer-qr/print.png"): "CATALOG_READ",
 }
 
 

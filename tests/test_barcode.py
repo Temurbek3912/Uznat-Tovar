@@ -214,3 +214,29 @@ def test_search_keys_reject_typos_text_and_too_long_input():
 def test_partial_digits_need_at_least_four_digits():
     assert bc.partial_digits("2345") == "2345" and bc.partial_digits(" 23-45 ") == "2345"
     assert bc.partial_digits("234") is None and bc.partial_digits("кола 2345") is None
+
+
+def test_all_rows_at_once_give_exactly_the_same_crossings_as_row_by_row():
+    # Ускорение 2026-11-16: decode_scanlines считает переходы сразу для всех строк кадра (_crossings_rows). Ответы не должны
+    # измениться ни на волос: те же позиции и тот же цвет первого интервала, что у построчного _crossings.
+    rng = np.random.default_rng(7)
+    noisy = rng.integers(0, 256, (12, 640)).astype(np.float64)
+    code_rows = np.tile(bc.render(EAN13, module=3, height=1)[0].astype(np.float64), (3, 1))
+    flat = np.full((2, 500), 150.0)
+    for rows in (noisy, code_rows, flat):
+        window = max(15, rows.shape[1] // 8)
+        for sigma in (0.0, 0.8, 2.0):
+            batch = bc._crossings_rows(rows, window, sigma)
+            for r in range(rows.shape[0]):
+                pos, first = bc._crossings(rows[r], window, sigma)
+                assert first == batch[r][1]
+                assert np.array_equal(pos, batch[r][0])
+
+
+def test_scanlines_still_read_a_rendered_code_at_every_tilt():
+    image = np.full((240, 700), 200, np.uint8)
+    code = bc.render(EAN13, module=3, height=120)
+    image[60:60 + code.shape[0], 40:40 + code.shape[1]] = code
+    for angle in (0, 7, -7):
+        tilted = bc._rotate(image, angle)
+        assert bc.decode_scanlines(tilted) == [EAN13]

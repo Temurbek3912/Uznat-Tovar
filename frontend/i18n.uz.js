@@ -744,6 +744,13 @@
     "pinpw.pin": "PIN-kodingiz (tasdiqlash uchun)",
     "pinpw.save": "Parolni saqlash",
     "pinpw.saved": "Parol saqlandi. Boshqa qurilmalardan login va shu parol bilan kiring. Boshqa qurilmalarda dasturdan chiqildi.",
+    "cqr.title": "Xaridorlar uchun QR-kod",
+    "cqr.internet": "Hozir QR-da internet manzili: xaridorga doʻkon Wi-Fi tarmogʻi kerak emas. Chop eting va javonlar yoniga osib qoʻying.",
+    "cqr.wifi": "Internetdan kirish yoqilmagan: bu QR faqat doʻkon Wi-Fi tarmogʻidagi telefonda ochiladi. Wi-Fi tarmogʻisiz kirish uchun dasturni internetdan kirish bilan ishga tushiring.",
+    "cqr.none": "Manzil aniqlanmadi: kompyuter tarmoqqa ulanmagan.",
+    "cqr.print": "Chop etish uchun yuklab olish",
+    "cqr.downloaded": "{file} fayli «Yuklanmalar» papkasiga saqlandi. Uni oddiy varaqda chop eting.",
+    "server.customer_url_unknown": "Xaridor sahifasining manzili aniqlanmadi: kompyuter tarmoqqa ulanmagan."
   };
   if (root.I18N) root.I18N.add("uz", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

@@ -174,6 +174,7 @@ def test_full_mode_with_tailscale_serves_a_customer_port_runs_the_tunnel_and_put
     assert api_argv[:3] == ["PY", "-m", "scripts.serve"] and api_argv[api_argv.index("--customer-port") + 1] == "8100"
     assert env.started[2][1] == ["/usr/bin/tailscale", "funnel", "8100"]
     assert env.started[0][2]["env"]["CUSTOMER_PORT"] == "8100"
+    assert env.started[0][2]["env"]["CUSTOMER_PUBLIC_URL"] == "https://shop-pc.tail1.ts.net/ui/shop.html"   # QR в «Настройках»
     assert "[QR https://shop-pc.tail1.ts.net/ui/shop.html]" in env.text
     assert "[QR http://192.168.1.57" not in env.text                     # в QR — только адрес из интернета
     assert "Сотрудники (в сети магазина): http://192.168.1.57:8000/ui/index.html" in env.text

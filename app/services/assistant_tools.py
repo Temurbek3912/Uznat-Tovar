@@ -1,5 +1,7 @@
 """
-Инструменты ИИ-помощника — этап A1 «только смотреть» (документ 16, §4, §11): только чтение каталога, ничего не меняется.
+Инструменты ИИ-помощника (документ 16, §4, §11). Этап A1 — чтение каталога (kind="read"). Этап A2 — «предложить изменение»
+(kind="propose": только проверка и карточка для владельца, база НЕ меняется — app/services/assistant_actions.py) и настройки
+страницы (kind="ui": язык и тема этого браузера, выполняются сразу).
 
 Правила (документ 16, §2, §6):
 - модель не получает «дамп базы» и не пишет SQL: только эти инструменты, каждый отдаёт короткий итог (ограничено число строк);
@@ -12,11 +14,12 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.core import text_search
 from app.core.security import CurrentUser, Permission
 from app.db.models import PRODUCT_ACTIVE, PRODUCT_ARCHIVED, Product, ProductBarcodeORM
+from app.services import assistant_actions as actions
 from app.services.barcode import search_keys
 from app.services.catalog_upload import DEFAULT_BRAND, DEFAULT_CATEGORY
 from app.services.product_images import PhotoRegistry
@@ -36,8 +39,11 @@ class Tool:
     name: str
     permission: Permission
     description: str            # для модели — по-русски, коротко
-    args: dict                  # {имя: описание} — допустимые аргументы
+    args: dict                  # {имя: подсказка} — допустимые аргументы; подсказка коротко (память модели маленькая) или ""
     run: Callable
+    kind: str = "read"          # read — смотреть; propose — предложить изменение владельцу; ui — язык/тема страницы
+    required: tuple = ()        # обязательные аргументы — модель не сможет их пропустить (своя JSON-схема у каждого инструмента)
+    choices: dict = field(default_factory=dict)     # {аргумент: [допустимые значения]}
 
 
 def _cut(value, limit: int = MAX_TEXT):
@@ -185,16 +191,40 @@ TOOLS: tuple[Tool, ...] = (
          {}, catalog_overview),
     Tool("find_products", Permission.CATALOG_READ,
          "Найти товары по названию, бренду, артикулу или штрихкоду.",
-         {"query": "что искать", "limit": "сколько показать, до 20"}, find_products),
+         {"query": "", "limit": "до 20"}, find_products, required=("query",)),
     Tool("products_missing", Permission.CATALOG_READ,
-         "Товары, у которых чего-то нет: field = photo (фото), barcode (штрихкод), price (цена), brand (бренд), category (категория).",
-         {"field": "photo | barcode | price | brand | category", "limit": "сколько показать, до 20"}, products_missing),
+         "Товары, у которых нет фото, штрихкода, цены, бренда или категории.",
+         {"field": "|".join(MISSING_FIELDS), "limit": "до 20"}, products_missing,
+         required=("field",), choices={"field": list(MISSING_FIELDS)}),
     Tool("similar_names", Permission.CATALOG_READ,
          "Возможные дубли: товары с одинаковым названием.",
-         {"limit": "сколько групп показать, до 20"}, similar_names),
+         {"limit": "до 20"}, similar_names),
     Tool("product_details", Permission.CATALOG_READ,
          "Всё о товаре по артикулу (sku) или штрихкоду.",
-         {"product": "артикул или штрихкод"}, product_details),
+         {"product": "артикул или штрихкод"}, product_details, required=("product",)),
+)
+TOOLS += (
+    Tool("propose_update", Permission.CATALOG_WRITE,
+         "Предложить изменить одно поле товара (несколько полей — несколько вызовов).",
+         {"product": "артикул или штрихкод", "field": "|".join(actions.EDIT_FIELDS),
+          "value": "новое значение; пусто — убрать; in_stock: да/нет"},
+         lambda db, args, props: props.update(db, args), "propose",
+         required=("product", "field", "value"), choices={"field": list(actions.EDIT_FIELDS)}),
+    Tool("propose_archive", Permission.CATALOG_WRITE,
+         "Предложить убрать товар в архив (вместо удаления) или вернуть из архива.",
+         {"product": "артикул или штрихкод", "status": "archived|active"},
+         lambda db, args, props: props.status(db, args), "propose",
+         required=("product", "status"), choices={"status": ["archived", "active"]}),
+    Tool("propose_add", Permission.CATALOG_WRITE,
+         "Предложить новый товар; фото добавит владелец (штрихкод с фото привяжется сам).",
+         {"name": "", "price": "", "brand": "", "category": ""},
+         lambda db, args, props: props.add(db, args), "propose", required=("name",)),
+    Tool("set_language", Permission.ASSISTANT_USE, "Сменить язык программы сразу.",
+         {"lang": "|".join(actions.UI_LANGS)}, lambda args: actions.ui_action(args, "lang"), "ui",
+         required=("lang",), choices={"lang": list(actions.UI_LANGS)}),
+    Tool("set_theme", Permission.ASSISTANT_USE, "Сменить фон программы сразу.",
+         {"theme": "light (светлый)|dark (тёмный)"}, lambda args: actions.ui_action(args, "theme"), "ui",
+         required=("theme",), choices={"theme": list(actions.UI_THEMES)}),
 )
 _BY_NAME = {t.name: t for t in TOOLS}
 
@@ -203,10 +233,25 @@ def allowed_tools(user: CurrentUser) -> list[Tool]:
     return [t for t in TOOLS if user.has_permission(t.permission)]
 
 
-def run_tool(db, user: CurrentUser, name: str, args) -> dict:
-    """Вызов от имени пользователя: инструмент должен существовать И быть разрешён ему; лишние аргументы отбрасываются."""
+def run_tool(db, user: CurrentUser, name: str, args, proposals: actions.Proposals | None = None,
+             ui: list | None = None) -> dict:
+    """Вызов от имени пользователя: инструмент должен существовать И быть разрешён ему; лишние аргументы отбрасываются.
+    Предложения складываются в proposals (база не меняется), действия страницы — в ui."""
     tool = _BY_NAME.get(name)
     if tool is None or not user.has_permission(tool.permission):
         raise ToolError(f"Инструмента «{_cut(str(name), 40)}» нет или он вам недоступен.")
     clean = {k: v for k, v in (args if isinstance(args, dict) else {}).items() if k in tool.args}
-    return tool.run(db, clean)
+    try:
+        if tool.kind == "propose":
+            out = tool.run(db, clean, proposals if proposals is not None else actions.Proposals())
+            if out.get("proposed"):
+                out["next"] = "Скажи владельцу, что предлагаешь, и что изменится только после кнопки «Сделать»."
+            return out
+        if tool.kind == "ui":
+            act = tool.run(clean)
+            if ui is not None:
+                ui.append(act)
+            return {"ok": True, "done": act}
+        return tool.run(db, clean)
+    except actions.ActionError as exc:
+        raise ToolError(str(exc)) from exc

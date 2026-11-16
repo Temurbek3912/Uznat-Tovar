@@ -66,4 +66,57 @@ test("сверка с сервером: забытые реплики — ров
   }
 });
 
+// --- этап A2: карточка «Помощник предлагает» ---------------------------------------------------------------------------------
+const RU = {};
+const ruSrc = require("fs").readFileSync(path.join(__dirname, "..", "frontend", "i18n.ru.js"), "utf8");
+for (const m of ruSrc.matchAll(/^\s*"([^"]+)": (".*?"),?$/gm)) RU[m[1]] = JSON.parse(m[2]);
+const tr = (key, params) => {
+  assert.ok(key in RU, "нет перевода: " + key);
+  return RU[key].replace(/\{(\w+)\}/g, (_, k) => String((params || {})[k]));
+};
+
+test("карточка изменения: было → стало, пусто — «не указано», наличие словами, штрихкод без «было»", () => {
+  const lines = Assistant.describe({ kind: "update", name: "Кока-кола", sku: "COLA", changes: { price: 15000, in_stock: false,
+    description: null, add_barcode: "4780001234579" }, before: { price: null, in_stock: true, description: "Старое" } }, tr);
+  assert.deepStrictEqual(lines, ["Товар «Кока-кола» (артикул COLA)", "Цена: не указано → 15000", "В наличии: да → нет",
+                                 "Описание: Старое → не указано", "Добавить штрихкод: 4780001234579"]);
+});
+
+test("карточки архива и нового товара; у каждого поля, которое может предложить сервер, есть подпись", () => {
+  assert.ok(Assistant.describe({ kind: "status", status: "archived", name: "Хлеб", sku: "BREAD" }, tr)[0].startsWith("Убрать в архив: «Хлеб»"));
+  assert.ok(Assistant.describe({ kind: "status", status: "active", name: "Хлеб", sku: "BREAD" }, tr)[0].startsWith("Вернуть из архива"));
+  const add = Assistant.describe({ kind: "add", name: "Сок", price: 12000, brand: "Не указан", category: "Без категории", barcode: null }, tr);
+  assert.deepStrictEqual(add.slice(0, 3), ["Добавить новый товар:", "Название: Сок", "Цена: 12000"]);
+  // тот же список, что EDIT_FIELDS в app/services/assistant_actions.py
+  for (const f of ["name", "price", "brand", "category", "in_stock", "add_barcode", "remove_barcode", "net_content", "manufacturer",
+                   "country", "ingredients", "description"]) tr("assistant.field." + f);
+  assert.deepStrictEqual(Assistant.describe(null, tr), []);
+});
+
+test("память вкладки хранит карточку и смену языка/фона; «выполняется» после перезагрузки — снова вопрос; мусор отбрасывается", () => {
+  const log = Assistant.cleanLog([
+    u("цена"),
+    { role: "assistant", content: "Предлагаю", tools: ["propose_update"], card: { action: { kind: "update", changes: {} }, state: "working" },
+      ui: [{ kind: "theme", value: "dark" }, { kind: "sql", value: "x" }] },
+    { role: "assistant", content: "x", card: { action: { kind: "delete" }, state: "ask" } },
+    { role: "user", content: "y", card: { action: { kind: "update" }, state: "ask" } },
+  ]);
+  assert.strictEqual(log[1].card.state, "ask");
+  assert.deepStrictEqual(log[1].ui, [{ kind: "theme", value: "dark" }]);
+  assert.ok(!("card" in log[2]) && !("card" in log[3]));        // неизвестное действие и карточка у вопроса — отброшены
+  assert.deepStrictEqual(Object.keys(Assistant.toSend(log)[1]), ["role", "content"]);   // на сервер карточка не уходит
+});
+
+test("предупреждения «ничего не изменилось» и «не предложено» сохраняются только у ответов помощника и только известные", () => {
+  const log = Assistant.cleanLog([
+    u("удали"), { role: "assistant", content: "Убран в архив", warn: "no_card" },
+    u("цена"), { role: "assistant", content: "Нажмите", warn: "failed", why: "Цена — это число" },
+    { role: "assistant", content: "x", warn: "hack" }, { role: "user", content: "y", warn: "no_card" },
+  ]);
+  assert.strictEqual(log[1].warn, "no_card");
+  assert.deepStrictEqual([log[3].warn, log[3].why], ["failed", "Цена — это число"]);
+  assert.ok(!("warn" in log[4]) && !("warn" in log[5]));
+  tr("assistant.no_card"); tr("assistant.proposal_failed", { why: "x" }); tr("assistant.proposal_not_made");
+});
+
 console.log(`\n${passed} passed`);

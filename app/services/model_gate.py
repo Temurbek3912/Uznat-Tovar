@@ -13,13 +13,14 @@ from contextlib import contextmanager
 
 _lock = threading.Lock()
 _identify_running = 0
+_identify_last = None           # time.monotonic() конца последнего распознавания (None — с запуска ещё не было)
 _assistant = threading.Semaphore(1)
 
 
 @contextmanager
 def identify_turn():
     """Обёртка вокруг одного «Узнать товар» (сотрудник или покупатель)."""
-    global _identify_running
+    global _identify_running, _identify_last
     with _lock:
         _identify_running += 1
     try:
@@ -27,11 +28,19 @@ def identify_turn():
     finally:
         with _lock:
             _identify_running -= 1
+            _identify_last = time.monotonic()
 
 
 def identify_busy() -> bool:
     with _lock:
         return _identify_running > 0
+
+
+def identify_recent(window: float = 120.0, clock=time.monotonic) -> bool:
+    """Покупатели сейчас пользуются распознаванием: идёт «Узнать товар» или было за последние window секунд. По этому страница
+    «Помощник» предупреждает, что ответ может задержаться (час пик)."""
+    with _lock:
+        return _identify_running > 0 or (_identify_last is not None and clock() - _identify_last < window)
 
 
 def wait_for_identify(max_seconds: float, sleep=time.sleep, clock=time.monotonic) -> bool:

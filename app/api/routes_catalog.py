@@ -554,6 +554,11 @@ def set_product_status(
     """Убрать товар в архив или вернуть. В архиве товар не распознаётся (ни по виду, ни по штрихкоду), покупатель его не видит,
     в списке «Товары» он только в разделе «Архив». Ничего не удаляется: вернули — всё работает, как раньше (индекс не
     пересобирается, действует со следующего кадра). Запись в журнале действий — в той же транзакции."""
+    return change_product_status(db, user, product_id, body)
+
+
+def change_product_status(db: Session, user: CurrentUser, product_id: str, body: StatusUpdate, via: str = "api") -> ProductSummary:
+    """То же для ИИ-помощника (via="assistant", app/api/routes_assistant.py): одни проверки, одна запись в журнале."""
     if body.status not in _STATUS_ACTIONS:
         raise ApiError(422, "product_status_invalid", "Состояние товара: active (в каталоге), archived (в архиве) или all.")
     product = db.get(Product, product_id)
@@ -565,7 +570,7 @@ def set_product_status(
         from app.services import audit            # здесь, а не в начале файла: журнал тянет SQLAlchemy-запросы
         product.status = body.status
         _bump(product)
-        audit.record(db, _STATUS_ACTIONS[body.status], actor=audit.AuditActor(user.id, "api"), target_type="product",
+        audit.record(db, _STATUS_ACTIONS[body.status], actor=audit.AuditActor(user.id, via), target_type="product",
                      target_id=product.id, before={"status": before}, after={"status": body.status},
                      reason=(body.reason or "").strip() or None)
         db.commit()

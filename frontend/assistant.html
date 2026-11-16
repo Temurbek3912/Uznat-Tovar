@@ -24,7 +24,12 @@
     <div class="area">
       <p class="hint" id="note" hidden></p>
       <section class="chat" id="chatArea" hidden>
-        <p class="hint" data-i18n="assistant.intro">Спросите о товарах обычными словами. Помощник только смотрит и считает — в базе ничего не меняет.</p>
+        <p class="hint" data-i18n="assistant.intro">Спросите о товарах обычными словами. Помощник смотрит и считает, а изменить товар только предлагает: меняется он, когда вы нажмёте «Сделать».</p>
+        <div class="notice assistant-tip" id="tip" role="note">
+          <p class="notice__title assistant-tip__title" id="tipTitle" data-i18n="assistant.tip_title">Когда лучше спрашивать</p>
+          <p class="assistant-tip__text" data-i18n="assistant.tip">Лучше спрашивать, когда покупателей мало: помощник и распознавание товаров работают на одной видеокарте, и в час пик покупатели ждут дольше.</p>
+          <p class="assistant-tip__busy" id="tipBusy" aria-live="polite" hidden data-i18n="assistant.tip_busy">Сейчас покупатели пользуются распознаванием — ответ может задержаться.</p>
+        </div>
         <div class="chat__log" id="log" role="log" aria-live="polite"></div>
         <div class="chat__examples" id="examples"></div>
         <p class="hint" id="status" aria-live="polite" hidden></p>

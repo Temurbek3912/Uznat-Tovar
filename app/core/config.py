@@ -192,6 +192,9 @@ class Settings(BaseSettings):
     naming_kind_model: str = "google/siglip2-base-patch16-224"
     naming_kind_min_score: float = 0.6
     naming_kind_cache_dir: str = "data/models"
+    # ИИ-помощник владельца (документ 16, этап A1 «только смотреть»): та же модель, что naming_vision_url, — второй модели нет.
+    # Нет модели на этом компьютере (адрес пуст) — помощник выключен сам. ENV ASSISTANT_ENABLED=false — выключить вручную.
+    assistant_enabled: bool = True
 
     # ML-конфиги подтягиваются из YAML (см. load_yaml_config), но могут быть
     # переопределены через ENV вида MODELS__DETECTOR__CONFIDENCE_THRESHOLD=0.4

@@ -63,6 +63,7 @@ class Permission(str, Enum):
     USER_MANAGE = "user:manage"          # создание/изменение пользователей
     STORE_MANAGE = "store:manage"        # создание магазинов и полок (страница frontend/setup.html); как и USER_MANAGE — только admin
     CAMERA_MANAGE = "camera:manage"      # камеры: просмотр, создание, правка, команды «снимок сейчас»/«проверка» (админ-панель); только admin
+    ASSISTANT_USE = "assistant:use"      # ИИ-помощник «только смотреть» (документ 16, этап A1): пока только владелец (admin)
     CAMERA_AGENT = "camera:agent"        # агент камер: получить список камер (с адресами источников) и сообщать результаты; только роль camera_agent и admin
 
 

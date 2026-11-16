@@ -247,7 +247,7 @@ def test_admin_only_rights_include_catalog_editing_and_are_derived_from_the_role
     Состав выводится из таблицы ролей: право, которое есть только у администратора, защищено автоматически."""
     from app.core.security import ADMIN_ONLY_PERMISSIONS, ROLE_PERMISSIONS, Permission, Role
     assert ADMIN_ONLY_PERMISSIONS == {Permission.USER_MANAGE, Permission.STORE_MANAGE, Permission.CAMERA_MANAGE,
-                                      Permission.CATALOG_WRITE}
+                                      Permission.CATALOG_WRITE, Permission.ASSISTANT_USE}
     for perm in ADMIN_ONLY_PERMISSIONS:
         assert [r for r, perms in ROLE_PERMISSIONS.items() if perm in perms] == [Role.ADMIN], perm
     assert Permission.CAMERA_AGENT not in ADMIN_ONLY_PERMISSIONS          # агент камер работает из сети магазина

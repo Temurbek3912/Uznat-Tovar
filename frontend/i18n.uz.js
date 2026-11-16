@@ -808,7 +808,32 @@
     "server.backup_folder_no_space": "Joy kam: nusxa uchun taxminan {need} MB kerak, boʻsh {free} MB.",
     "server.backup_folder_error": "Papkani tekshirib boʻlmadi: {reason}",
     "server.google_unavailable": "Dasturning bu versiyasida Google Diskni ulash sozlanmagan — sotuvchiga xabar bering.",
-    "server.google_failed": "Ulanishni boshlab boʻlmadi: {reason}"
+    "server.google_failed": "Ulanishni boshlab boʻlmadi: {reason}",
+    "nav.assistant": "Yordamchi",
+    "assistant.intro": "Mahsulotlar haqida oddiy soʻzlar bilan soʻrang. Yordamchi faqat koʻradi va sanaydi — bazada hech narsani oʻzgartirmaydi.",
+    "assistant.your_question": "Savolingiz",
+    "assistant.placeholder": "Masalan: nechta mahsulotda rasm yoʻq?",
+    "assistant.send": "Yuborish",
+    "assistant.new_chat": "Yangi suhbat",
+    "assistant.thinking": "Yordamchi oʻylayapti… odatda 5–30 soniya.",
+    "assistant.you": "Siz",
+    "assistant.bot": "Yordamchi",
+    "assistant.checked": "Koʻrib chiqdi: {what}",
+    "assistant.caution": "Bu sunʼiy intellekt javobi: muhim narsalarni «Mahsulotlar» sahifasida tekshiring.",
+    "assistant.no_access": "Yordamchi faqat doʻkon kompyuterida egasi uchun ochiq.",
+    "assistant.example_photo": "Nechta mahsulotda rasm yoʻq?",
+    "assistant.example_dupes": "Takrorlanishi mumkin boʻlgan mahsulotlarni top",
+    "assistant.example_price": "Qaysi mahsulotlarda narx yoʻq?",
+    "assistant.tool.catalog_overview": "katalog xulosasini",
+    "assistant.tool.find_products": "mahsulot qidiruvini",
+    "assistant.tool.products_missing": "kartochkalarda nima yetishmasligini",
+    "assistant.tool.similar_names": "bir xil nomlarni",
+    "assistant.tool.product_details": "mahsulot kartochkasini",
+    "server.assistant_disabled": "Bu kompyuterda yordamchi oʻchirilgan: bu yerda sunʼiy intellekt modeli yoʻq (kamida 6 GB li videokarta kerak).",
+    "server.assistant_model_unreachable": "Sunʼiy intellekt modeli javob bermayapti. Ehtimol, u hali yuklanmoqda — bir daqiqadan keyin urinib koʻring.",
+    "server.assistant_bad_answer": "Yordamchi bu savolga javob bera olmadi. Boshqacha soʻrab koʻring.",
+    "server.assistant_busy": "Yordamchi band: model hozir xaridorlar uchun mahsulotlarni aniqlayapti. Asosiy funksiyalar ishlaydi — bir necha soniyadan keyin yana soʻrang.",
+    "server.assistant_empty": "Savolingizni yozing."
   };
   if (root.I18N) root.I18N.add("uz", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

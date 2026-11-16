@@ -153,7 +153,9 @@ async def public_identify(request: Request, lang: str | None = None, db: Session
     from app.api.routes_catalog import run_identify     # маршруты каталога импортируют воркер: только при первом запросе
     try:
         from app.services.product_namer import normalize_lang
-        result = await run_in_threadpool(run_identify, db, data, normalize_lang(lang))
+        from app.services import model_gate                 # пока идёт распознавание, ИИ-помощник модель не трогает
+        with model_gate.identify_turn():
+            result = await run_in_threadpool(run_identify, db, data, normalize_lang(lang))
     except ApiError as exc:
         if exc.status_code >= 500:                       # очередь, воркер, хранилище кадров: покупателю — без подробностей
             logger.warning("Публичный вход: распознавание недоступно (%s)", exc.code)

@@ -808,7 +808,32 @@
     "server.backup_folder_no_space": "Not enough space: a copy needs about {need} MB, {free} MB is free.",
     "server.backup_folder_error": "The folder could not be checked: {reason}",
     "server.google_unavailable": "Connecting Google Drive is not set up in this version of the program — tell the seller.",
-    "server.google_failed": "Could not start connecting: {reason}"
+    "server.google_failed": "Could not start connecting: {reason}",
+    "nav.assistant": "Assistant",
+    "assistant.intro": "Ask about your products in plain words. The assistant only looks and counts — it changes nothing in the database.",
+    "assistant.your_question": "Your question",
+    "assistant.placeholder": "For example: how many products have no photo?",
+    "assistant.send": "Send",
+    "assistant.new_chat": "New conversation",
+    "assistant.thinking": "The assistant is thinking… usually 5–30 seconds.",
+    "assistant.you": "You",
+    "assistant.bot": "Assistant",
+    "assistant.checked": "Looked at: {what}",
+    "assistant.caution": "This is an AI answer: check anything important on the Products page.",
+    "assistant.no_access": "The assistant is available only to the owner on the shop computer.",
+    "assistant.example_photo": "How many products have no photo?",
+    "assistant.example_dupes": "Find possible duplicates",
+    "assistant.example_price": "Which products have no price?",
+    "assistant.tool.catalog_overview": "catalog summary",
+    "assistant.tool.find_products": "product search",
+    "assistant.tool.products_missing": "missing card details",
+    "assistant.tool.similar_names": "identical names",
+    "assistant.tool.product_details": "product card",
+    "server.assistant_disabled": "The assistant is off on this computer: there is no AI model here (it needs an NVIDIA graphics card with 6 GB or more).",
+    "server.assistant_model_unreachable": "The AI model is not responding. It may still be loading — try again in a minute.",
+    "server.assistant_bad_answer": "The assistant could not answer this question. Try asking differently.",
+    "server.assistant_busy": "The assistant is busy: the model is recognising products for customers. Everything else works — ask again in a few seconds.",
+    "server.assistant_empty": "Type a question."
   };
   if (root.I18N) root.I18N.add("en", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

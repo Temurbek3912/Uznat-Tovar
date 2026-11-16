@@ -6,7 +6,7 @@
 html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-sans); font-size: var(--fs-m); line-height: var(--lh-body); }
 h1, h2, h3, p, dl, dd, ul, fieldset { margin: 0; padding: 0; }
-button, input, select { font: inherit; color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; }
 img { max-width: 100%; display: block; }
 [hidden] { display: none !important; }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
@@ -336,3 +336,15 @@ button.rail__item { width: 100%; background: none; border: 0; font: inherit; fon
 .btn--block { width: 100%; }
 .kbd { display: inline-block; min-width: 1.4em; padding: 0 var(--sp-1); border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: var(--r-s); color: var(--ink-muted); font-size: var(--fs-xs); line-height: 1.5; text-align: center; }
 @media (max-width: 479px) { .signin__card { margin-top: var(--sp-2); padding: var(--sp-5) var(--sp-4); } }
+
+/* Помощник (assistant.html): переписка — карточки «Вы» / «Помощник», текст только textContent */
+.chat { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; max-width: 52rem; }
+.chat__log { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+.chat__msg { padding: var(--sp-3) var(--sp-4); border: 1px solid var(--line); border-radius: var(--r-m); background: var(--surface); min-width: 0; }
+.chat__msg--user { background: var(--surface-2); align-self: flex-end; max-width: 90%; }
+.chat__who { font-size: var(--fs-xs); color: var(--ink-muted); margin-bottom: var(--sp-1); }
+.chat__text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat__seen { font-size: var(--fs-xs); color: var(--ink-muted); margin-top: var(--sp-2); }
+.chat__examples { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.chat__form { display: flex; flex-direction: column; gap: var(--sp-2); }
+.chat__actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }

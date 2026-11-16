@@ -23,6 +23,7 @@
     { id: "users", href: "admin.html#/users", icon: "users", label: "nav.staff", needs: "store:manage", group: "main" },
     { id: "identify", href: "identify.html", icon: "viewfinder", label: "nav.check_photo", needs: "catalog:read", group: "tools", mobile: true },
     { id: "system", href: "admin.html#/system", icon: "activity", label: "nav.system", needs: "store:manage", group: "tools", mobile: true },
+    { id: "assistant", href: "assistant.html", icon: "help", label: "nav.assistant", needs: "assistant:use", group: "tools" },
     { id: "settings", href: "settings.html", icon: "sliders", label: "nav.settings", needs: null, group: "tools", mobile: true }
   ];
 
@@ -41,6 +42,7 @@
       return ["card", "users", "system"].indexOf(sub) !== -1 ? sub : (sub === "products" ? "products" : "system");
     }
     if (page === "identify.html") return "identify";
+    if (page === "assistant.html") return "assistant";
     if (page === "settings.html") return "settings";
     return null;
   }

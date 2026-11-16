@@ -809,7 +809,32 @@
     "server.backup_folder_no_space": "Жой кам: нусха учун тахминан {need} МБ керак, бўш {free} МБ.",
     "server.backup_folder_error": "Папкани текшириб бўлмади: {reason}",
     "server.google_unavailable": "Дастурнинг бу версиясида Google Дискни улаш созланмаган — сотувчига хабар беринг.",
-    "server.google_failed": "Уланишни бошлаб бўлмади: {reason}"
+    "server.google_failed": "Уланишни бошлаб бўлмади: {reason}",
+    "nav.assistant": "Ёрдамчи",
+    "assistant.intro": "Маҳсулотлар ҳақида оддий сўзлар билан сўранг. Ёрдамчи фақат кўради ва санайди — базада ҳеч нарсани ўзгартирмайди.",
+    "assistant.your_question": "Саволингиз",
+    "assistant.placeholder": "Масалан: нечта маҳсулотда расм йўқ?",
+    "assistant.send": "Юбориш",
+    "assistant.new_chat": "Янги суҳбат",
+    "assistant.thinking": "Ёрдамчи ўйлаяпти… одатда 5–30 сония.",
+    "assistant.you": "Сиз",
+    "assistant.bot": "Ёрдамчи",
+    "assistant.checked": "Кўриб чиқди: {what}",
+    "assistant.caution": "Бу сунъий интеллект жавоби: муҳим нарсаларни «Маҳсулотлар» саҳифасида текширинг.",
+    "assistant.no_access": "Ёрдамчи фақат дўкон компьютерида эгаси учун очиқ.",
+    "assistant.example_photo": "Нечта маҳсулотда расм йўқ?",
+    "assistant.example_dupes": "Такрорланиши мумкин бўлган маҳсулотларни топ",
+    "assistant.example_price": "Қайси маҳсулотларда нарх йўқ?",
+    "assistant.tool.catalog_overview": "каталог хулосасини",
+    "assistant.tool.find_products": "маҳсулот қидирувини",
+    "assistant.tool.products_missing": "карточкаларда нима етишмаслигини",
+    "assistant.tool.similar_names": "бир хил номларни",
+    "assistant.tool.product_details": "маҳсулот карточкасини",
+    "server.assistant_disabled": "Бу компьютерда ёрдамчи ўчирилган: бу ерда сунъий интеллект модели йўқ (камида 6 ГБ ли видеокарта керак).",
+    "server.assistant_model_unreachable": "Сунъий интеллект модели жавоб бермаяпти. Эҳтимол, у ҳали юкланмоқда — бир дақиқадан кейин уриниб кўринг.",
+    "server.assistant_bad_answer": "Ёрдамчи бу саволга жавоб бера олмади. Бошқача сўраб кўринг.",
+    "server.assistant_busy": "Ёрдамчи банд: модель ҳозир харидорлар учун маҳсулотларни аниқлаяпти. Асосий функсиялар ишлайди — бир неча сониядан кейин яна сўранг.",
+    "server.assistant_empty": "Саволингизни ёзинг."
   };
   if (typeof module === "object" && module.exports) module.exports = dict;
   if (root.I18N) root.I18N.add("uz-Cyrl", dict);

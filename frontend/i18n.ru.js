@@ -808,7 +808,32 @@
     "server.backup_folder_no_space": "Мало места: для копии нужно около {need} МБ, свободно {free} МБ.",
     "server.backup_folder_error": "Папку не получилось проверить: {reason}",
     "server.google_unavailable": "Подключение Google Диска не настроено в этой версии программы — сообщите продавцу.",
-    "server.google_failed": "Не получилось начать подключение: {reason}"
+    "server.google_failed": "Не получилось начать подключение: {reason}",
+    "nav.assistant": "Помощник",
+    "assistant.intro": "Спросите о товарах обычными словами. Помощник только смотрит и считает — в базе ничего не меняет.",
+    "assistant.your_question": "Ваш вопрос",
+    "assistant.placeholder": "Например: сколько товаров без фото?",
+    "assistant.send": "Отправить",
+    "assistant.new_chat": "Новый разговор",
+    "assistant.thinking": "Помощник думает… обычно 5–30 секунд.",
+    "assistant.you": "Вы",
+    "assistant.bot": "Помощник",
+    "assistant.checked": "Смотрел: {what}",
+    "assistant.caution": "Это ответ ИИ: важное проверьте на странице «Товары».",
+    "assistant.no_access": "Помощник доступен только владельцу на компьютере магазина.",
+    "assistant.example_photo": "Сколько товаров без фото?",
+    "assistant.example_dupes": "Найди возможные дубли",
+    "assistant.example_price": "У каких товаров нет цены?",
+    "assistant.tool.catalog_overview": "сводку каталога",
+    "assistant.tool.find_products": "поиск товаров",
+    "assistant.tool.products_missing": "чего не хватает в карточках",
+    "assistant.tool.similar_names": "одинаковые названия",
+    "assistant.tool.product_details": "карточку товара",
+    "server.assistant_disabled": "Помощник выключен на этом компьютере: здесь нет модели ИИ (нужна видеокарта NVIDIA от 6 ГБ).",
+    "server.assistant_model_unreachable": "Модель ИИ не отвечает. Возможно, она ещё загружается — попробуйте через минуту.",
+    "server.assistant_bad_answer": "Помощник не смог ответить на этот вопрос. Попробуйте спросить по-другому.",
+    "server.assistant_busy": "Помощник занят: модель сейчас узнаёт товары для покупателей. Основные функции работают — спросите ещё раз через несколько секунд.",
+    "server.assistant_empty": "Напишите вопрос."
   };
   if (root.I18N) root.I18N.add("ru", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

@@ -69,7 +69,7 @@ from app.services.catalog_upload import (
     uploads_root,
 )
 from app.services.frame_lifecycle import FRAME_TTL_SECONDS
-from app.services import customer_qr, shop_card
+from app.services import customer_qr, model_gate, shop_card
 from app.services.product_search import apply_search
 from app.services.product_images import (
     DISPLAY,
@@ -875,4 +875,5 @@ async def identify_product(
     Ответ: см. app/services/identify_service.py + demo_mode + by + barcode."""
     data = await read_frame(request, IDENTIFY_MAX_MB * 1024 * 1024)
     from app.services.product_namer import normalize_lang     # noqa: PLC0415
-    return await run_in_threadpool(run_identify, db, data, normalize_lang(lang))
+    with model_gate.identify_turn():                          # пока идёт распознавание, ИИ-помощник модель не трогает
+        return await run_in_threadpool(run_identify, db, data, normalize_lang(lang))

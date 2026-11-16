@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes_admin import router as admin_router
+from app.api.routes_assistant import router as assistant_router
 from app.api.routes_auth import router as auth_router
 from app.api.routes_catalog import router as catalog_router
 from app.api.routes_public import router as public_router
@@ -152,6 +153,7 @@ else:
     app.include_router(catalog_router)
     app.include_router(stores_router)
     app.include_router(admin_router)
+    app.include_router(assistant_router)       # ИИ-помощник владельца (документ 16, этап A1): право assistant:use — только admin
     if normalize_listener(settings.app_listener) != LISTENER_ADMIN:
         app.include_router(public_router)
 

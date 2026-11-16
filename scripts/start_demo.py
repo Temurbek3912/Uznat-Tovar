@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Callable
 
 from app.core import hardware
-from scripts import phone_url, public_access
+from scripts import phone_url, public_access, vision_engine
 from scripts.preflight import parse_host_port
 from scripts.setup_link import write_run_mode
 
@@ -182,15 +182,50 @@ def _find_lms(which) -> str | None:
     return str(candidate) if candidate.is_file() else None
 
 
-def start_local_vision(d: "Deps", settings) -> None:
-    """«Назвать товар вне базы» (документ 07, §10.6) по фото — локальная модель в LM Studio на этом компьютере. Включаем её сервер
-    (модель LM Studio загружает сама при первом запросе). Не получилось — не беда: штрихкод и поиск по базе работают и без неё."""
+def _local_vision_url(settings) -> str:
+    """Адрес модели «зрение + текст» на этом компьютере ("" — выключена или указан другой компьютер)."""
     url = (getattr(settings, "naming_vision_url", "") or "") if getattr(settings, "naming_enabled", False) else ""
-    if not url or not any(h in url for h in ("127.0.0.1", "localhost")):
+    return url if any(h in url for h in ("127.0.0.1", "localhost")) else ""
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def builtin_vision(d: "Deps", settings, gpu_name: str | None) -> tuple[Service, str] | None:
+    """Свой движок модели «зрение + текст» (scripts/vision_engine.py, models/vision): служба и адрес для NAMING_VISION_URL.
+    None — модель выключена, указан другой компьютер или движок не установлен (тогда — LM Studio, если она есть)."""
+    if not _local_vision_url(settings) or not vision_engine.is_installed(d.root):
+        return None
+    device = d.pick_device(vision_engine.engine_exe(d.root), gpu_name)
+    port = d.free_port()
+    d.out("Модель «зрение + текст»: свой движок программы, " + ("на видеокарте" if device != "none" else "на процессоре")
+          + " (первый ответ — после загрузки модели, около 10 с; журнал logs/vision.log).")
+    return Service("vision", vision_engine.server_argv(d.root, port, device), optional=True), f"http://127.0.0.1:{port}/v1"
+
+
+def vision_service(d: "Deps", settings, gpu_name: str | None, child_env: dict) -> Service | None:
+    """Модель «зрение + текст»: свой движок (служба запускается и останавливается вместе с программой, адрес — в child_env)
+    или, если его нет, LM Studio."""
+    found = builtin_vision(d, settings, gpu_name)
+    if found is None:
+        start_local_vision(d, settings)
+        return None
+    child_env["NAMING_VISION_URL"] = found[1]
+    return found[0]
+
+
+def start_local_vision(d: "Deps", settings) -> None:
+    """Запасной путь, если своего движка нет (models/vision не скачана): локальная модель в LM Studio на этом компьютере.
+    Включаем её сервер. Не получилось — не беда: штрихкод и поиск по базе работают и без неё."""
+    if not _local_vision_url(settings):
         return
     lms = d.find_lms(d.which)
     if not lms:
-        d.out("LM Studio не найден — товары вне базы будут называться только по штрихкоду (docs/RUNBOOK.md, «Назвать любой товар»).")
+        d.out("Модель «зрение + текст» не установлена — товары вне базы будут называться только по штрихкоду. "
+              "Установить: запустите «Установить.bat» ещё раз (скачает её сам).")
         return
     try:
         res = d.run_cmd([lms, "server", "start"], cwd=str(d.root), capture_output=True, timeout=60)
@@ -255,6 +290,9 @@ class Deps:
     render_qr: Callable[[str], str | None] = phone_url.render_qr
     worker_status: Callable[[Path], dict | None] = _worker_status
     find_lms: Callable = _find_lms
+    pick_device: Callable = vision_engine.pick_device
+    free_port: Callable[[], int] = _free_port
+    tie_child: Callable = vision_engine.tie_to_this_process
     probe_hw: Callable[[], object] = _probe_hw
     apply_env: Callable[[dict], None] = os.environ.update
     hf_cache: Callable[[], Path] = _hf_model_cache
@@ -534,10 +572,11 @@ def run(opts: Options, deps: Deps | None = None, services: list[Service] | None 
     notice = None      # детектор полок «Узнать товар» не нужен (документ 07, §3.1): предупреждение о его весах больше не показывается
     if notice:
         out(notice)
-    if settings is not None:
-        start_local_vision(d, settings)
     status_file = d.root / "logs" / "worker_status.json"
     child_env = {**d.environ, "ML_STATUS_FILE": str(status_file)}     # где воркер скажет «модели загружены» (ждём его ниже)
+    vision = None
+    if settings is not None and (hw is None or hardware.plan_lite(hw).vision):
+        vision = vision_service(d, settings, getattr(hw, "gpu_name", None), child_env)
     if settings is not None:
         checks = [("Postgres", settings.database_url, 5432), ("Redis", settings.queue_broker_url, 6379)]
         frames_url = (getattr(settings, "frames_redis_url", "") or "").strip()
@@ -571,7 +610,7 @@ def run(opts: Options, deps: Deps | None = None, services: list[Service] | None 
     plan = public_access_plan(opts, d, settings)
     customer_port = apply_public_plan(plan, d, opts, settings, child_env)
     services = services if services is not None else service_commands(d.python, opts.port, d.platform, tls, customer_port)
-    services = with_tunnel(services, plan, customer_port)
+    services = with_tunnel(services, plan, customer_port) + ([vision] if vision else [])
     return _launch(opts, d, services, child_env, status_file, tls, notice, public_url=plan.shop_url if customer_port else "")
 
 
@@ -590,6 +629,11 @@ def _launch(opts: Options, d: Deps, services: list[Service], child_env: dict, st
         for svc in services:
             logf = open(log_dir / f"{svc.name}.log", "wb")
             procs.append((svc, d.popen(svc.argv, cwd=str(d.root), stdout=logf, stderr=subprocess.STDOUT, env=child_env), logf))
+            if svc.name == "vision":
+                try:
+                    d.tie_child(procs[-1][1])        # закроется и при аварийном выходе программы
+                except Exception:        # noqa: BLE001 — не получилось: остановится обычным путём (Ctrl+C, закрытие окна)
+                    pass
             out(f"  запущено: {svc.name}  (журнал: logs/{svc.name}.log)")
 
         health = f"{'https' if tls else 'http'}://127.0.0.1:{opts.port}/health"
@@ -674,11 +718,12 @@ def run_lite(opts: Options, d: Deps, services: list[Service] | None = None) -> i
         if line.startswith("[4/4]") and "уже есть" not in line:    # первый запуск: что с администратором (пароля в выводе нет)
             out("  " + line.strip())
 
+    vision = None
     if plan.vision:
         try:
-            start_local_vision(d, d.load_settings())
+            vision = vision_service(d, d.load_settings(), hw.gpu_name if plan.device == "auto" else None, child_env)
         except Exception:        # noqa: BLE001 — без модели «зрение + текст» программа работает (штрихкод и база)
-            pass
+            vision = None
 
     if d.port_busy(opts.port):
         out(f"Порт {opts.port} уже занят — возможно, программа уже запущена в другом окне. "
@@ -692,7 +737,7 @@ def run_lite(opts: Options, d: Deps, services: list[Service] | None = None) -> i
     plan = public_access_plan(opts, d, settings)
     customer_port = apply_public_plan(plan, d, opts, settings, child_env)
     services = services if services is not None else lite_commands(d.python, opts.port, tls, customer_port)
-    services = with_tunnel(services, plan, customer_port)
+    services = with_tunnel(services, plan, customer_port) + ([vision] if vision else [])
     return _launch(opts, d, services, child_env, status_file, tls, public_url=plan.shop_url if customer_port else "")
 
 

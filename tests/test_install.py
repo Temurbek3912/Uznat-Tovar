@@ -231,14 +231,18 @@ def test_full_run_stops_on_a_computer_that_cannot_work(tmp_path):
 def test_full_run_goes_through_all_steps(tmp_path):
     root = _root(tmp_path)
     rec, lines = Recorder(), []
+    fetched = []
     d = ins.Deps(run=rec, probe_hw=lambda: Hardware(ram_gb=16, cores=8, gpu_name="NVIDIA GeForce RTX 5060", vram_gb=8),
-                 driver=lambda: "581.57", windows=lambda: (10, 26100), free_gb=lambda p: 100, out=lines.append)
+                 driver=lambda: "581.57", windows=lambda: (10, 26100), free_gb=lambda p: 100, out=lines.append,
+                 fetch_vision=lambda root, out: fetched.append(root) or True)
     opts = ins.Options(root=root, check=False)
     assert ins.run(opts, d) == 0
     text = "\n".join(lines)
     for n in range(1, 7):
         assert f"[{n}/6]" in text
-    assert "cu130" in text and "УСТАНОВКА ЗАВЕРШЕНА" in text and "LM Studio" in text
+    assert "cu130" in text and "УСТАНОВКА ЗАВЕРШЕНА" in text and "LM Studio" not in text
+    assert "название товара не из базы по фото — да" in text and fetched == [root]       # своя модель, без LM Studio
+    assert "модель «зрение + текст» (models/vision)" in text
     assert any("scripts.fetch_models" in c for c in rec.joined())
     assert (root / ".env").is_file()
 
@@ -325,3 +329,30 @@ def test_package_leaves_out_tests_and_old_docs():
     if res.returncode == 0:
         out = res.stdout.splitlines()
         assert out[0].endswith("set") and out[1].endswith("unspecified")
+
+
+def test_weak_computer_does_not_download_the_vision_model_and_a_failed_download_is_a_warning(tmp_path):
+    root = _root(tmp_path)
+    lines = []
+    d = ins.Deps(run=Recorder(), probe_hw=lambda: Hardware(ram_gb=8, cores=4), windows=lambda: (10, 26100),
+                 free_gb=lambda p: 100, out=lines.append, fetch_vision=lambda root, out: pytest.fail("не скачивать"))
+    assert ins.run(ins.Options(root=root, check=False), d) == 0
+    assert "название товара не из базы по фото — нет" in "\n".join(lines)
+
+    lines.clear()
+    d = ins.Deps(run=Recorder(), probe_hw=lambda: Hardware(ram_gb=16, cores=8, gpu_name="NVIDIA GeForce RTX 5060", vram_gb=8),
+                 driver=lambda: "581.57", windows=lambda: (10, 26100), free_gb=lambda p: 100, out=lines.append,
+                 fetch_vision=lambda root, out: False)
+    assert ins.run(ins.Options(root=root, check=False), d) == 0                 # без модели программа всё равно работает
+    text = "\n".join(lines)
+    assert "не скачалась целиком" in text and "Установить.bat" in text
+
+
+def test_disk_space_counts_the_vision_model_only_when_it_will_be_downloaded(tmp_path):
+    root = _root(tmp_path)
+    lines = []
+    gpu = Hardware(ram_gb=16, cores=8, gpu_name="NVIDIA GeForce RTX 5060", vram_gb=8)
+    d = ins.Deps(run=Recorder(), probe_hw=lambda: gpu, driver=lambda: "581.57", windows=lambda: (10, 26100),
+                 free_gb=lambda p: ins.MIN_FREE_GB_GPU + 1, out=lines.append, fetch_vision=lambda root, out: True)
+    assert ins.run(ins.Options(root=root, check=False), d) == 1                 # 15 ГБ мало: ещё 4 ГБ на модель
+    assert any("[НЕЛЬЗЯ]" in ln and "18" in ln for ln in lines)

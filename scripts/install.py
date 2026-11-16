@@ -13,7 +13,9 @@
   2. Своя копия Python программы (.venv) и пакеты. PyTorch — под видеокарту (CUDA по версии драйвера) или без неё.
      Пакеты не кэшируются на системном диске (--no-cache-dir).
   3. Файл настроек .env: ключи шифрования создаются, если пустые; заполненное не меняется.
-  4. Модели распознавания — в папку программы models/hf (scripts/fetch_models.py), чтобы магазин работал без интернета.
+  4. Модели распознавания — в папку программы models/hf (scripts/fetch_models.py), чтобы магазин работал без интернета. Если
+     компьютер тянет модель «зрение + текст» — ещё и её с её движком в models/vision (scripts/vision_engine.py, около 3,1 ГБ):
+     программа запускает её сама, LM Studio и другие программы не нужны.
   5. Ярлык «Узнать товар» на рабочем столе и автозапуск при входе в Windows (окно свёрнуто, без браузера). Запуск —
      облегчённый режим (start_lite.bat: без Docker, база в data/lite): он сам подстраивается под компьютер при каждом запуске.
   6. Пробный запуск на свободном порту: программа поднялась, страница покупателя открывается, распознавание отвечает.
@@ -42,7 +44,7 @@ from typing import Callable
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from app.core import hardware  # noqa: E402 — только стандартная библиотека
-from scripts import make_shortcut  # noqa: E402
+from scripts import make_shortcut, vision_engine  # noqa: E402
 
 MIN_PYTHON = (3, 12)
 MIN_FREE_GB = 10.0                 # пакеты без видеокарты ≈ 2 ГБ, модели ≈ 0,8 ГБ, база и фото товаров
@@ -123,8 +125,8 @@ def what_will_work(plan: "hardware.LitePlan", hw: "hardware.Hardware") -> list[s
              "товар не из базы по штрихкоду (открытые базы в интернете) — да",
              "вид любого товара («это напиток», «это обувь») — да"]
     if plan.vision:
-        lines.append("название товара не из базы по фото — да, если установить LM Studio и модель qwen3-vl-4b "
-                     "(docs/RUNBOOK.md, «Назвать любой товар»)")
+        lines.append("название товара не из базы по фото — да (модель скачается сейчас, около "
+                     f"{vision_engine.DOWNLOAD_GB:.1f} ГБ; программа запускает её сама)")
     else:
         lines.append("название товара не из базы по фото — нет (нужна видеокарта NVIDIA от 6 ГБ и память от 12 ГБ)")
     lines.append("распознавание по виду на " + ("видеокарте" if plan.device == "auto" and hw.gpu_name else "процессоре"))
@@ -230,6 +232,7 @@ class Deps:
     is_64bit: bool = sys.maxsize > 2**32
     free_gb: Callable[[Path], float] = lambda p: shutil.disk_usage(p).free / 2**30
     free_port: Callable[[], int] = _free_port
+    fetch_vision: Callable = vision_engine.fetch
     http: Callable = _http
     kill_tree: Callable = _kill_tree
     sleep: Callable[[float], None] = time.sleep
@@ -333,13 +336,22 @@ def step_env(opts: Options, d: Deps, rep: Report) -> None:
                             "резервную копию базы не восстановить полностью.")
 
 
-def step_models(opts: Options, d: Deps, rep: Report) -> None:
+def step_models(opts: Options, d: Deps, rep: Report, vision: bool = False) -> None:
     env = {**os.environ, "HF_HOME": str(opts.root / "models" / "hf")}
     res = d.run([str(venv_python(opts.root)), "-m", "scripts.fetch_models"], cwd=str(opts.root), env=env)
     if _ok(res):
         rep.done.append("модели распознавания (models/hf)")
     else:
         rep.warnings.append("Модели не скачались (нет интернета?). Программа скачает их сама при первом запуске с интернетом.")
+    if not vision:
+        return
+    d.out(f"  модель «зрение + текст» и её движок (около {vision_engine.DOWNLOAD_GB:.1f} ГБ, в models/vision) — "
+          "при медленном интернете это долго; оборвётся — следующий запуск установки докачает:")
+    if d.fetch_vision(opts.root, d.out):
+        rep.done.append("модель «зрение + текст» (models/vision): название товара не из базы по фото")
+    else:
+        rep.warnings.append("Модель «зрение + текст» не скачалась целиком. Запустите «Установить.bat» ещё раз — докачается. "
+                            "Без неё товар не из базы называется только по штрихкоду.")
 
 
 def step_shortcuts(opts: Options, d: Deps, rep: Report) -> None:
@@ -451,13 +463,15 @@ def run(opts: Options, d: Deps | None = None) -> int:
     driver = d.driver() if hw.gpu_name else None
     variant, why = torch_variant(hw.gpu_name, driver, opts.cpu)
     need = MIN_FREE_GB if variant == "cpu" else MIN_FREE_GB_GPU
+    plan = hardware.plan_lite(hw, force_cpu=variant == "cpu")
+    if plan.vision and not vision_engine.is_installed(opts.root):
+        need += vision_engine.DISK_GB
     items = check_computer(hw, free_gb=d.free_gb(opts.root), windows=d.windows(), is_64bit=d.is_64bit, need_gb=need)
     for level, text in items:
         out(f"  [{level}] {text}")
     if any(level == FAIL for level, _ in items):
         out("\nНа этом компьютере программу установить нельзя (см. «НЕЛЬЗЯ» выше).")
         return 1
-    plan = hardware.plan_lite(hw, force_cpu=variant == "cpu")
     out(f"  PyTorch: {'без видеокарты' if variant == 'cpu' else variant} — {why}")
     out("  Что будет работать:")
     for line in what_will_work(plan, hw):
@@ -472,7 +486,7 @@ def run(opts: Options, d: Deps | None = None) -> int:
 
     _step(d, 4, "Модели распознавания")
     if opts.models:
-        step_models(opts, d, rep)
+        step_models(opts, d, rep, vision=plan.vision)
     else:
         out("  пропущено")
 

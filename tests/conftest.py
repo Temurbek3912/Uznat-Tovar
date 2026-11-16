@@ -14,6 +14,20 @@ import os
 os.environ.setdefault("AUTH_THROTTLE_BACKEND", "memory")
 
 
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_vision_download(monkeypatch):
+    """Тесты не скачивают модель «зрение + текст» (3 ГБ) и не копируют её из LM Studio этого компьютера (scripts/vision_engine.py)."""
+    from scripts import vision_engine
+
+    def refuse(*args, **kwargs):
+        raise OSError("tests: no downloads")
+    monkeypatch.setattr(vision_engine, "http_download", refuse)
+    monkeypatch.setattr(vision_engine, "lmstudio_copy", lambda part, home=None: None)
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "environment: проверка соответствия окружения требованиям проекта (не логики кода)")
 

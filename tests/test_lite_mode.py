@@ -119,6 +119,62 @@ def test_lite_mode_runs_tasks_in_process_one_at_a_time_with_results_for_progress
     assert data["status"] == "SUCCESS" and data["result"] == "c"                   # «ход добавления товара» виден
 
 
+CONCURRENT_GET_PROBE = r"""
+import json, threading
+from app.worker import celery_app
+
+started, release = threading.Event(), threading.Event()
+
+@celery_app.task(name="test.busy")
+def busy():
+    started.set(); release.wait(10); return "busy"
+
+@celery_app.task(name="test.quick")
+def quick():
+    return "quick"
+
+done = quick.apply_async()                    # результат второго снимка уже готов
+worker = threading.Thread(target=lambda: busy.apply_async())
+worker.start(); started.wait(10)              # а в другом потоке идёт распознавание первого
+out = {}
+try:
+    done.get(timeout=5, propagate=False)
+    out["plain"] = "ok"
+except RuntimeError:
+    out["plain"] = "raised"
+out["fixed"] = done.get(timeout=5, propagate=False, disable_sync_subtasks=False)
+release.set(); worker.join()
+print(json.dumps(out))
+"""
+
+
+def test_lite_mode_second_photo_gets_its_answer_while_another_photo_is_being_recognised(tmp_path):
+    # Замер 2026-11-16: два покупателя одновременно — второй получал «недоступно» (Celery принимал get() из запроса за get() внутри
+    # задачи). run_identify ждёт ответ с disable_sync_subtasks=False — так get() работает и пока чужая задача идёт.
+    env = {**os.environ, "LITE_MODE": "1", "QUEUE_BROKER_URL": "memory://", "FRAMES_REDIS_URL": "",
+           "DATABASE_URL": "sqlite:///" + (tmp_path / "t.db").as_posix(), "PYTHONIOENCODING": "utf-8"}
+    out = subprocess.run([sys.executable, "-c", CONCURRENT_GET_PROBE], cwd=ROOT, env=env, capture_output=True, text=True,
+                         encoding="utf-8", timeout=120)
+    assert out.returncode == 0, out.stderr[-2000:]
+    data = json.loads(out.stdout.strip().splitlines()[-1])
+    assert data == {"plain": "raised", "fixed": "quick"}
+    text = (ROOT / "app" / "api" / "routes_catalog.py").read_text(encoding="utf-8")
+    assert "propagate=False, disable_sync_subtasks=False)" in text
+
+
+def test_lite_sqlite_pool_is_large_enough_for_a_crowd(tmp_path):
+    # Замер 2026-11-16: при 100 покупателях список товаров падал с 500 — стандартных 5 + 10 соединений SQLite не хватало.
+    probe = ("import json; from app.db.session import engine; "
+             "print(json.dumps([engine.pool.size(), engine.pool._max_overflow]))")
+    env = {**os.environ, "LITE_MODE": "1", "QUEUE_BROKER_URL": "memory://", "FRAMES_REDIS_URL": "",
+           "DATABASE_URL": "sqlite:///" + (tmp_path / "t.db").as_posix(), "PYTHONIOENCODING": "utf-8"}
+    out = subprocess.run([sys.executable, "-c", probe], cwd=ROOT, env=env, capture_output=True, text=True,
+                         encoding="utf-8", timeout=120)
+    assert out.returncode == 0, out.stderr[-2000:]
+    size, overflow = json.loads(out.stdout.strip().splitlines()[-1])
+    assert size + overflow >= 100
+
+
 def test_full_mode_keeps_the_redis_queue():
     from app.worker import celery_app
     assert not celery_app.conf.task_always_eager

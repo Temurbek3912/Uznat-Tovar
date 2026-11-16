@@ -97,5 +97,5 @@ def test_user_facing_texts_do_not_leak_internals_and_status_codes_are_plain_numb
 
 def test_identify_waits_for_the_worker_with_a_timeout_and_answers_504_on_timeout():
     text = (ROOT / "app" / "api" / "routes_catalog.py").read_text(encoding="utf-8")
-    assert "task.get(timeout=IDENTIFY_WAIT_SECONDS, propagate=False)" in text
+    assert "task.get(timeout=IDENTIFY_WAIT_SECONDS, propagate=False, disable_sync_subtasks=False)" in text
     assert 'ApiError(504, "identify_timeout"' in text and 'ApiError(503, "queue_unavailable"' in text

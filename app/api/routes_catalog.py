@@ -740,7 +740,11 @@ def run_identify(db: Session, data: bytes, lang: str = "ru") -> dict:
             raise ApiError(503, "queue_unavailable",
                            "Очередь задач сейчас недоступна. Проверьте, что система запущена (docker compose ps), и повторите.") from exc
         try:
-            result = task.get(timeout=IDENTIFY_WAIT_SECONDS, propagate=False)
+            # disable_sync_subtasks=False: в облегчённом режиме задачи выполняются в процессе API по одной, и пока один снимок
+            # распознаётся в своём потоке, Celery считает «идёт задача» для всего процесса — get() второго снимка без этого
+            # флага падал (RuntimeError «Never call result.get() within a task») и покупатель видел «недоступно». Здесь get()
+            # вызывается из запроса, а не из задачи, поэтому проверка Celery не нужна (замер 2026-11-16: было 1 из 20, стало 200 из 200).
+            result = task.get(timeout=IDENTIFY_WAIT_SECONDS, propagate=False, disable_sync_subtasks=False)
         except Exception as exc:  # noqa: BLE001 — celery.exceptions.TimeoutError и ошибки бэкенда
             raise ApiError(504, "identify_timeout",
                            "Система не успела ответить. Проверьте, что она запущена и не занята (docker compose ps), и повторите.") from exc

@@ -55,7 +55,7 @@ class FakeAsync:
     def ready(self):
         return self.status in ("SUCCESS", "FAILURE")
 
-    def get(self, timeout=None, propagate=True):
+    def get(self, timeout=None, propagate=True, disable_sync_subtasks=True):
         if isinstance(self.result, TimeoutError):
             raise self.result
         return self.result

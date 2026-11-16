@@ -60,7 +60,7 @@ class FakeAsync:
     def __init__(self, result):
         self.result = result
 
-    def get(self, timeout=None, propagate=True):
+    def get(self, timeout=None, propagate=True, disable_sync_subtasks=True):
         if isinstance(self.result, TimeoutError):
             raise self.result
         return self.result
@@ -94,6 +94,10 @@ def env(monkeypatch, tmp_path):
     routes_public = importlib.import_module("app.api.routes_public")
     routes_public.rate_limit.reset()
     e.routes = routes_public
+    # «Не узнали» иначе идёт к настоящей модели «зрение + текст» (LM Studio на этом ПК): когда она занята, 12 снимков не укладывались
+    # в минуту и test_rate_limit_per_device падал (полный прогон 2026-11-16). Название товара вне базы здесь не проверяется.
+    from app.services import product_namer
+    monkeypatch.setattr(product_namer, "name_product", lambda *a, **k: None)
     monkeypatch.setenv("MEDIA_ROOT", str(tmp_path / "media"))
 
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)

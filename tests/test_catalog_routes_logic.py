@@ -255,7 +255,7 @@ class FakeAsync:
     def __init__(self, result, ident):
         self.id, self._result = ident, result
 
-    def get(self, timeout=None, propagate=True):
+    def get(self, timeout=None, propagate=True, disable_sync_subtasks=True):
         if isinstance(self._result, TimeoutError):
             raise self._result
         return self._result

@@ -8,9 +8,16 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import get_settings
 from app.db.url import normalize_database_url
 
+SQLITE_POOL = {"pool_size": 20, "max_overflow": 80}
+
 _settings = get_settings()
 # normalize_database_url: явный драйвер psycopg 3 (см. app/db/url.py), чтобы выбор драйвера не зависел от написания URL.
-engine = create_engine(normalize_database_url(_settings.database_url), pool_pre_ping=True)
+_url = normalize_database_url(_settings.database_url)
+# Файл SQLite (облегчённый режим): соединения дешёвые, а стандартных 5 + 10 не хватало — при 100 покупателях одновременно
+# список товаров падал с ошибкой 500 («QueuePool limit ... reached», замер 2026-11-16). Запросов в обработке одновременно не больше
+# числа потоков сервера (40) плюс задачи распознавания, поэтому 100 — с запасом.
+_pool = SQLITE_POOL if _url.startswith("sqlite") and ":memory:" not in _url else {}
+engine = create_engine(_url, pool_pre_ping=True, **_pool)
 
 if engine.dialect.name == "sqlite" and _settings.lite_mode:
     # облегчённый режим (документ 11, §10): файл SQLite. WAL — чтение не ждёт записи; busy_timeout — короткая запись другого

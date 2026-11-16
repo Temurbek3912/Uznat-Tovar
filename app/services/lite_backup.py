@@ -5,10 +5,12 @@
 индекс каталога; фото товаров (`<media>/catalog-uploads`); ключи входа и камер из .env (без них после восстановления на другом
 компьютере не расшифровать второй фактор и адреса камер). Снимки полок (`shelf-images`) и временные кадры не входят.
 
-Куда: всегда в папку на этом компьютере (`backups/magazin` программы или BACKUP_LOCAL_DIR) и, если найдена, в папку облака:
-«Google Диск для компьютера» (диск «Мой диск»/«My Drive») или папка BACKUP_CLOUD_DIR (любая синхронизируемая папка: Яндекс Диск,
-OneDrive). Программа облака сама отправляет файлы в интернет — ни ключей, ни паролей Google наша программа не знает.
-BACKUP_CLOUD_DIR=off — облако не использовать.
+Куда: всегда в папку на этом компьютере — выбранную администратором в «Настройках» (`<media>/backup_settings.json`,
+например D:/Копии или флешка), иначе BACKUP_LOCAL_DIR, иначе `backups/magazin` программы. Выбранный диск недоступен
+(флешку вынули) — копия всё равно делается, в стандартную папку, а в «Настройках» видно предупреждение.
+Облако — Google Диск напрямую (кнопка «Подключить Google Диск», app/services/gdrive_backup.py): готовая копия с компьютера
+отправляется туда отдельным шагом в фоне; нет интернета — копия на компьютере всё равно есть, отправка повторится.
+Для знающих: BACKUP_CLOUD_DIR — любая синхронизируемая папка (Яндекс Диск, OneDrive), туда копия кладётся как в папку.
 
 Устройство папки (одинаково на компьютере и в облаке):
 
@@ -70,15 +72,19 @@ SPARE_BYTES = 200 * 1024 * 1024       # запас места сверх раз�
 ENV_LOCAL_DIR = "BACKUP_LOCAL_DIR"
 ENV_CLOUD_DIR = "BACKUP_CLOUD_DIR"
 KEY_NAMES = ("AUTH_SECRET_KEY", "CAMERA_SECRET_KEY")
-GOOGLE_DRIVE_NAMES = ("My Drive", "Мой диск")
-GOOGLE_HOME_NAMES = ("My Drive", "Мой диск", "Google Drive", "Google Диск")
+SETTINGS_FILE = "backup_settings.json"
 
 _COPY_RE = re.compile(r"^" + re.escape(COPY_PREFIX) + r"\d{4}-\d{2}-\d{2}_\d{6}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class BackupError(RuntimeError):
-    """Копию сделать или проверить нельзя. Текст — для администратора магазина."""
+    """Копию сделать или проверить нельзя. Текст — для администратора магазина; code/params — для перевода в «Настройках»."""
+
+    def __init__(self, message: str, code: str = "", params: dict | None = None):
+        super().__init__(message)
+        self.code = code
+        self.params = dict(params or {})
 
 
 @dataclass(frozen=True)
@@ -86,6 +92,7 @@ class Destination:
     kind: str          # "local" | "cloud"
     root: Path         # папка «Узнать товар — копии»
     keep: int
+    fallback_from: str = ""     # выбранная папка недоступна (флешку вынули) — копия идёт в стандартную, это — какая была
 
 
 @dataclass
@@ -106,47 +113,172 @@ class CopyInfo:
 
 # ----------------------------------------------------------------------------------------------------------- куда копировать
 
-def find_google_drive(home: Path | None = None, drives: list[str] | None = None) -> Path | None:
-    """Папка «Мой диск» программы «Google Диск для компьютера»: обычно диск G:, иначе в папке пользователя."""
-    letters = drives if drives is not None else [c for c in string.ascii_uppercase if c not in "ABC"] + ["C"]
-    for letter in letters:
-        for name in GOOGLE_DRIVE_NAMES:
-            candidate = Path(f"{letter}:/") / name
-            try:
-                if candidate.is_dir():
-                    return candidate
-            except OSError:
-                continue
-    home = home if home is not None else Path.home()
-    for name in GOOGLE_HOME_NAMES:
-        candidate = home / name
+_settings_lock = threading.Lock()
+# Чтение и запись маленьких файлов настроек и состояния — по очереди: в Windows файл нельзя заменить, пока его читает
+# другой поток («Настройки» опрашивают состояние во время отправки в облако). Найдено повторными прогонами
+# tests/test_gdrive_backup.py 2026-11-16 (PermissionError примерно 1 раз из 10). Программа — один процесс, замка хватает;
+# повторы замены остаются на случай антивируса.
+_file_lock = threading.RLock()
+
+
+def read_json(path: Path) -> dict:
+    """Словарь из JSON-файла; нет файла или он испорчен — пустой."""
+    try:
+        with _file_lock:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def read_settings(media_root: Path | None) -> dict:
+    """Выбор администратора из «Настроек» (`<media>/backup_settings.json`): local_dir — своя папка, google — подключение."""
+    if media_root is None:
+        return {}
+    return read_json(media_root / SETTINGS_FILE)
+
+
+def write_json(path: Path, data) -> None:
+    """Записать JSON целиком или никак (под _file_lock; замена с повторами, если файл держит антивирус)."""
+    from app.pipeline.index_store import replace_with_retry
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    with _file_lock:
         try:
-            if candidate.is_dir():
-                return candidate
-        except OSError:
-            continue
-    return None
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+            replace_with_retry(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
 
-def destinations(root: Path, environ: dict | None = None, *, home: Path | None = None,
-                 drives: list[str] | None = None) -> list[Destination]:
-    """Первая — всегда папка на этом компьютере; вторая — облако, если найдено."""
+def update_settings(media_root: Path, change) -> dict:
+    """Прочитать — изменить (change(dict) -> dict) — записать целиком, под замком (папка и Google пишутся из разных потоков)."""
+    with _settings_lock:
+        data = change(read_settings(media_root))
+        write_json(media_root / SETTINGS_FILE, data)
+        return data
+
+
+def _folder_of(path: Path) -> Path:
+    return path if path.name == FOLDER_NAME else path / FOLDER_NAME
+
+
+def _anchor_ok(path: Path) -> bool:
+    try:
+        return Path(path.anchor or path).exists()
+    except OSError:
+        return False
+
+
+def destinations(root: Path, environ: dict | None = None, *, chosen: str = "") -> list[Destination]:
+    """Первая — всегда папка на этом компьютере: выбранная в «Настройках» (chosen), иначе BACKUP_LOCAL_DIR, иначе
+    backups/magazin программы. Выбранный диск недоступен (флешку вынули) — стандартная папка, с пометкой fallback_from.
+    Вторая — папка облака BACKUP_CLOUD_DIR (любая синхронизируемая папка), если задана. Google Диск напрямую —
+    app/services/gdrive_backup.py, он идёт отдельным шагом после копии на компьютере."""
     env = os.environ if environ is None else environ
-    local = Path(env.get(ENV_LOCAL_DIR) or (root / "backups" / "magazin"))
-    out = [Destination("local", local / FOLDER_NAME if local.name != FOLDER_NAME else local, KEEP_LOCAL)]
+    default = Path(env.get(ENV_LOCAL_DIR) or (root / "backups" / "magazin"))
+    fallback = ""
+    local = default
+    if chosen.strip():
+        wanted = Path(chosen.strip())
+        if _anchor_ok(wanted):
+            local = wanted
+        else:
+            fallback = chosen.strip()
+    out = [Destination("local", _folder_of(local), KEEP_LOCAL, fallback)]
     cloud_raw = (env.get(ENV_CLOUD_DIR) or "").strip()
-    if cloud_raw.lower() in ("off", "no", "0", "нет"):
-        return out
-    cloud = Path(cloud_raw) if cloud_raw else find_google_drive(home, drives)
-    if cloud is not None:
-        out.append(Destination("cloud", cloud / FOLDER_NAME if cloud.name != FOLDER_NAME else cloud, KEEP_CLOUD))
+    if cloud_raw and cloud_raw.lower() not in ("off", "no", "0", "нет"):
+        out.append(Destination("cloud", _folder_of(Path(cloud_raw)), KEEP_CLOUD))
     return out
 
 
-def destinations_from_settings(root: Path, settings) -> list[Destination]:
-    """Места копий по настройкам (.env или переменные: BACKUP_LOCAL_DIR, BACKUP_CLOUD_DIR)."""
+def destinations_from_settings(root: Path, settings, media_root: Path | None = None) -> list[Destination]:
+    """Места копий: выбор в «Настройках» (backup_settings.json в media_root) и .env (BACKUP_LOCAL_DIR, BACKUP_CLOUD_DIR)."""
     return destinations(root, {ENV_LOCAL_DIR: getattr(settings, "backup_local_dir", "") or "",
-                               ENV_CLOUD_DIR: getattr(settings, "backup_cloud_dir", "") or ""})
+                               ENV_CLOUD_DIR: getattr(settings, "backup_cloud_dir", "") or ""},
+                        chosen=str(read_settings(media_root).get("local_dir") or ""))
+
+
+def shop_bytes(media_root: Path, db_file: Path | None = None) -> int:
+    """Сколько места займёт первая копия: база + фото + индекс (сжатие базы не учитываем — с запасом)."""
+    total = 0
+    for p in ([db_file] if db_file else []):
+        try:
+            total += p.stat().st_size
+        except OSError:
+            pass
+    for sub in (UPLOADS_DIR, INDEX_DIR):
+        d = media_root / sub
+        if d.is_dir():
+            for f in d.rglob("*"):
+                try:
+                    if f.is_file():
+                        total += f.stat().st_size
+                except OSError:
+                    pass
+    return total
+
+
+def check_folder(raw: str, *, media_root: Path, need_bytes: int = 0) -> Path:
+    """Проверить папку, которую администратор вписал в «Настройках»: полный путь, диск есть, писать можно, места хватает.
+    Папки нет — создаётся. -> путь (как вписан). Ошибка — BackupError с понятным текстом."""
+    text = (raw or "").strip().strip('"').strip()
+    if not text:
+        raise BackupError("Впишите папку, например D:\\Копии.", "backup_folder_empty")
+    path = Path(text)
+    if not path.is_absolute() or (os.name == "nt" and not path.drive):
+        raise BackupError("Нужен полный путь с буквой диска, например D:\\Копии или E:\\.", "backup_folder_relative")
+    if not _anchor_ok(path):
+        raise BackupError(f"Диска {path.anchor or text} нет. Вставьте флешку или выберите другой диск.", "backup_folder_no_drive",
+                          {"drive": path.anchor or text})
+    try:
+        target = path.resolve()
+        media = media_root.resolve()
+    except OSError as exc:
+        raise BackupError("Путь не читается — проверьте, как он вписан.", "backup_folder_relative") from exc
+    if target == media or media in target.parents:
+        raise BackupError("Эта папка внутри данных программы — выберите другую.", "backup_folder_inside_data")
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / f".uznat-probe-{os.getpid()}"
+        probe.write_bytes(b"ok")
+        probe.unlink()
+    except OSError as exc:
+        if isinstance(exc, PermissionError):
+            raise BackupError("В эту папку нельзя записывать — выберите другую.", "backup_folder_readonly") from exc
+        raise BackupError(_safe_error(exc), "backup_folder_error", {"reason": _safe_error(exc)}) from exc
+    free = _free_bytes(path)
+    if free is not None and need_bytes and free < need_bytes + SPARE_BYTES:
+        need_mb, free_mb = (need_bytes + SPARE_BYTES) // 2**20, free // 2**20
+        raise BackupError(f"Мало места: для копии нужно около {need_mb} МБ, свободно {free_mb} МБ.", "backup_folder_no_space",
+                          {"need": need_mb, "free": free_mb})
+    return path
+
+
+def list_drives() -> list[dict]:
+    """Диски компьютера для подсказки в «Настройках»: [{path: "D:\\", free, total, removable}]. Не Windows — пусто."""
+    if os.name != "nt":
+        return []
+    import ctypes
+    out = []
+    try:
+        mask = ctypes.windll.kernel32.GetLogicalDrives()
+    except (AttributeError, OSError):
+        return out
+    for i, letter in enumerate(string.ascii_uppercase):
+        if not mask & (1 << i):
+            continue
+        path = f"{letter}:\\"
+        kind = ctypes.windll.kernel32.GetDriveTypeW(path)
+        if kind not in (2, 3):            # 2 — флешка/съёмный, 3 — обычный диск; сетевые и CD не предлагаем
+            continue
+        try:
+            usage = shutil.disk_usage(path)
+        except OSError:                   # пустой картридер — диска «нет»
+            continue
+        out.append({"path": path, "free": usage.free, "total": usage.total, "removable": kind == 2})
+    return out
 
 
 def sqlite_path(database_url: str) -> Path:
@@ -527,32 +659,41 @@ def restore_copy(copy_dir: Path, *, media_root: Path, db_name: str = "shop.db", 
     os.rename(part, media_root)
     changed_keys: list[str] = []
     keys = read_keys(copy_dir)
+    old = env_file.read_text(encoding="utf-8") if env_file is not None and env_file.is_file() else ""
+    old_auth = next((ln.split("=", 1)[1].strip() for ln in old.splitlines() if ln.strip().startswith("AUTH_SECRET_KEY=")), "")
     if env_file is not None and keys:
-        old = env_file.read_text(encoding="utf-8") if env_file.is_file() else ""
         text, changed_keys = apply_keys(old, keys)
         if changed_keys:
             if old:
                 shutil.copyfile(env_file, env_file.with_name(f"{env_file.name}.bak-{stamp}"))
             env_file.write_text(text, encoding="utf-8")
+    _carry_settings(backup_of_old, media_root, old_auth, keys.get("AUTH_SECRET_KEY") or old_auth)
     counts["photos"] = len(photos)
     return {"counts": counts, "old_data": str(backup_of_old) if backup_of_old else "", "keys_changed": changed_keys}
+
+
+def _carry_settings(old_media: Path | None, new_media: Path, old_key: str, new_key: str) -> None:
+    """Выбор папки и подключение Google Диска не входят в копию — они переходят из прежних данных в восстановленные.
+    Ключ Google перешифровывается, если AUTH_SECRET_KEY взят из копии."""
+    if old_media is None:
+        return
+    data = read_settings(old_media)
+    if not data:
+        return
+    if isinstance(data.get("google"), dict) and old_key and new_key:
+        from app.services.gdrive_backup import rekey_token
+        data["google"] = rekey_token(data["google"], old_key, new_key)
+    update_settings(new_media, lambda current: {**data, **current})
 
 
 # ----------------------------------------------------------------------------------------------------------- расписание
 
 def read_state(media_root: Path) -> dict:
-    try:
-        data = json.loads((media_root / STATE_FILE).read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return read_json(media_root / STATE_FILE)
 
 
 def write_state(media_root: Path, state: dict) -> None:
-    media_root.mkdir(parents=True, exist_ok=True)
-    tmp = media_root / (STATE_FILE + ".tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
-    os.replace(tmp, media_root / STATE_FILE)
+    write_json(media_root / STATE_FILE, state)
 
 
 def _parse(iso: str | None) -> datetime | None:
@@ -575,13 +716,16 @@ class BackupService:
     """Ежедневная копия в фоне (только облегчённый режим) и «Сделать копию сейчас». Одновременно — одна копия."""
 
     def __init__(self, *, root: Path, media_root: Path, db_file: Path, keys: dict[str, str],
-                 dests_fn=None, clock=None, app_version: str = ""):
+                 dests_fn=None, clock=None, app_version: str = "", google=None):
         self.root = root
         self.media_root = media_root
         self.db_file = db_file
         self.keys = keys
         self.app_version = app_version
-        self._dests_fn = dests_fn or (lambda: destinations(root))
+        self.google = google              # app/services/gdrive_backup.GoogleBackup или None
+        if google is not None:
+            google.on_connected = self.start_cloud      # подключили — последняя копия уходит в облако сразу
+        self._dests_fn = dests_fn or (lambda: destinations(root, chosen=str(read_settings(media_root).get("local_dir") or "")))
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._lock = threading.Lock()
         self._running = False
@@ -605,10 +749,13 @@ class BackupService:
             write_state(self.media_root, state)
             report = create_backup(root=self.root, media_root=self.media_root, db_file=self.db_file, keys=self.keys,
                                    dests=self._dests_fn(), now=now, app_version=self.app_version)
-            if report["destinations"] and report["destinations"][0]["ok"]:
+            local_ok = bool(report["destinations"]) and report["destinations"][0]["ok"]
+            if local_ok:
                 state["last_ok"] = now.isoformat(timespec="seconds")
             state["last_error"] = "" if report["ok"] else next((d["error"] for d in report["destinations"] if d["error"]), "")
             state["last"] = report
+            if local_ok:
+                self.start_cloud()         # Google Диск — отдельно, в фоне: копия на компьютере уже готова
             return report
         except (OSError, BackupError, sqlite3.Error) as exc:
             state["last_error"] = _safe_error(exc)
@@ -638,13 +785,61 @@ class BackupService:
             logger.exception("Сбой резервной копии")
 
     def tick(self) -> bool:
-        """Проверка по расписанию: сделала ли копию."""
+        """Проверка по расписанию: сделала ли копию. Копия есть, а в Google Диск ещё не ушла (не было связи) — отправить."""
         if time.monotonic() - self._started_at < FIRST_DELAY_SECONDS:
             return False
         if not due(read_state(self.media_root), self._clock()):
+            self.start_cloud()
             return False
         self._run_quiet()
         return True
+
+    # ----- Google Диск (app/services/gdrive_backup.py)
+    def newest_local(self) -> tuple[Path, str] | None:
+        local = self._dests_fn()[0]
+        copies = list_copies(local.root)
+        return (local.root, copies[0].name) if copies else None
+
+    def start_cloud(self, *, wait: bool = False) -> bool:
+        """Отправить новейшую копию с компьютера в Google Диск, если пора (в отдельном потоке; wait — в этом)."""
+        g = self.google
+        if g is None or g.running:
+            return False
+        newest = self.newest_local()
+        if newest is None or not g.due(newest[1]):
+            return False
+        if wait:
+            self._cloud_quiet(*newest)
+        else:
+            threading.Thread(target=self._cloud_quiet, args=newest, name="backup-gdrive", daemon=True).start()
+        return True
+
+    def _cloud_quiet(self, local_root: Path, name: str) -> None:
+        from app.services.gdrive_backup import CloudError
+        try:
+            self.google.sync(local_root, name, keep=KEEP_CLOUD)
+        except CloudError as exc:
+            logger.warning("Копия в Google Диск не отправлена: %s", exc)
+        except Exception:  # noqa: BLE001 — фоновая отправка не должна ронять программу
+            logger.exception("Сбой отправки копии в Google Диск")
+
+    # ----- своя папка
+    def set_local_dir(self, raw: str) -> str:
+        """Папка для копий из «Настроек». Пусто — стандартная (backups/magazin). -> сохранённый путь."""
+        text = (raw or "").strip().strip('"').strip()
+        if text:
+            path = check_folder(text, media_root=self.media_root,
+                                need_bytes=shop_bytes(self.media_root, self.db_file))
+            text = str(path)
+
+        def change(data: dict) -> dict:
+            if text:
+                data["local_dir"] = text
+            else:
+                data.pop("local_dir", None)
+            return data
+        update_settings(self.media_root, change)
+        return text
 
     def _loop(self) -> None:
         while not self._stop.wait(CHECK_SECONDS):
@@ -665,17 +860,26 @@ class BackupService:
     def status(self) -> dict:
         state = read_state(self.media_root)
         dests = []
-        for d in self._dests_fn():
+        places = self._dests_fn()
+        for d in places:
             copies = list_copies(d.root)
             dests.append({"kind": d.kind, "path": str(d.root), "copies": len(copies),
                           "newest": copies[0].created_at if copies else ""})
         last = state.get("last") or {}
         last_ok = _parse(state.get("last_ok"))
+        google = self.google.status() if self.google is not None else {"state": "unavailable"}
+        chosen = str(read_settings(self.media_root).get("local_dir") or "")
+        local = places[0]
+        free = _free_bytes(local.root)
         return {"available": True, "running": self._running, "last_ok": state.get("last_ok") or "",
                 "last_attempt": state.get("last_attempt") or "", "last_error": state.get("last_error") or "",
                 "next_due": (last_ok + INTERVAL).isoformat(timespec="seconds") if last_ok else "",
-                "cloud": any(d["kind"] == "cloud" for d in dests), "destinations": dests,
-                "last_destinations": last.get("destinations") or [], "counts": last.get("counts") or {}}
+                "cloud": any(d["kind"] == "cloud" for d in dests) or google.get("state") == "connected",
+                "destinations": dests,
+                "last_destinations": last.get("destinations") or [], "counts": last.get("counts") or {},
+                "local": {"chosen": chosen, "path": str(local.root), "fallback_from": local.fallback_from,
+                          "free": free, "need": shop_bytes(self.media_root, self.db_file)},
+                "drives": list_drives(), "google": google}
 
 
 _service: BackupService | None = None
@@ -688,11 +892,15 @@ def service_from_settings(settings) -> BackupService | None:
         return None
     if _service is None:
         from app.core.config import PROJECT_ROOT, resolve_project_path
+        from app.services.gdrive_backup import GoogleBackup, load_client
         root = PROJECT_ROOT
-        _service = BackupService(root=root, media_root=resolve_project_path(settings.media_root),
+        media_root = resolve_project_path(settings.media_root)
+        _service = BackupService(root=root, media_root=media_root,
                                  db_file=sqlite_path(settings.database_url),
                                  keys={"AUTH_SECRET_KEY": settings.auth_secret_key or "",
                                        "CAMERA_SECRET_KEY": settings.camera_secret_key or ""},
-                                 dests_fn=lambda: destinations_from_settings(root, settings),
-                                 app_version=os.environ.get("APP_VERSION", ""))
+                                 dests_fn=lambda: destinations_from_settings(root, settings, media_root),
+                                 app_version=os.environ.get("APP_VERSION", ""),
+                                 google=GoogleBackup(media_root=media_root, client=load_client(root, settings),
+                                                     secret_key=settings.auth_secret_key or ""))
     return _service

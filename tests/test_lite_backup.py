@@ -170,6 +170,37 @@ def test_backup_of_a_running_database_with_a_write_in_progress(tmp_path):
     assert report["ok"] and report["counts"]["products"] == 3, "в копии — согласованное состояние базы"
 
 
+def test_state_file_survives_reads_and_writes_from_several_threads(tmp_path):
+    """Windows: замена файла, который в этот миг читают, давала PermissionError (1 раз из 10 в test_gdrive_backup)."""
+    import threading
+    stop = threading.Event()
+    errors = []
+
+    def reader():
+        while not stop.is_set():
+            B.read_state(tmp_path)
+
+    def writer(n):
+        try:
+            for i in range(150):
+                B.write_state(tmp_path, {"n": n, "i": i})
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    readers = [threading.Thread(target=reader) for _ in range(2)]
+    writers = [threading.Thread(target=writer, args=(n,)) for n in range(2)]
+    for t in readers + writers:
+        t.start()
+    for t in writers:
+        t.join()
+    stop.set()
+    for t in readers:
+        t.join()
+    assert not errors
+    assert B.read_state(tmp_path)["i"] == 149
+    assert not list(tmp_path.glob("*.tmp")), "временные файлы не остаются"
+
+
 def test_due_once_a_day_and_retry_after_an_hour():
     assert B.due({}, T0)
     assert not B.due({"last_ok": T0.isoformat(), "last_attempt": T0.isoformat()}, T0 + timedelta(hours=23))
@@ -179,20 +210,17 @@ def test_due_once_a_day_and_retry_after_an_hour():
     assert B.due(failed, T0 + timedelta(hours=25))
 
 
-def test_google_drive_is_found_on_its_drive_or_in_the_home_folder(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    home.mkdir()
-    assert B.find_google_drive(home, drives=[]) is None
-    (home / "Мой диск").mkdir()
-    assert B.find_google_drive(home, drives=[]) == home / "Мой диск"
+def test_places_default_env_and_the_choice_in_settings(tmp_path):
     root = tmp_path / "prog"
-    ds = B.destinations(root, {}, home=home, drives=[])
-    assert [(d.kind, d.root) for d in ds] == [("local", root / "backups" / "magazin" / B.FOLDER_NAME),
-                                             ("cloud", home / "Мой диск" / B.FOLDER_NAME)]
-    assert B.destinations(root, {B.ENV_CLOUD_DIR: "off"}, home=home, drives=[])[1:] == []
+    ds = B.destinations(root, {})
+    assert [(d.kind, d.root) for d in ds] == [("local", root / "backups" / "magazin" / B.FOLDER_NAME)], \
+        "облачная папка сама не ищется: Google Диск подключается кнопкой (app/services/gdrive_backup.py)"
+    assert B.destinations(root, {B.ENV_CLOUD_DIR: "off"})[1:] == []
     own = tmp_path / "Yandex.Disk"
-    ds = B.destinations(root, {B.ENV_CLOUD_DIR: str(own), B.ENV_LOCAL_DIR: str(tmp_path / "copies")}, home=home, drives=[])
+    ds = B.destinations(root, {B.ENV_CLOUD_DIR: str(own), B.ENV_LOCAL_DIR: str(tmp_path / "copies")})
     assert [d.root for d in ds] == [tmp_path / "copies" / B.FOLDER_NAME, own / B.FOLDER_NAME]
+    ds = B.destinations(root, {B.ENV_LOCAL_DIR: str(tmp_path / "copies")}, chosen=str(tmp_path / "flash"))
+    assert ds[0].root == tmp_path / "flash" / B.FOLDER_NAME and not ds[0].fallback_from, "выбор в «Настройках» важнее .env"
 
 
 def test_service_runs_by_schedule_and_reports_status(tmp_path, monkeypatch):
@@ -281,7 +309,7 @@ def test_restore_script_lists_copies_and_waits_for_the_program_to_close(tmp_path
     media = tmp_path / "lite"
     db = make_shop(media)
     backup(tmp_path, media, db)
-    monkeypatch.setattr(B, "destinations_from_settings", lambda _root, _settings: dests(tmp_path))
+    monkeypatch.setattr(B, "destinations_from_settings", lambda *_a: dests(tmp_path))
     assert R.main(["--list", "--media-root", str(media)]) == 0
     out = capsys.readouterr().out
     assert "товаров 3, сотрудников 1, фото 3" in out and out.count("1. ") == 1, "одна копия в двух местах — одной строкой"

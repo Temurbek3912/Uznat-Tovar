@@ -64,6 +64,10 @@ def test_technical_fragments_brands_and_codes_are_not_transliterated(text):
     assert ut.latin_to_cyrillic(text) == text
 
 
+def test_drive_letter_stays_and_the_folder_name_is_transliterated():
+    assert ut.latin_to_cyrillic("masalan D:\\Nusxalar yoki E:\\.") == "масалан D:\\Нусхалар ёки E:\\."
+
+
 def test_mixed_sentence_keeps_placeholders_and_codes():
     src = "{n}-surat: {message}. Kod EAN-13 va UPC-A mos keladi, (https) manzil."
     assert ut.latin_to_cyrillic(src) == "{n}-сурат: {message}. Код EAN-13 ва UPC-A мос келади, (https) манзил."

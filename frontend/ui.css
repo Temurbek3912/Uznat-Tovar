@@ -171,6 +171,8 @@ a.btn { text-decoration: none; text-align: center; }                      /* к�
 .cqr-url { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--fs-s); word-break: break-all; user-select: all; }
 .cqr-url[hidden] { display: none; }
 .bkp-places { margin: 0; padding-left: 1.2em; font-size: var(--fs-s); word-break: break-word; }
+/* Код для входа в Google Диск (2026-11-16): крупно, чтобы переписать с экрана на телефон */
+.bkp-code { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 1.75rem; font-weight: var(--fw-medium); letter-spacing: 0.12em; user-select: all; }
 .secret { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--fs-l); letter-spacing: 0.06em; word-break: break-all; user-select: all; }
 .recovery { margin: 0; padding-left: 1.6em; columns: 2; column-gap: var(--sp-5); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--fs-l); user-select: all; }
 .recovery li { padding: 2px 0; break-inside: avoid; }

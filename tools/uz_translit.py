@@ -91,6 +91,7 @@ STEM_EXCEPTIONS: dict[str, str] = {
 _PROTECTED = re.compile(
     r"\{\w+\}"                                   # подстановка {name}
     r"|https?://\S+"                             # адрес
+    r"|\b[A-Z]:\\"                               # буква диска: D:\ (имя папки после неё — переводится)
     r"|[\w.\-]*[/\\][\w./\\\-]*"                 # путь: docs/RUNBOOK.md
     r"|(?<![\w.])\.[A-Za-z]\w*"                  # .env
     r"|\b\w+(?:\.\w+)+\b"                        # scripts.import_catalog, catalog_guide.md

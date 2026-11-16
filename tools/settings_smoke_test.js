@@ -547,5 +547,81 @@ function boot(opts) {
     assert.ok(!kassir.shown("backupGroup") && !calls.some((u) => u.includes("/admin/backup")), "у продавца блока нет и запроса нет");
   });
 
+  await test("резервная копия: своя папка (диски с местом, проверка на сервере) и Google Диск по коду (2026-11-16)", async () => {
+    const GB = 1073741824;
+    let status = { available: true, running: false, last_ok: "", last_error: "", cloud: false,
+                   destinations: [{ kind: "local", path: "C:\\prog\\backups\\magazin\\Узнать товар — копии", copies: 0 }],
+                   local: { chosen: "", path: "C:\\prog\\backups\\magazin\\Узнать товар — копии", fallback_from: "", free: 50 * GB, need: 300 * 1048576 },
+                   drives: [{ path: "C:\\", free: 50 * GB, total: 200 * GB, removable: false }, { path: "E:\\", free: 14.5 * GB, total: 16 * GB, removable: true }],
+                   google: { state: "off", email: "", running: false, progress: null, last_ok: "", last_error: "", connect_error: "" } };
+    const log = [];
+    const s = boot({ token: "tok", fetch: async (url, o) => {
+      const p = url.replace(/^.*\/api\/v1/, ""), m = (o && o.method) || "GET";
+      log.push(m + " " + p + (o && o.body ? " " + o.body : ""));
+      if (p === "/auth/me") return json(200, { username: "admin1", role: "admin", permissions: ["catalog:read", "store:manage"] });
+      if (p === "/admin/backup" && m === "GET") return json(200, status);
+      if (p === "/admin/backup/folder") {
+        const path = JSON.parse(o.body).path;
+        if (path === "Копии") return json(400, { detail: "x", code: "backup_folder_relative", params: {} });
+        status = Object.assign({}, status, { local: Object.assign({}, status.local, { chosen: path, path: path ? path + "Узнать товар — копии" : status.local.path }) });
+        return json(200, status);
+      }
+      if (p === "/admin/backup/google/connect") {
+        status = Object.assign({}, status, { google: Object.assign({}, status.google, { state: "waiting", user_code: "ABCD-EFGH", verification_url: "https://www.google.com/device" }) });
+        return json(200, { user_code: "ABCD-EFGH" });
+      }
+      if (p === "/admin/backup/google" && m === "DELETE") { status = Object.assign({}, status, { cloud: false, google: { state: "off" } }); return json(200, status); }
+      return json(404, {});
+    } });
+    await s.ready(); await flush();
+    assert.ok(s.shown("bkpGoogle") && s.shown("bkpGConnect") && !s.shown("bkpGDisconnect") && !s.shown("bkpGWait"));
+    assert.strictEqual(s.$("bkpNoCloud").textContent, DICTS.ru["bkp.no_cloud_google"], "подсказка ведёт к кнопке Google Диска");
+    const chips = s.$("bkpDrives").children;
+    assert.strictEqual(chips.length, 2);
+    assert.strictEqual(chips[0].textContent, "C: — свободно 50 ГБ");
+    assert.strictEqual(chips[1].textContent, "E: (флешка) — свободно 15 ГБ");
+    assert.ok(s.$("bkpDirHint").textContent.includes("300 МБ") && !s.shown("bkpDirReset"));
+    s.$("bkpDir").value = "Копии";
+    s.$("bkpDirForm").dispatch("submit", { preventDefault() {} }); await sleep(5); await flush();
+    assert.strictEqual(s.$("bkpDirMsg").textContent, DICTS.ru["server.backup_folder_relative"]);
+    assert.strictEqual(s.$("bkpDirMsg").className, "notice notice--danger");
+    chips[1].click(); await flush();
+    assert.strictEqual(s.$("bkpDir").value, "E:\\", "нажали на диск — путь в поле");
+    s.$("bkpDirForm").dispatch("submit", { preventDefault() {} }); await sleep(5); await flush();
+    assert.ok(log.includes('PUT /admin/backup/folder {"path":"E:\\\\"}'));
+    assert.ok(s.$("bkpDirMsg").textContent.startsWith("Сохранено.") && s.shown("bkpDirReset"));
+    await s.click("bkpDirReset");
+    assert.ok(log.includes('PUT /admin/backup/folder {"path":""}') && s.$("bkpDir").value === "");
+
+    await s.click("bkpGConnect");
+    assert.ok(s.shown("bkpGWait") && s.shown("bkpGCancel") && !s.shown("bkpGConnect"));
+    assert.strictEqual(s.$("bkpGCode").textContent, "ABCD-EFGH");
+    assert.strictEqual(s.$("bkpGLink").getAttribute("href"), "https://www.google.com/device");
+    assert.ok(!s.shown("bkpNoCloud"), "пока ждём входа — подсказки про облако нет");
+    status = Object.assign({}, status, { cloud: true, google: { state: "connected", email: "magazin@gmail.com", running: true, progress: { done: 120, total: 2559 } } });
+    await s.app.reload(); await flush();
+    assert.strictEqual(s.$("bkpGState").textContent, "Google Диск подключён: magazin@gmail.com. Копии уходят туда сами.");
+    assert.strictEqual(s.$("bkpGMsg").textContent, DICTS.ru["bkp.g_done"]);
+    assert.ok(s.$("bkpGProgress").textContent.includes("120 из 2559") && s.shown("bkpGDisconnect") && !s.shown("bkpGWait"));
+    status = Object.assign({}, status, { google: { state: "connected", email: "magazin@gmail.com", running: false, last_ok: "2026-11-16T03:10:00+05:00", last_error: "Нет связи с Google." } });
+    await s.app.reload(); await flush();
+    assert.ok(s.$("bkpGState").textContent.includes("Последняя копия в облаке:") && s.$("bkpGError").textContent.startsWith("Копия в Google Диск не ушла: Нет связи"));
+    s.win.confirm = () => true;
+    await s.click("bkpGDisconnect");
+    assert.ok(log.includes("DELETE /admin/backup/google") && s.shown("bkpGConnect"));
+    status = Object.assign({}, status, { google: { state: "lost", email: "magazin@gmail.com" } });
+    await s.app.reload(); await flush();
+    assert.strictEqual(s.$("bkpGState").textContent, DICTS.ru["bkp.g_lost"]); assert.ok(s.shown("bkpGConnect"));
+    status = Object.assign({}, status, { google: { state: "off", connect_error: "expired" }, local: Object.assign({}, status.local, { fallback_from: "E:\\" }) });
+    await s.app.reload(); await flush();
+    assert.strictEqual(s.$("bkpGError").textContent, DICTS.ru["bkp.g_err_expired"]);
+    assert.ok(s.shown("bkpDirFallback") && s.$("bkpDirFallback").textContent.includes("E:\\"));
+    status = Object.assign({}, status, { google: { state: "unavailable" } });
+    await s.app.reload(); await flush();
+    assert.ok(!s.shown("bkpGoogle"), "в версии без клиента Google — раздела нет");
+    assert.strictEqual(s.$("bkpNoCloud").textContent, DICTS.ru["bkp.no_cloud"]);
+    assert.deepStrictEqual(s.errors, []);
+  });
+
   console.log(`\n${passed} passed`);
 })().catch((err) => { console.error("FAIL:", err && err.stack || err); process.exit(1); });

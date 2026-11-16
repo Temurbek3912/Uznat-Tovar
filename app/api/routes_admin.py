@@ -8,6 +8,10 @@
   PUT /api/v1/admin/shop-card                    выбрать поля ({"fields": [...]}); срок годности включить нельзя (журнал действий)
   GET /api/v1/admin/backup                       резервная копия магазина: когда была, куда (облегчённый режим)
   POST /api/v1/admin/backup                      сделать копию сейчас (в фоне)
+  PUT /api/v1/admin/backup/folder                своя папка для копий ({"path": ""} — стандартная), с проверкой
+  POST /api/v1/admin/backup/google/connect       подключить Google Диск: код для входа на google.com/device
+  POST /api/v1/admin/backup/google/cancel        отменить ожидание входа
+  DELETE /api/v1/admin/backup/google             отключить Google Диск (копии на Диске остаются)
 """
 from __future__ import annotations
 
@@ -181,3 +185,66 @@ def backup_now(db: Session = Depends(get_db), user: CurrentUser = Depends(_admin
     audit.record(db, "backup.requested", actor=audit.AuditActor(user.id, "api"), target_type="backup")
     db.commit()
     return {"started": True}
+
+
+class BackupFolderIn(BaseModel):
+    path: str = ""
+
+
+def _lite_backups():
+    service = _backups()
+    if service is None:
+        raise ApiError(409, "backup_unavailable", "Резервная копия из программы — только в облегчённом режиме.")
+    return service
+
+
+@router.put("/backup/folder")
+def backup_folder(body: BackupFolderIn, db: Session = Depends(get_db), user: CurrentUser = Depends(_admin)) -> dict:
+    """Своя папка для копий на этом компьютере (пусто — стандартная backups/magazin). Папка проверяется: диск есть,
+    писать можно, места хватает; нет папки — создаётся."""
+    from app.services.lite_backup import BackupError
+    service = _lite_backups()
+    try:
+        saved = service.set_local_dir(body.path[:500])
+    except BackupError as exc:
+        raise ApiError(400, exc.code or "backup_folder_error", str(exc),
+                       exc.params or ({} if exc.code else {"reason": str(exc)})) from None
+    audit.record(db, "backup.folder_changed", actor=audit.AuditActor(user.id, "api"), target_type="backup",
+                 after={"path": saved or "(стандартная)"})
+    db.commit()
+    return service.status()
+
+
+@router.post("/backup/google/connect")
+def backup_google_connect(db: Session = Depends(get_db), user: CurrentUser = Depends(_admin)) -> dict:
+    """Начать подключение Google Диска: код для входа на google.com/device. Ожидание входа — в фоне; итог — GET /backup."""
+    from app.services.gdrive_backup import CloudError
+    service = _lite_backups()
+    if service.google is None or not service.google.available:
+        raise ApiError(409, "google_unavailable", "Подключение Google Диска не настроено в этой версии программы.")
+    try:
+        code = service.google.start_connect()
+    except CloudError as exc:
+        raise ApiError(502, "google_failed", str(exc), {"reason": str(exc)}) from None
+    audit.record(db, "backup.google_connect", actor=audit.AuditActor(user.id, "api"), target_type="backup")
+    db.commit()
+    return code
+
+
+@router.post("/backup/google/cancel")
+def backup_google_cancel(_user: CurrentUser = Depends(_admin)) -> dict:
+    service = _lite_backups()
+    if service.google is not None:
+        service.google.cancel_connect()
+    return service.status()
+
+
+@router.delete("/backup/google")
+def backup_google_disconnect(db: Session = Depends(get_db), user: CurrentUser = Depends(_admin)) -> dict:
+    """Отключить Google Диск: программа забывает ключ доступа (и просит Google его отозвать). Копии на Диске остаются."""
+    service = _lite_backups()
+    if service.google is not None:
+        service.google.disconnect()
+    audit.record(db, "backup.google_disconnect", actor=audit.AuditActor(user.id, "api"), target_type="backup")
+    db.commit()
+    return service.status()

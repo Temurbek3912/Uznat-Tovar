@@ -155,7 +155,7 @@
     }
     // Резервная копия магазина (облегчённый режим, app/services/lite_backup.py, 2026-11-16): когда была, куда, «Сделать копию сейчас».
     // Только администратору (право store:manage); в полном режиме (Docker) сервер отвечает available: false — блока нет.
-    var bkp = { data: null, msg: null, timer: null };
+    var bkp = { data: null, msg: null, timer: null, dirMsg: null, dirSynced: false, gMsg: null };
     function renderBackup() {
       var d = bkp.data, shown = account.name !== null && !!d && d.available === true;
       setHidden($("backupGroup"), !shown);
@@ -167,23 +167,103 @@
         li.textContent = t(p.kind === "cloud" ? "bkp.place_cloud" : "bkp.place_local", { path: String(p.path || ""), n: Number(p.copies) || 0 });
         list.appendChild(li);
       });
-      setHidden($("bkpNoCloud"), !!d.cloud);
+      var g = d.google && typeof d.google === "object" ? d.google : { state: "unavailable" };
+      $("bkpNoCloud").textContent = t(g.state === "unavailable" ? "bkp.no_cloud" : "bkp.no_cloud_google");
+      setHidden($("bkpNoCloud"), !!d.cloud || g.state === "waiting");
       var err = d.last_error && !d.running ? t("bkp.failed", { error: String(d.last_error) }) : "";
       $("bkpError").textContent = err; setHidden($("bkpError"), !err);
       var msg = bkp.msg ? t(bkp.msg.key, bkp.msg.params) : "";
       $("bkpMsg").textContent = msg; setHidden($("bkpMsg"), !msg);
       $("bkpNowBtn").disabled = !!d.running;
+      renderBackupDir(d);
+      renderBackupGoogle(g);
+    }
+    // Своя папка (2026-11-16): браузер не отдаёт путь из «Обзора», поэтому — поле + кнопки дисков с местом от сервера.
+    function size(bytes) {
+      var n = Number(bytes) || 0;
+      return n >= 1073741824 ? t("bkp.size_gb", { n: (n / 1073741824).toFixed(n >= 10737418240 ? 0 : 1) }) : t("bkp.size_mb", { n: Math.max(1, Math.round(n / 1048576)) });
+    }
+    function renderBackupDir(d) {
+      var local = d.local && typeof d.local === "object" ? d.local : {};
+      var input = $("bkpDir");
+      if (!bkp.dirSynced) { input.value = String(local.chosen || ""); bkp.dirSynced = true; }
+      var fb = local.fallback_from ? t("bkp.dir_fallback", { path: String(local.fallback_from) }) : "";
+      $("bkpDirFallback").textContent = fb; setHidden($("bkpDirFallback"), !fb);
+      var box = $("bkpDrives"); clear(box);
+      (Array.isArray(d.drives) ? d.drives : []).forEach(function (drv) {
+        var b = doc.createElement("button");
+        b.type = "button"; b.className = "chip chip--filter";
+        b.textContent = t(drv.removable ? "bkp.drive_removable" : "bkp.drive", { path: String(drv.path || "").replace(/\\$/, ""), free: size(drv.free) });
+        b.addEventListener("click", function () { input.value = String(drv.path || ""); bkp.dirMsg = null; renderBackup(); if (input.focus) input.focus(); });
+        box.appendChild(b);
+      });
+      setHidden(box, !box.firstChild);
+      $("bkpDirHint").textContent = local.need ? t("bkp.dir_need", { need: size(local.need) }) : "";
+      var m = bkp.dirMsg ? t(bkp.dirMsg.key, bkp.dirMsg.params) : "";
+      $("bkpDirMsg").textContent = m; setHidden($("bkpDirMsg"), !m);
+      $("bkpDirMsg").className = bkp.dirMsg && bkp.dirMsg.bad ? "notice notice--danger" : "notice";
+      setHidden($("bkpDirReset"), !local.chosen);
+    }
+    function saveBackupDir(path) {
+      bkp.dirMsg = null; $("bkpDirSave").disabled = true;
+      return api("/api/v1/admin/backup/folder", "PUT", { path: path }).then(function (r) {
+        $("bkpDirSave").disabled = false;
+        if (r.res.ok && r.data) {
+          bkp.data = r.data; bkp.dirSynced = false;
+          bkp.dirMsg = { key: path ? "bkp.dir_saved" : "bkp.dir_default", params: { path: String((r.data.local || {}).path || "") } };
+        } else { var p = problemOf(r); bkp.dirMsg = { key: p.key, params: p.params, bad: true }; }
+        renderBackup();
+        return null;
+      }, function () { $("bkpDirSave").disabled = false; bkp.dirMsg = { key: "error.network", bad: true }; renderBackup(); return null; });
+    }
+    // Google Диск напрямую (app/services/gdrive_backup.py): вход по коду на google.com/device — с этого компьютера или с телефона.
+    function renderBackupGoogle(g) {
+      var st = String(g.state || "unavailable");
+      setHidden($("bkpGoogle"), st === "unavailable");
+      if (st === "unavailable") return;
+      var stateText = st === "connected" ? (g.email ? t("bkp.g_connected", { email: String(g.email) }) : t("bkp.g_connected_noemail"))
+        : st === "lost" ? t("bkp.g_lost") : st === "waiting" ? t("bkp.g_wait_title") : t("bkp.g_off");
+      if (st === "connected" && g.last_ok && !g.running) stateText += " " + t("bkp.g_last_ok", { when: when(String(g.last_ok)) });
+      $("bkpGState").textContent = stateText;
+      setHidden($("bkpGWait"), st !== "waiting");
+      if (st === "waiting") {
+        $("bkpGCode").textContent = String(g.user_code || "");
+        var url = /^https:\/\//.test(String(g.verification_url || "")) ? String(g.verification_url) : "https://www.google.com/device";
+        $("bkpGLink").setAttribute("href", url); $("bkpGLink").textContent = url.replace(/^https:\/\/(www\.)?/, "");
+      }
+      var pr = g.running && g.progress && Number(g.progress.total) > 0 ? t("bkp.g_progress", { done: Number(g.progress.done) || 0, total: Number(g.progress.total) })
+        : g.running ? t("bkp.g_sending") : "";
+      $("bkpGProgress").textContent = pr; setHidden($("bkpGProgress"), !pr);
+      var err = g.connect_error && st !== "waiting" ? t(g.connect_error === "denied" ? "bkp.g_err_denied" : g.connect_error === "expired" ? "bkp.g_err_expired" : "bkp.g_err_failed")
+        : st === "connected" && g.last_error && !g.running ? t("bkp.g_failed", { error: String(g.last_error) }) : "";
+      $("bkpGError").textContent = err; setHidden($("bkpGError"), !err);
+      var m = bkp.gMsg ? t(bkp.gMsg.key, bkp.gMsg.params) : "";
+      $("bkpGMsg").textContent = m; setHidden($("bkpGMsg"), !m);
+      setHidden($("bkpGConnect"), !(st === "off" || st === "lost"));
+      setHidden($("bkpGCancel"), st !== "waiting");
+      setHidden($("bkpGDisconnect"), st !== "connected");
+    }
+    function googleCall(path, method) {
+      bkp.gMsg = null;
+      return api(path, method).then(function (r) {
+        if (!r.res.ok) { bkp.gMsg = problemOf(r); renderBackup(); return null; }
+        return loadBackup();
+      }, function () { bkp.gMsg = { key: "error.network" }; renderBackup(); return null; });
     }
     function loadBackup() {
       if (bkp.timer && win.clearTimeout) win.clearTimeout(bkp.timer);
       bkp.timer = null;
       return api("/api/v1/admin/backup").then(function (r) {
         var was = !!(bkp.data && bkp.data.running);
+        var wasG = bkp.data && bkp.data.google ? String(bkp.data.google.state) : "";
         bkp.data = r.res.ok && r.data && typeof r.data === "object" ? r.data : null;
         if (was && bkp.data && !bkp.data.running) bkp.msg = bkp.data.last_error ? null : { key: "bkp.done" };
+        var g = bkp.data && bkp.data.google ? bkp.data.google : null;
+        if (wasG === "waiting" && g && g.state === "connected") bkp.gMsg = { key: "bkp.g_done" };
         renderBackup();
-        // пока копия идёт — спрашивать раз в 3 секунды, чтобы показать итог
-        if (bkp.data && bkp.data.running && win.setTimeout) bkp.timer = win.setTimeout(function () { loadBackup().catch(report); }, 3000);
+        // пока копия идёт, отправляется в Google Диск или ждём входа в Google — спрашивать раз в 3 секунды
+        var busy = bkp.data && (bkp.data.running || (g && (g.running || g.state === "waiting")));
+        if (busy && win.setTimeout) bkp.timer = win.setTimeout(function () { loadBackup().catch(report); }, 3000);
       });
     }
     function backupNow() {
@@ -504,6 +584,14 @@
     $("logoutBtn").addEventListener("click", guard(doLogout));
     $("cqrPrintBtn").addEventListener("click", guard(downloadCustomerQr));
     $("bkpNowBtn").addEventListener("click", guard(backupNow));
+    $("bkpDirForm").addEventListener("submit", guard(function (evt) { if (evt && evt.preventDefault) evt.preventDefault(); return saveBackupDir(String($("bkpDir").value || "").trim()); }));
+    $("bkpDirReset").addEventListener("click", guard(function () { $("bkpDir").value = ""; return saveBackupDir(""); }));
+    $("bkpGConnect").addEventListener("click", guard(function () { return googleCall("/api/v1/admin/backup/google/connect", "POST"); }));
+    $("bkpGCancel").addEventListener("click", guard(function () { return googleCall("/api/v1/admin/backup/google/cancel", "POST"); }));
+    $("bkpGDisconnect").addEventListener("click", guard(function () {
+      if (win.confirm && !win.confirm(t("bkp.g_disconnect_confirm"))) return Promise.resolve(null);
+      return googleCall("/api/v1/admin/backup/google", "DELETE");
+    }));
     $("mfaEnableBtn").addEventListener("click", function () { securityStep("setup"); var p = $("mfaSetupPass"); if (p && p.focus) p.focus(); });
     $("mfaDisableBtn").addEventListener("click", function () { securityStep("disable"); var p = $("mfaDisablePass"); if (p && p.focus) p.focus(); });
     $("mfaSetupForm").addEventListener("submit", guard(startSetup));

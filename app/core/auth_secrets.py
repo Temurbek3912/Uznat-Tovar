@@ -64,6 +64,20 @@ def decrypt_totp_secret(token: str, key: str) -> str:
                               "--username …") from None
 
 
+def encrypt_text(text: str, key: str, label: bytes) -> str:
+    """Зашифровать произвольный текст отдельным подключом (label) — например, ключ доступа к Google Диску (2026-11-16)."""
+    from cryptography.fernet import Fernet
+    return Fernet(base64.urlsafe_b64encode(_subkey(key, label))).encrypt(text.encode("utf-8")).decode("ascii")
+
+
+def decrypt_text(token: str, key: str, label: bytes) -> str:
+    from cryptography.fernet import Fernet, InvalidToken
+    try:
+        return Fernet(base64.urlsafe_b64encode(_subkey(key, label))).decrypt(token.encode("ascii")).decode("utf-8")
+    except InvalidToken:
+        raise AuthSecretError("Данные не расшифровываются: AUTH_SECRET_KEY изменился или данные повреждены.") from None
+
+
 def recovery_hmac_key(key: str) -> bytes:
     """Ключ хешей кодов восстановления (без ключа сервера второго фактора нет — значит, и кодов)."""
     return _subkey(key, b"uznat:recovery-code:v1")

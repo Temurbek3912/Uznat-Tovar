@@ -80,9 +80,13 @@ class Settings(BaseSettings):
     # Свой файл индекса каталога (облегчённый режим хранит данные отдельно: data/lite). Пусто — из config.yaml.
     catalog_index_path: str = ""
     # Резервная копия облегчённого режима (app/services/lite_backup.py): своя папка на компьютере (пусто — backups/magazin
-    # программы) и папка облака (пусто — найти «Google Диск для компьютера»; off — без облака).
+    # программы; выбор в «Настройках» важнее) и синхронизируемая папка облака (пусто — нет). Google Диск напрямую —
+    # app/services/gdrive_backup.py: клиент программы у Google (один на все магазины, его заводит продавец,
+    # docs/GOOGLE_DRIVE_SETUP.md) — эти две строки или файл google_client.json в папке программы.
     backup_local_dir: str = ""
     backup_cloud_dir: str = ""
+    google_client_id: str = ""
+    google_client_secret: str = ""
 
     # Локальное хранилище снимков полок (см. app/api/routes_upload.py).
     # Относительный путь резолвится через resolve_project_path() относительно

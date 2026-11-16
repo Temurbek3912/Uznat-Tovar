@@ -74,10 +74,34 @@
           <p class="hint" data-i18n="bkp.hint">Раз в сутки программа сама сохраняет копию товаров, фото и сотрудников. Если компьютер сломается, данные можно вернуть.</p>
           <p id="bkpLast" role="status"></p>
           <ul class="bkp-places" id="bkpPlaces"></ul>
-          <p class="notice" id="bkpNoCloud" data-i18n="bkp.no_cloud" hidden>Облако не подключено: копии сейчас только на этом компьютере.</p>
+          <p class="notice" id="bkpNoCloud" hidden></p>
           <p class="notice notice--danger" id="bkpError" role="alert" hidden></p>
           <p class="notice" id="bkpMsg" role="status" hidden></p>
           <div><button class="btn btn--secondary" id="bkpNowBtn" type="button" data-i18n="bkp.now">Сделать копию сейчас</button></div>
+          <form class="settings__form" id="bkpDirForm" novalidate>
+            <h3 class="ticket__title" data-i18n="bkp.dir_title">Папка для копий на этом компьютере</h3>
+            <p class="notice" id="bkpDirFallback" role="alert" hidden></p>
+            <label class="field"><span class="field__label" data-i18n="bkp.dir_label">Папка (пусто — стандартная, в папке программы)</span><input class="input" id="bkpDir" type="text" autocomplete="off" spellcheck="false" maxlength="500" placeholder="D:\"></label>
+            <p class="hint" data-i18n="bkp.dir_drives">Нажмите на диск — или впишите свою папку. Флешка подойдёт, если она всегда вставлена.</p>
+            <div class="row" id="bkpDrives"></div>
+            <p class="hint" id="bkpDirHint"></p>
+            <p class="notice" id="bkpDirMsg" role="status" hidden></p>
+            <div class="row"><button class="btn btn--secondary" id="bkpDirSave" type="submit" data-i18n="bkp.dir_save">Сохранить папку</button><button class="btn btn--secondary" id="bkpDirReset" type="button" data-i18n="bkp.dir_reset" hidden>Вернуть стандартную</button></div>
+          </form>
+          <div class="settings__form" id="bkpGoogle" hidden>
+            <h3 class="ticket__title" data-i18n="bkp.g_title">Google Диск</h3>
+            <p id="bkpGState" role="status"></p>
+            <div id="bkpGWait" hidden>
+              <p class="hint" data-i18n="bkp.g_wait_hint">На этом компьютере или на своём телефоне откройте адрес ниже, введите код и войдите в Google-аккаунт магазина.</p>
+              <p><a id="bkpGLink" target="_blank" rel="noopener noreferrer">google.com/device</a></p>
+              <p class="bkp-code" id="bkpGCode" aria-live="polite"></p>
+              <p class="hint" data-i18n="bkp.g_waiting">Жду, когда вы войдёте…</p>
+            </div>
+            <p class="hint" id="bkpGProgress" role="status" hidden></p>
+            <p class="notice notice--danger" id="bkpGError" role="alert" hidden></p>
+            <p class="notice" id="bkpGMsg" role="status" hidden></p>
+            <div class="row"><button class="btn btn--primary" id="bkpGConnect" type="button" data-i18n="bkp.g_connect" hidden>Подключить Google Диск</button><button class="btn btn--secondary" id="bkpGCancel" type="button" data-i18n="bkp.g_cancel" hidden>Отмена</button><button class="btn btn--secondary" id="bkpGDisconnect" type="button" data-i18n="bkp.g_disconnect" hidden>Отключить Google Диск</button></div>
+          </div>
           <p class="hint" data-i18n="bkp.restore_hint">Вернуть данные из копии: закройте программу и запустите «Восстановить из копии.bat» в папке программы.</p>
         </div>
         <div class="settings__group" id="pinGroup" hidden>

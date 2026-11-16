@@ -30,3 +30,6 @@ models/index/
 
 # Архивы программы для магазинов (scripts/make_package.py)
 dist/
+
+# Клиент программы у Google для кнопки «Подключить Google Диск» (docs/GOOGLE_DRIVE_SETUP.md): в архив кладёт scripts/make_package.py
+google_client.json

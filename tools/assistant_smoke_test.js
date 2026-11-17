@@ -210,4 +210,26 @@ test("нет в каталоге: кнопки «Добавить с фото» 
   tr("assistant.list_add_reply", { name: "Sprite" });
 });
 
+test("тексты страницы хранятся ключом: после смены языка переводятся, и модели уходят на языке нового вопроса", () => {
+  const log = Assistant.cleanLog([
+    u("Sprite — 9000"),
+    { role: "assistant", content: "Добавьте фото «Sprite»", say: { key: "assistant.list_add_reply", name: "Sprite" },
+      card: { action: { kind: "add", name: "Sprite" }, state: "done", note: "", say: { key: "assistant.add_done", name: "Sprite" } } },
+    { role: "assistant", content: "старый текст", say: { key: "system.hack" }, card: { action: { kind: "add" }, state: "done",
+      note: "Ошибка сервера", say: "мусор" } },
+  ]);
+  assert.deepStrictEqual(log[1].say, { key: "assistant.list_add_reply", name: "Sprite" });
+  assert.deepStrictEqual(log[1].card.say, { key: "assistant.add_done", name: "Sprite" });
+  assert.ok(!("say" in log[2]) && !("say" in log[2].card));               // чужой ключ и мусор — отброшены
+  const uz = (key, params) => "UZ:" + key + ":" + ((params || {}).name || "");
+  assert.strictEqual(Assistant.sayText(log[1].say, log[1].content, uz), "UZ:assistant.list_add_reply:Sprite");
+  assert.strictEqual(Assistant.sayText(log[1].card.say, log[1].card.note, uz), "UZ:assistant.add_done:Sprite");
+  assert.strictEqual(Assistant.sayText(log[2].card.say, log[2].card.note, uz), "Ошибка сервера");    // текст сервера — как есть
+  assert.deepStrictEqual(Assistant.toSend(log, uz).map((m) => m.content),
+    ["Sprite — 9000", "UZ:assistant.list_add_reply:Sprite", "старый текст"]);
+  assert.strictEqual(Assistant.toSend(log)[1].content, "Добавьте фото «Sprite»");          // без перевода — как сохранено
+  ["assistant.list_reply", "assistant.proposal_default", "assistant.ui_default", "assistant.proposal_not_made",
+   "assistant.empty_reply", "assistant.add_done", "assistant.add_queued", "error.generic"].forEach((k) => tr(k, { name: "x" }));
+});
+
 console.log(`\n${passed} passed`);

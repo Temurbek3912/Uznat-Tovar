@@ -897,3 +897,83 @@ def test_price_list_needs_no_model_and_is_applied_all_at_once(client, Session):
             {"BREAD": 4000, "COLA": 9000}
     one = FakeModel({"tool": "", "text": "Хорошо."})                  # одна строка — обычный вопрос для модели
     assert _ask(Session, one, "Хлеб — 4500").text == "Хорошо." and len(one.calls) == 1
+
+
+# --- язык ответа и слова после смены языка (решение владельца 2026-11-17) ----------------------------------------------------------
+
+def test_new_year_category_is_a_category_not_a_new_product(Session):
+    """«Yangi» (новый) — и в названии категории «Yangi yil»: смена категории не путается с новым товаром; «Yangi tovar …» —
+    по-прежнему новый товар."""
+    model = FakeModel({"tool": "propose_add", "args": {"name": "Хлеб", "category": "Yangi yil"}})
+    card = _ask(Session, model, "Хлеб kategoriyasini Yangi yil qiling", lang="uz").proposal
+    assert card["kind"] == "update" and card["changes"] == {"category": "Yangi yil"} and len(model.calls) == 1
+    ru = FakeModel({"tool": "propose_archive", "args": {"product": "BREAD", "status": "archived"}},
+                   {"tool": "propose_update", "args": {"product": "BREAD", "field": "category", "value": "Новый год"}})
+    assert _ask(Session, ru, "Перенеси хлеб в категорию Новый год").proposal["changes"] == {"category": "Новый год"}
+    for text in ("Yangi tovar qoʻshing: Sprite, kategoriyasi ichimliklar", "Новый товар Sprite, категория напитки"):
+        add = FakeModel({"tool": "propose_add", "args": {"name": "Sprite", "category": "Напитки"}})
+        assert _ask(Session, add, text, lang="uz").proposal["kind"] == "add", text
+
+
+def _talk(Session, model, said, lang):
+    with Session() as db:
+        return A.chat(db, OWNER, said, lang, SETTINGS, http_post=model)
+
+
+def test_language_is_repeated_in_the_question_after_a_switch(Session):
+    """Русский разговор, затем вопрос по-узбекски: живая модель отвечала кириллицей. Язык напоминается в самом вопросе."""
+    said = [{"role": "user", "content": "Сколько товаров?"}, {"role": "assistant", "content": "У вас 4 товара."},
+            {"role": "user", "content": "Fanta narxi qancha?"}]
+    model = FakeModel({"tool": "", "text": "Narxi 9000 soʻm."})
+    assert _talk(Session, model, said, "uz").text == "Narxi 9000 soʻm."
+    sent = model.calls[0][1]["messages"]
+    assert sent[-1]["content"] == "Fanta narxi qancha?\n(Ответ — на узбекском (латиница, апостроф ʻ) языке.)"
+    assert sent[1]["content"] == "Сколько товаров?"                       # старые реплики не трогаются
+    back = FakeModel({"tool": "", "text": "Хорошо."})                     # обратно на русский — тоже напоминание
+    _talk(Session, back, said[:2] + [{"role": "user", "content": "А сколько без фото?"}], "ru")
+    assert back.calls[0][1]["messages"][-1]["content"].endswith("(Ответ — на русском языке.)")
+    first = FakeModel({"tool": "", "text": "Хорошо."})                    # первый вопрос по-русски — без приписки
+    _ask(Session, first, "Сколько товаров?")
+    assert first.calls[0][1]["messages"][-1]["content"] == "Сколько товаров?"
+
+
+def test_answer_in_the_wrong_alphabet_is_rewritten_once(Session):
+    """Ответ по-узбекски (латиница) кириллицей: модель один раз переписывает; переписала узбекской кириллицей — программа
+    переводит в латиницу, названия товаров из каталога («Хлеб», «Кока-кола») не трогает. Русский ответ побуквенно не
+    переводится."""
+    model = FakeModel({"tool": "", "text": "Хлеб — нарх 4000 сом. Штрихкод було, фото нет."},
+                      {"tool": "", "text": "Хлеб narxi 4000 soʻm. Shtrixkod yoʻq."})
+    assert _ask(Session, model, "Non narxi?", lang="uz").text == "Хлеб narxi 4000 soʻm. Shtrixkod yoʻq."
+    again = model.calls[1][1]["messages"]
+    assert "ПРОВЕРКА ПРОГРАММЫ" in again[-1]["content"] and "латинскими буквами" in again[-1]["content"]
+    cyr = FakeModel({"tool": "", "text": "Нарх 4000 сом, штрихкод йўқ."},
+                    {"tool": "", "text": "Кока-кола 0,5 л нархи 9000 сўм. Штрихкод бор, ер."})
+    assert _ask(Session, cyr, "Cola narxi?", lang="uz").text == "Кока-кола 0,5 л narxi 9000 soʻm. Shtrixkod bor, yer."
+    ru = FakeModel({"tool": "", "text": "Цена 4000 сом, штрихкода нет, фото было."},
+                   {"tool": "", "text": "Цена 4000 сом, штрихкода нет, вы были правы."})
+    assert _ask(Session, ru, "Non narxi?", lang="uz").text == "Цена 4000 сом, штрихкода нет, вы были правы."
+    ok = FakeModel({"tool": "", "text": "Кока-кола 0,5 л, Хлеб — 2 ta tovar."})       # названия кириллицей — не ошибка
+    assert _ask(Session, ok, "Qaysi tovarlar?", lang="uz").text == "Кока-кола 0,5 л, Хлеб — 2 ta tovar." and len(ok.calls) == 1
+    for lang in ("ru", "uz-Cyrl"):                                                     # там кириллица и нужна
+        same = FakeModel({"tool": "", "text": "Нарх 4000 сом, штрихкод йўқ."})
+        _ask(Session, same, "?", lang=lang)
+        assert len(same.calls) == 1, lang
+
+
+def test_scans_are_not_called_products(Session, monkeypatch):
+    """«Почему не узнал»: число сканов с «товар» после него — это сканы; совпало с числом товаров — не трогается."""
+    result = {"days": 30, "scans": 30, "weak_total": 3, "weak": [{}, {}, {}], "missing": [{}, {}],
+              "summary": "За 30 дн. покупатели сделали 30 сканов. Из этих сканов программа узнала товар уверенно — 13, "
+                         "неуверенно — 7; товара не было в каталоге — 6; не поняла, что на фото, — 3."}
+    assert A.scan_words("7 товаров узнались неуверенно, 3 товара — мало фото, 2 товара нет в каталоге.", result) == \
+        "7 сканов узнались неуверенно, 3 товара — мало фото, 2 товара нет в каталоге."
+    assert A.scan_words("Всего 30 товаров, 13 товара узнано; 1 товар", result) == "Всего 30 сканов, 13 скана узнано; 1 товар"
+    assert A.scan_words("7 ta tovar qiyin, 3 ta tovar", result) == "7 ta skan qiyin, 3 ta tovar"
+    assert A.scan_words("7 products, 6 items, 2 products", result) == "7 scans, 6 scans, 2 products"
+    assert A.scan_words("7 та товар", result) == "7 та скан"
+    assert A.scan_words("7 товаров", {"summary": "нет чисел"}) == "7 товаров"
+    monkeypatch.setattr(T, "scan_report", lambda db, days: {
+        "days": 30, "scans": 30, "started": True, "counts": {"matched": 13, "uncertain": 7, "not_in_catalog": 6, "unknown": 4},
+        "weak_total": 0, "weak": [], "missing_total": 0, "missing": [], "many_unknown": False})
+    model = FakeModel({"tool": "scan_problems", "args": {"days": 30}}, {"tool": "", "text": "7 товаров узнались неуверенно."})
+    assert _ask(Session, model, "Почему не узнал?").text == "7 сканов узнались неуверенно."

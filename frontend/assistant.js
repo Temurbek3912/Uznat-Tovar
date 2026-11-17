@@ -28,17 +28,35 @@
   var ERROR_CODES = ["no_price", "bad_price", "many", "archived", "repeat"];   // ошибки строк списка «товар — цена»
   var LIST_MAX = 50;
   var TIPS = ["no_photo", "more_photos", "check_photos", "add_barcode"];
+  // Тексты, которые пишет сама страница (а не модель), хранятся ключом: после смены языка они переводятся, а модель видит
+  // их на языке нового вопроса (на прежнем языке она и сама отвечала не на том).
+  var SAY_KEYS = ["assistant.list_reply", "assistant.proposal_default", "assistant.ui_default", "assistant.proposal_not_made",
+                  "assistant.empty_reply", "assistant.list_add_reply", "assistant.add_done", "assistant.add_queued", "error.generic"];
 
   function isObj(x) { return !!x && typeof x === "object" && !Array.isArray(x); }
+
+  /** {key, name?} — текст страницы по ключу; чужой ключ или мусор -> null. */
+  function cleanSay(say) {
+    if (!isObj(say) || SAY_KEYS.indexOf(say.key) === -1) return null;
+    var out = { key: say.key };
+    if (typeof say.name === "string") out.name = say.name.slice(0, 200);
+    return out;
+  }
+
+  /** Текст реплики или заметки: по ключу — на языке страницы сейчас, иначе как сохранён. */
+  function sayText(say, text, t) { return say && t ? t(say.key, { name: say.name || "" }) : text; }
 
   /** Карточка предложения из памяти вкладки -> проверенная копия или null. «Выполняется» после перезагрузки — снова вопрос
       (двойного изменения не будет: сервер сверяет версию товара, повтор названия не пропустит). */
   function cleanCard(card) {
     if (!isObj(card) || !isObj(card.action) || KINDS.indexOf(card.action.kind) === -1) return null;
     var state = CARD_STATES.indexOf(card.state) === -1 || card.state === "working" ? "ask" : card.state;
-    return { action: card.action, state: state, undo: isObj(card.undo) ? card.undo : null,
-             error: typeof card.error === "string" ? card.error : "", note: typeof card.note === "string" ? card.note : "",
-             opened: (Array.isArray(card.opened) ? card.opened : []).filter(function (i) { return i === (i | 0) && i >= 0; }) };
+    var out = { action: card.action, state: state, undo: isObj(card.undo) ? card.undo : null,
+                error: typeof card.error === "string" ? card.error : "", note: typeof card.note === "string" ? card.note : "",
+                opened: (Array.isArray(card.opened) ? card.opened : []).filter(function (i) { return i === (i | 0) && i >= 0; }) };
+    var say = cleanSay(card.say);
+    if (say) out.say = say;
+    return out;
   }
 
   function cleanUi(list) {
@@ -55,7 +73,8 @@
     }).map(function (m) {
       var out = { role: m.role, content: m.content, tools: Array.isArray(m.tools) ? m.tools.filter(function (x) { return typeof x === "string"; }) : [] };
       if (m.role === "assistant") {
-        var card = cleanCard(m.card), ui = cleanUi(m.ui);
+        var card = cleanCard(m.card), ui = cleanUi(m.ui), say = cleanSay(m.say);
+        if (say) out.say = say;
         if (card) out.card = card;
         if (ui.length) out.ui = ui;
         if (m.warn === "no_card") out.warn = "no_card";
@@ -64,7 +83,9 @@
       return out;
     }).slice(-MAX_KEPT);
   }
-  function toSend(log) { return log.slice(-MAX_SENT).map(function (m) { return { role: m.role, content: m.content }; }); }
+  function toSend(log, t) {
+    return log.slice(-MAX_SENT).map(function (m) { return { role: m.role, content: sayText(m.say, m.content, t) }; });
+  }
 
   /** Сколько разговора помощник запомнит к следующему вопросу — по тем же правилам, что сервер (app/services/assistant.py,
       clean_history): последние max_messages реплик вместе с новым вопросом, не больше max_chars символов (свежие важнее),
@@ -359,8 +380,8 @@
         win.fetch(auth.apiBase() + "/api/v1/catalog/products/tasks/" + encodeURIComponent(taskId), { headers: auth.authHeaders() })
           .then(function (res) { return res.ok ? res.json() : null; }).then(function (data) {
             if (!data || data.state === "working") { watchTask(card, taskId, tries - 1); return; }
-            card.note = data.state === "done" ? t("assistant.add_done", { name: card.action.name || "" })
-                                              : (data.message || t("error.generic"));
+            if (data.state === "done") { card.say = { key: "assistant.add_done", name: card.action.name || "" }; card.note = ""; }
+            else { card.say = data.message ? null : { key: "error.generic" }; card.note = data.message || ""; }
             save(); render();
           }, function () { watchTask(card, taskId, tries - 1); });
       }, 2000);
@@ -378,7 +399,7 @@
         Array.prototype.forEach.call(files || [], function (file) { form.append("files", file); });
         return post("/api/v1/assistant/act/add", form).then(function (res) {
           return finish(card, res, function (data) {
-            card.state = "done"; card.note = t("assistant.add_queued");
+            card.state = "done"; card.note = ""; card.say = { key: "assistant.add_queued" };
             watchTask(card, data.task_id, 30);
           });
         }, function () { netError(card); });
@@ -432,7 +453,7 @@
         working: "assistant.card_working", done: card.action.kind === "add" ? "" : "assistant.card_done",
         cancelled: "assistant.card_cancelled", undone: "assistant.card_undone"
       }[card.state];
-      var text = card.state === "error" ? card.error : (card.note || (says ? t(says) : ""));
+      var text = card.state === "error" ? card.error : (sayText(card.say, card.note, t) || (says ? t(says) : ""));
       if (text) box.appendChild(el("p", "chat__card-state" + (card.state === "error" ? " chat__card-state--error" : ""), text));
       if (row.firstChild) box.appendChild(row);
       var fresh = card.state === "working" ? [] : newItems(card.action);
@@ -454,6 +475,7 @@
       if (busy || card.opened.indexOf(item.index) !== -1) return;
       card.opened.push(item.index);
       log.push({ role: "assistant", content: t("assistant.list_add_reply", { name: item.name }), tools: [],
+                 say: { key: "assistant.list_add_reply", name: item.name },
                  card: cleanCard({ action: addAction(item), state: "ask" }) });
       save(); render();
     }
@@ -467,7 +489,7 @@
       log.forEach(function (m, idx) {
         var item = el("div", "chat__msg chat__msg--" + (m.role === "user" ? "user" : "bot") + (idx < mem.forgotten ? " chat__msg--forgotten" : ""));
         item.appendChild(el("div", "chat__who", t(m.role === "user" ? "assistant.you" : "assistant.bot")));
-        item.appendChild(el("div", "chat__text", m.content));
+        item.appendChild(el("div", "chat__text", sayText(m.say, m.content, t)));
         var seenTools = (m.tools || []).filter(function (n) { return ACTION_TOOLS.indexOf(n) === -1; });
         if (seenTools.length) {
           item.appendChild(el("div", "chat__seen", t("assistant.checked", { what: seenTools.map(function (n) {
@@ -524,18 +546,22 @@
       var headers = auth.authHeaders(); headers["Content-Type"] = "application/json";
       return Promise.resolve().then(function () {
         return win.fetch(auth.apiBase() + "/api/v1/assistant/chat", { method: "POST", headers: headers,
-          body: JSON.stringify({ messages: toSend(log), lang: I18N.getLang() }) });
+          body: JSON.stringify({ messages: toSend(log, t), lang: I18N.getLang() }) });
       }).then(function (res) {
         if (!res.ok) return errorOf(res).then(function (err) { status = err; });
         return res.json().then(function (data) {
           var card = isObj(data.proposal) ? cleanCard({ action: data.proposal, state: "ask" }) : null;
           var ui = cleanUi(data.ui);
-          var reply = String(data.reply || "").trim() ||
-                      t(card && card.action.kind === "bulk" && !(Array.isArray(card.action.rows) && card.action.rows.length)
-                        ? "assistant.list_reply" : card ? "assistant.proposal_default" : ui.length ? "assistant.ui_default" :
-                        data.proposal_error ? "assistant.proposal_not_made" : "assistant.empty_reply");
+          var reply = String(data.reply || "").trim(), say = null;
+          if (!reply) {
+            say = { key: card && card.action.kind === "bulk" && !(Array.isArray(card.action.rows) && card.action.rows.length)
+                      ? "assistant.list_reply" : card ? "assistant.proposal_default" : ui.length ? "assistant.ui_default" :
+                      data.proposal_error ? "assistant.proposal_not_made" : "assistant.empty_reply" };
+            reply = t(say.key);
+          }
           var msg = { role: "assistant", content: reply,
                       tools: (Array.isArray(data.tools) ? data.tools : []).map(function (x) { return x && x.name; }).filter(Boolean) };
+          if (say) msg.say = say;
           if (card) msg.card = card;
           if (ui.length) msg.ui = ui;
           if (!card && typeof data.proposal_error === "string" && data.proposal_error) { msg.warn = "failed"; msg.why = data.proposal_error; }
@@ -616,5 +642,6 @@
 
   return { start: start, scanSummary: scanSummary, cleanLog: cleanLog, toSend: toSend, memory: memory, describe: describe,
            describeBulk: describeBulk, fmtValue: fmtValue, newItems: newItems, addAction: addAction, cleanCard: cleanCard,
+           sayText: sayText,
            QUESTION_RESERVE: QUESTION_RESERVE, STORE_KEY: STORE_KEY };
 });

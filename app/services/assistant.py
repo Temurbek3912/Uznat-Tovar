@@ -214,6 +214,94 @@ def tidy_text(text: str, lang: str) -> str:
     return re.sub(r"[ \t]{2,}", " ", text).strip()
 
 
+# Владелец сменил язык посреди разговора: в истории ответы на прежнем языке, и живая qwen3-vl-4b (2026-11-17) после русских
+# реплик отвечала по-узбекски наполовину по-русски кириллицей («Fanta 0,5 л — 9000 сом. Штрихкод було»). Поэтому язык ответа
+# напоминается в самом вопросе (lang_reminder), а ответ кириллицей там, где нужна латиница, модель один раз переписывает
+# (wrong_script). Слова из каталога (названия «Печенье Oreo», категории) и из вопроса владельца не считаются; данные
+# инструментов — нет: в них и русские слова («сканов», «программа»).
+_CYR_WORD = re.compile(r"\w*[а-яёқғҳў]\w*", re.I)
+_LATIN_LANGS = ("uz", "en")
+# Узбекская кириллица (а не русский): есть ў қ ғ ҳ — или нет русских ы щ. Русский текст побуквенно в латиницу не переводится.
+_UZ_CYRILLIC = re.compile(r"[ўқғҳ]|^(?!.*[ыщ])", re.I | re.S)
+
+
+# «Почему не узнал»: модель называла сканы товарами («7 товаров узнались неуверенно» при 7 неуверенных сканах). Число, которое
+# есть среди счётчиков сканов и не совпадает ни с одним счётом товаров, с «товар» после него — это сканы: слово заменяет
+# программа. Совпало (3 скана и 3 товара) — не трогается: не угадать.
+_SCAN_WORD = (
+    (re.compile(r"\b(\d+)(\s+(?:та\s+)?)(товар(?:ов|а|ы)?|маҳсулот\w*)(?!\w)", re.I),
+     lambda w: {"товара": "скана", "товаров": "сканов", "товары": "сканы"}.get(w.lower(), "скан")),
+    (re.compile(r"\b(\d+)(\s+(?:ta\s+)?)(tovar\w*|mahsulot\w*)(?!\w)", re.I), lambda w: "skan"),
+    (re.compile(r"\b(\d+)(\s+)(products?|items?)\b", re.I), lambda w: "scan" if w.lower() in ("product", "item") else "scans"),
+)
+
+
+def scan_words(text: str, result: dict) -> str:
+    """В ответе по данным scan_problems «N товаров» там, где N — число сканов, → «N сканов» (skan, scans)."""
+    # summary: «За 30 дн. покупатели сделали 30 сканов … уверенно — 13, неуверенно — 7; … — 6; … — 4.» — всё после дней — сканы.
+    scans = {int(n) for n in re.findall(r"\d+", str(result.get("summary") or ""))[1:] if int(n) > 0}
+    goods = {v for v in (result.get("weak_total"), len(result.get("weak") or []), len(result.get("missing") or []))
+             if isinstance(v, int)}
+    wrong = scans - goods
+    if not wrong:
+        return text
+    for pattern, scan in _SCAN_WORD:
+        text = pattern.sub(lambda m: m.group(0) if int(m.group(1)) not in wrong
+                           else m.group(1) + m.group(2) + _same_case(m.group(3), scan(m.group(3))), text)
+    return text
+
+
+def _same_case(old: str, new: str) -> str:
+    return new.capitalize() if old[:1].isupper() else new
+
+
+def lang_reminder(lang: str, history: list[dict]) -> str:
+    """Приписка к вопросу владельца: на каком языке ответить. Нужна, когда язык не русский или в разговоре уже есть ответы."""
+    if lang == "ru" and not any(m["role"] == "assistant" for m in history):
+        return ""
+    return f"\n(Ответ — на {LANGS[lang]} языке.)"
+
+
+def _known_words(db, question: str) -> set[str]:
+    """Слова кириллицей, которые в ответе на латинице законны: из вопроса владельца и из каталога (название, бренд, категория)."""
+    known = {w.lower() for w in _CYR_WORD.findall(question or "")}
+    for row in db.query(Product.name, Product.brand, Product.category).filter(Product.status == PRODUCT_ACTIVE).all():
+        known.update(w.lower() for w in _CYR_WORD.findall(" ".join(v for v in row if v)))
+    return known
+
+
+def wrong_script(db, text: str, lang: str, question: str) -> bool:
+    """Ответ для узбекской латиницы или английского написан в основном кириллицей (не считая слов каталога и вопроса)."""
+    if lang not in _LATIN_LANGS:
+        return False
+    cyr = [w.lower() for w in _CYR_WORD.findall(text or "") if len(w) >= 2]
+    words = re.findall(r"\w{2,}", text or "")
+    if len(cyr) < 3 or len(cyr) * 3 < len(words):
+        return False
+    known = _known_words(db, question)
+    cyr = [w for w in cyr if w not in known]
+    return len(cyr) >= 3 and len(cyr) * 3 >= len(words)
+
+
+def _uz_word_latin(word: str) -> str:
+    """Слово узбекской кириллицы → латиница; «е» в начале слова и после гласной — «ye» («Ер» → «Yer»)."""
+    out = []
+    for i, ch in enumerate(word):
+        if ch.lower() == "е" and (i == 0 or word[i - 1].lower() in "аеёиоуўэюяъь"):
+            out.append("Ye" if ch.isupper() else "ye")
+        else:
+            out.append(_to_latin(ch))
+    return "".join(out)
+
+
+def latinize(db, text: str, question: str) -> str:
+    """Ответ по-узбекски, который и после «перепиши» остался кириллицей (живая модель 2026-11-17 переписывала узбекской
+    кириллицей) → латиница. Слова каталога и вопроса («Печенье», «паста») и однобуквенные («0,5 л») не трогаются."""
+    known = _known_words(db, question)
+    return _CYR_WORD.sub(lambda m: m.group(0) if len(m.group(0)) < 2 or m.group(0).lower() in known
+                         else _uz_word_latin(m.group(0)), text or "")
+
+
 def invented_code(name: str, args: dict, history: list[dict]) -> None:
     """Штрихкод берётся только из слов владельца. Живая qwen3-vl-4b (2026-11-17) на «Сколько товаров без штрихкода?»
     предложила товару код «1234567890123» — придумала сама (спасла только контрольная цифра). Цифры кода должны быть в одной
@@ -325,7 +413,9 @@ def price_meant(db, name: str, args: dict, history: list[dict]) -> dict:
 
 
 _CATEGORY_CHANGE = re.compile(r"kategori")
-_NOT_CATEGORY_CHANGE = re.compile(r"arhiv|ochir|udal|ubra|uber|dobav|qosh|yangi|nov(?:yy|yi|ogo)")
+# «Yangi tovar …» / «новый товар …» — это новый товар, а не смена категории. «Yangi» одно не годится: категория «Yangi yil»
+# («Fanta kategoriyasini Yangi yil qiling»), как и «Новый год» / «Новогодние».
+_NOT_CATEGORY_CHANGE = re.compile(r"arhiv|ochir|udal|ubra|uber|dobav|qosh|(?:yangi|nov\w*)\s+(?:tovar|mahsulot|produkt|pozi)")
 _A = "[ʻ'’`]?"
 # «Fanta kategoriyasini gazaklar qiling», «Fanta kategoriyasini Snekilarga oʻtkazing» (и кириллицей): товар, категория, глагол
 _UZ_CATEGORY = re.compile(
@@ -450,7 +540,8 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
     lang = lang if lang in LANGS else "ru"
     tools = assistant_tools.allowed_tools(user)
     names = [t.name for t in tools]
-    convo = [{"role": "system", "content": system_prompt(user, tools, lang)}, *history]
+    question = {**history[-1], "content": history[-1]["content"] + lang_reminder(lang, history)}
+    convo = [{"role": "system", "content": system_prompt(user, tools, lang)}, *history[:-1], question]
     used: list[dict] = []
     proposals, ui = assistant_actions.Proposals(), []
     failed = {"error": ""}                  # последняя ошибка инструмента propose_*
@@ -464,19 +555,23 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
             return Reply(text="", tools=[{"name": "price_list", "ok": True}], seconds=round(clock() - started, 1),
                          proposal=listed)
     nudged = False
+    spare = ""                              # ответ не тем алфавитом (wrong_script) — если переписать не вышло, отдаётся он
     redirected = False                      # «ПРОВЕРКА ПРОГРАММЫ» о смене категории — не больше одного раза
     answer_now = False                      # инструмент дал полный итог (Tool.answer_next) — следующий шаг только ответ
+    scanned: dict = {}                      # итог scan_problems — чтобы не назвать сканы товарами (scan_words)
 
     def done(text: str) -> Reply:
         card = proposals.items[0] if proposals.items else None
+        if scanned:
+            text = scan_words(text, scanned)
         return Reply(text=text[:MAX_REPLY_CHARS], tools=used, seconds=round(clock() - started, 1), proposal=card, ui=ui,
                      proposal_error="" if card else failed["error"],
                      no_card=can_propose and card is None and not failed["error"] and claims_change(text))
 
     try:
         with model_gate.assistant_slot(WAIT_FOR_SLOT):
-            for step in range(MAX_STEPS + 1):
-                final = step == MAX_STEPS or answer_now
+            for step in range(MAX_STEPS + 2):   # +1 — переписать ответ (wrong_script)
+                final = step >= MAX_STEPS or answer_now
                 step_answer = _ask_model(post, url, model, convo, answer_schema(tools, final=final))
                 if step_answer is None:
                     break
@@ -492,6 +587,19 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                                       "вызвал propose_*. Найди товар (find_products) и вызови нужный propose_*, или честно "
                                       "ответь, что не сделал."})
                         continue
+                    if text and not spare and step <= MAX_STEPS and wrong_script(db, text, lang, history[-1]["content"]):
+                        spare = text            # один раз: «перепиши на нужном языке»
+                        convo.append({"role": "assistant", "content": json.dumps(
+                            {"tool": "", "text": text[:300]}, ensure_ascii=False)})
+                        convo.append({"role": "user", "content": f"ПРОВЕРКА ПРОГРАММЫ: ответ не на {LANGS[lang]} языке. "
+                                      f"Напиши тот же ответ на {LANGS[lang]} языке"
+                                      + (" латинскими буквами (oʻ, gʻ, sh, ch), не кириллицей" if lang == "uz" else "")
+                                      + "; названия товаров — как в данных."})
+                        answer_now = True
+                        continue
+                    if (text and spare and lang == "uz" and _UZ_CYRILLIC.search(text)
+                            and wrong_script(db, text, lang, history[-1]["content"])):
+                        text = latinize(db, text, history[-1]["content"])    # переписала узбекской кириллицей
                     if text:
                         return done(text)
                     break
@@ -524,6 +632,8 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                 # «Почему не узнал» (scan_problems) уже содержит и товары, и советы: живая qwen3-vl-4b (2026-11-17) после него
                 # «перепроверяла» его же данные find_products/products_missing и по-узбекски отвечала уже о другом.
                 answer_now = ok and getattr(assistant_tools.get_tool(name), "answer_next", False)
+                if ok and name == "scan_problems" and isinstance(result, dict):
+                    scanned = result
                 named = named_categories(db, name, args, history) if ok and can_propose else []
                 if named:
                     # Данные «товаров без категории» модели не показываем вовсе: с ними она отвечала о них (о другом товаре).
@@ -551,6 +661,8 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                     return done("")
     except LookupError as exc:
         raise AssistantBusy() from exc
+    if spare:                                      # переписать не вышло — лучше ответ не тем алфавитом, чем никакого
+        return done(spare)
     if proposals.items or ui or failed["error"]:   # модель не договорила: карточку, язык/тему и ошибку страница покажет сама
         return done("")
     raise AssistantUnavailable("bad_answer")

@@ -932,7 +932,7 @@
     "assistant.list_hint": "You can send new prices as a list: one product and price per line, for example “Fanta 0,5 — 9500”. The assistant shows what will change and changes it after “Do it”.",
     "assistant.bulk.price_list": "prices from your list",
     "assistant.card_list_nothing": "Nothing to change in the catalog from your list.",
-    "assistant.list_new": "Not in the catalog ({n}): {list}. A new product is added with photos: write “Add product …, price …” or add it on the Products page.",
+    "assistant.list_new": "Not in the catalog ({n}): {list}. A new product is added with photos — press “Add … with photos” below.",
     "assistant.list_error.no_price": "Line “{line}”: no price found — put a number at the end of the line, for example “— 9500”.",
     "assistant.list_error.bad_price": "Line “{line}”: the price must be above zero and without extra zeros.",
     "assistant.list_error.many": "Line “{line}”: several products match ({list}) — write the name more exactly or the SKU.",
@@ -941,7 +941,9 @@
     "assistant.list_more": "and {n} more",
     "assistant.list_cut": "The list has more than {max} lines: the first {max} were taken, send the rest ({n}) in the next message.",
     "assistant.list_same": "Price is already the same: {n}.",
-    "assistant.list_reply": "Here is what came out of your list."
+    "assistant.list_reply": "Here is what came out of your list.",
+    "assistant.list_add": "Add “{name}” with photos",
+    "assistant.list_add_reply": "New product “{name}” from your list. Check the name and price, add product photos and press “Do it”."
   };
   if (root.I18N) root.I18N.add("en", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

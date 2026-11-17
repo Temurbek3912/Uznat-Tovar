@@ -37,7 +37,8 @@
     if (!isObj(card) || !isObj(card.action) || KINDS.indexOf(card.action.kind) === -1) return null;
     var state = CARD_STATES.indexOf(card.state) === -1 || card.state === "working" ? "ask" : card.state;
     return { action: card.action, state: state, undo: isObj(card.undo) ? card.undo : null,
-             error: typeof card.error === "string" ? card.error : "", note: typeof card.note === "string" ? card.note : "" };
+             error: typeof card.error === "string" ? card.error : "", note: typeof card.note === "string" ? card.note : "",
+             opened: (Array.isArray(card.opened) ? card.opened : []).filter(function (i) { return i === (i | 0) && i >= 0; }) };
   }
 
   function cleanUi(list) {
@@ -155,6 +156,25 @@
     else if (num(action.skipped) > 0) notes.push(t("assistant.bulk_skipped", { n: num(action.skipped) }));
     if (rows.length > 1 && !action.undo) notes.push(t("assistant.bulk_together"));
     return { lines: lines, notes: notes };
+  }
+
+  /** Строки списка «товар — цена», которых нет в каталоге -> [{index, name, price}] для кнопок «Добавить с фото».
+      Товар без фото не создаётся (покупатель не узнал бы его по снимку): кнопка открывает обычную карточку нового товара
+      (kind=add) с названием и ценой из строки — фото владелец добавляет в ней, «Сделать» без фото не отправляется. */
+  function newItems(action) {
+    if (!isObj(action) || action.kind !== "bulk" || action.change !== "price_list" || action.undo) return [];
+    var out = [];
+    (Array.isArray(action["new"]) ? action["new"] : []).forEach(function (r, index) {
+      if (!isObj(r) || typeof r.name !== "string" || !r.name.trim()) return;
+      var price = typeof r.price === "number" && isFinite(r.price) && r.price > 0 ? r.price : null;
+      out.push({ index: index, name: r.name.trim().slice(0, 120), price: price });
+    });
+    return out;
+  }
+
+  /** Строка «нет в каталоге» -> предложение нового товара (как propose_add): бренд и категорию владелец допишет на странице. */
+  function addAction(item) {
+    return { kind: "add", name: item.name, price: item.price, brand: "", category: "", barcode: "" };
   }
 
   /** Список «товар — цена» (сервер разобрал его по строкам): чего нет в каталоге, ошибки по строкам, сколько уже с такой ценой. */
@@ -415,7 +435,27 @@
       var text = card.state === "error" ? card.error : (card.note || (says ? t(says) : ""));
       if (text) box.appendChild(el("p", "chat__card-state" + (card.state === "error" ? " chat__card-state--error" : ""), text));
       if (row.firstChild) box.appendChild(row);
+      var fresh = card.state === "working" ? [] : newItems(card.action);
+      if (fresh.length) {                       // нет в каталоге — по кнопке карточка нового товара с фото
+        var adds = el("div", "chat__actions");
+        fresh.forEach(function (item) {
+          if (card.opened.indexOf(item.index) !== -1) return;
+          var b = el("button", "btn btn--secondary", t("assistant.list_add", { name: item.name }));
+          b.setAttribute("type", "button");
+          b.addEventListener("click", function () { openAdd(card, item); });
+          adds.appendChild(b);
+        });
+        if (adds.firstChild) box.appendChild(adds);
+      }
       return box;
+    }
+
+    function openAdd(card, item) {
+      if (busy || card.opened.indexOf(item.index) !== -1) return;
+      card.opened.push(item.index);
+      log.push({ role: "assistant", content: t("assistant.list_add_reply", { name: item.name }), tools: [],
+                 card: cleanCard({ action: addAction(item), state: "ask" }) });
+      save(); render();
     }
 
     // --- переписка -----------------------------------------------------------------------------------------------------------
@@ -575,6 +615,6 @@
   }
 
   return { start: start, scanSummary: scanSummary, cleanLog: cleanLog, toSend: toSend, memory: memory, describe: describe,
-           describeBulk: describeBulk, fmtValue: fmtValue,
+           describeBulk: describeBulk, fmtValue: fmtValue, newItems: newItems, addAction: addAction, cleanCard: cleanCard,
            QUESTION_RESERVE: QUESTION_RESERVE, STORE_KEY: STORE_KEY };
 });

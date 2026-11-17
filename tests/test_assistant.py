@@ -871,6 +871,9 @@ def test_price_list_card_by_lines(Session):
         assert same["rows"] == [] and same["skipped"] == 2 and [e["code"] for e in same["errors"]] == ["repeat"]
         twice = price_list.card(db, "Хлеб 4100\nХлеб 4200")
         assert twice["rows"] == [] and twice["errors"][0]["code"] == "repeat"       # какая из двух цен верная — не угадываем
+        fresh = price_list.card(db, "Sprite 0,5 — 9000\nsprite 0.5 — 9500\nMirinda — 8000\nSPRITE 0,5 9900")
+        assert fresh["new"] == [{"line": "Mirinda — 8000", "name": "Mirinda", "price": 8000.0}]   # новый товар дважды — без кнопки
+        assert [(e["code"], e["names"]) for e in fresh["errors"]] == [("repeat", ["sprite 0.5"]), ("repeat", ["SPRITE 0,5"])]
         long = price_list.card(db, "\n".join(f"Товар {i} — {1000 + i}" for i in range(60)))
         assert long["cut"] == 10 and len(long["new"]) == price_list.MAX_LINES
         assert db.query(Product).filter_by(sku="BREAD").one().expected_price == 4000      # карточка ничего не меняет

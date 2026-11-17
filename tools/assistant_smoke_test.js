@@ -190,4 +190,24 @@ test("список «товар — цена»: строки «было → ст
   tr("assistant.list_hint");
 });
 
+test("нет в каталоге: кнопки «Добавить с фото» — карточка нового товара с названием и ценой из строки", () => {
+  const action = { kind: "bulk", change: "price_list", rows: [],
+                   new: [{ line: "Sprite 0,5 — 9000", name: " Sprite 0,5 ", price: 9000 }, "мусор", { name: "" },
+                         { line: "Хлеб 0", name: "Хлеб", price: -5 }, { name: "x".repeat(300), price: 1 }] };
+  const items = Assistant.newItems(action);
+  assert.deepStrictEqual(items.map((i) => [i.index, i.name.length, i.price]), [[0, 10, 9000], [3, 4, null], [4, 120, 1]]);
+  assert.deepStrictEqual(Assistant.addAction(items[0]),
+    { kind: "add", name: "Sprite 0,5", price: 9000, brand: "", category: "", barcode: "" });
+  assert.deepStrictEqual(Assistant.newItems({ ...action, change: "price_set" }), []);        // только список цен
+  assert.deepStrictEqual(Assistant.newItems({ ...action, undo: true }), []);                 // обратное действие — без кнопок
+  assert.deepStrictEqual(Assistant.newItems(null), []);
+  // какие кнопки уже нажаты — помнит карточка (память вкладки), мусор отбрасывается
+  assert.deepStrictEqual(Assistant.cleanCard({ action, state: "ask", opened: [0, "1", -1, 2.5, 3] }).opened, [0, 3]);
+  assert.deepStrictEqual(Assistant.cleanCard({ action, state: "ask" }).opened, []);
+  assert.deepStrictEqual(Assistant.describe(Assistant.addAction(items[0]), tr),
+    ["Добавить новый товар:", "Название: Sprite 0,5", "Цена: 9000", "Бренд: не указано", "Категория: не указано"]);
+  assert.strictEqual(tr("assistant.list_add", { name: "Sprite" }), "Добавить «Sprite» с фото");
+  tr("assistant.list_add_reply", { name: "Sprite" });
+});
+
 console.log(`\n${passed} passed`);

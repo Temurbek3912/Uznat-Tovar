@@ -101,6 +101,8 @@ def assistant_act(
     """Владелец нажал «Сделать» в карточке помощника (или «Отменить» после неё). Проверки — те же, что у страницы «Товары»;
     версия товара сверяется: если его успели изменить, 409, а не перезапись."""
     action = body.action
+    if action.get("kind") == "bulk":
+        return _act_bulk(db, user, action)
     kind, product_id = action.get("kind"), action.get("product_id")
     version = action.get("version") if isinstance(action.get("version"), int) else None
     if kind not in ("update", "status") or not isinstance(product_id, str):
@@ -129,6 +131,59 @@ def assistant_act(
     db.commit()
     undo = assistant_actions.undo_of_update({**action, "before": before}, summary.version, summary.name)
     return {"ok": True, "product": summary.model_dump(), "undo": undo}
+
+
+_BULK_COLUMN = {"price": "expected_price", "category": "category", "brand": "brand", "in_stock": "in_stock", "status": "status"}
+
+
+def _act_bulk(db: Session, user: CurrentUser, action: dict) -> dict:
+    """Массовое изменение (этап A3): все строки карточки — одной транзакцией. Любая ошибка (товар успели изменить — 409, не
+    найден, неверное значение) — не меняется НИЧЕГО. Значения проверяются заново (страница могла прислать что угодно), «было» —
+    из базы. Запись в журнал — по каждому товару, как при изменении одного. Ответ — обратное действие «Отменить всё»."""
+    field, rows = action.get("field"), action.get("rows")
+    if field not in assistant_actions.BULK_FIELDS or not isinstance(rows, list) or not rows \
+            or len(rows) > assistant_actions.BULK_MAX or not all(isinstance(r, dict) for r in rows):
+        raise ApiError(422, "assistant_action_invalid", "Помощник предложил непонятное действие — попросите ещё раз.")
+    ids = [r.get("product_id") for r in rows]
+    if not all(isinstance(i, str) for i in ids) or len(set(ids)) != len(ids):
+        raise ApiError(422, "assistant_action_invalid", "Помощник предложил непонятное действие — попросите ещё раз.")
+    column = _BULK_COLUMN[field]
+    actor = audit.AuditActor(user.id, "assistant")
+    reason = f"ИИ-помощник: массовое изменение (товаров: {len(rows)})"
+    undo_rows = []
+    try:
+        for row in rows:
+            product = db.get(Product, row["product_id"])
+            if product is None:
+                raise ApiError(404, "product_not_found", f"Товар «{str(row.get('name') or '')[:60]}» не найден — ничего не изменено.")
+            version = row.get("version") if isinstance(row.get("version"), int) else None
+            routes_catalog._check_version(product, version)        # noqa: SLF001 — та же проверка, что у страницы «Товары»
+            try:
+                after = assistant_actions.clean_bulk_value(field, row.get("after"))
+            except assistant_actions.ActionError as exc:
+                raise ApiError(422, "assistant_action_invalid", str(exc)) from exc
+            before = (product.status or PRODUCT_ACTIVE) if field == "status" else getattr(product, column)
+            if before == after:
+                continue
+            setattr(product, column, after)
+            routes_catalog._bump(product)                           # noqa: SLF001
+            if field == "status":
+                audit.record(db, routes_catalog._STATUS_ACTIONS[after], actor=actor, target_type="product",  # noqa: SLF001
+                             target_id=product.id, before={"status": before}, after={"status": after}, reason=reason)
+            else:
+                audit.record(db, "assistant.product.updated", actor=actor, target_type="product", target_id=product.id,
+                             before={field: before}, after={field: after}, reason=reason)
+            undo_rows.append({"product_id": product.id, "sku": product.sku, "name": product.name, "before": after,
+                              "after": before, "_product": product})
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    for row in undo_rows:
+        row["version"] = row.pop("_product").version
+    undo = {**{k: action.get(k) for k in ("field", "change", "value", "where", "query")}, "kind": "bulk", "undo": True,
+            "rows": undo_rows, "skipped": 0} if undo_rows else None
+    return {"ok": True, "changed": len(undo_rows), "undo": undo}
 
 
 @router.post("/act/add", status_code=202)

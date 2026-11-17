@@ -19,9 +19,10 @@
   var BUSY_POLL_MS = 30000;    // как часто узнавать, заняты ли покупатели распознаванием
   var EXAMPLES = ["assistant.example_scans", "assistant.example_photo", "assistant.example_dupes", "assistant.example_price", "assistant.example_theme"];
   var CARD_STATES = ["ask", "working", "done", "cancelled", "undone", "error"];
-  var KINDS = ["update", "status", "add"];
+  var KINDS = ["update", "status", "add", "bulk"];
+  var BULK_CHANGES = ["price_percent", "price_add", "price_set", "category", "brand", "in_stock", "archive", "restore"];
   // инструменты-действия: в строке «Смотрел: …» не показываются (их видно по карточке и по строке «Сделано»)
-  var ACTION_TOOLS = ["propose_update", "propose_archive", "propose_add", "set_language", "set_theme"];
+  var ACTION_TOOLS = ["propose_update", "propose_archive", "propose_add", "propose_bulk", "set_language", "set_theme"];
   var SCAN_DAYS = [7, 30, 90];          // сводка сканов: за сколько дней (сервер хранит сканы 90 дней)
   var SCAN_DAYS_KEY = "assistant_scan_days";
   var TIPS = ["no_photo", "more_photos", "check_photos", "add_barcode"];
@@ -117,8 +118,35 @@
         if (field === "barcode" && !action.barcode) return;      // штрихкод с фото привяжется сам при добавлении
         lines.push(label(field === "barcode" ? "add_barcode" : field) + ": " + fmtValue(action[field], t));
       });
+    } else if (action.kind === "bulk") {
+      lines = describeBulk(action, t).lines;
     }
     return lines;
+  }
+
+  /** Массовое изменение (этап A3) -> {lines: [заголовок, строки «было → станет»…], notes: [пропущено, «всё вместе»]}.
+      Строки считает сервер; страница только показывает их. */
+  function describeBulk(action, t) {
+    var rows = Array.isArray(action.rows) ? action.rows.filter(isObj) : [];
+    var change = BULK_CHANGES.indexOf(action.change) !== -1 ? action.change : "";
+    var value = action.value;
+    if ((change === "price_percent" || change === "price_add") && typeof value === "number" && value > 0) value = "+" + value;
+    var what = change ? t("assistant.bulk." + change, { value: fmtValue(value, t) }) : "";
+    var status = action.field === "status";
+    var lines = [t("assistant.card_bulk", { n: rows.length, what: what })];
+    rows.forEach(function (r) {
+      var p = { name: String(r.name || ""), sku: String(r.sku || "") };
+      if (status) lines.push(t("assistant.bulk_row_status", p));
+      else lines.push(t("assistant.bulk_row", { name: p.name, sku: p.sku, before: fmtValue(r.before, t), after: fmtValue(r.after, t) }));
+    });
+    var notes = [];
+    // по чему выбраны товары — так владелец сразу видит, если модель поняла категорию не так («gazak» -> «Газированные…»)
+    if (["category", "brand", "name"].indexOf(action.where) !== -1 && action.query) {
+      notes.push(t("assistant.bulk_where." + action.where, { query: String(action.query) }));
+    }
+    if (num(action.skipped) > 0) notes.push(t("assistant.bulk_skipped", { n: num(action.skipped) }));
+    if (rows.length > 1 && !action.undo) notes.push(t("assistant.bulk_together"));
+    return { lines: lines, notes: notes };
   }
 
   function num(x) { return typeof x === "number" && isFinite(x) ? x : 0; }
@@ -328,9 +356,14 @@
     function renderCard(card) {
       var box = el("div", "chat__card chat__card--" + card.state);
       box.appendChild(el("div", "chat__card-title", t("assistant.card_title")));
-      var list = el("ul", "chat__card-list");
-      describe(card.action, t).forEach(function (line) { list.appendChild(el("li", "", line)); });
+      var bulk = card.action.kind === "bulk", lines = describe(card.action, t);
+      if (bulk) box.appendChild(el("p", "chat__card-head", lines.shift()));
+      var list = el("ul", "chat__card-list" + (bulk ? " chat__card-list--long" : ""));
+      lines.forEach(function (line) { list.appendChild(el("li", "", line)); });
       box.appendChild(list);
+      if (bulk && (card.state === "ask" || card.state === "error")) {
+        describeBulk(card.action, t).notes.forEach(function (n) { box.appendChild(el("p", "chat__seen", n)); });
+      }
       var files = null;
       if (card.action.kind === "add" && (card.state === "ask" || card.state === "error")) {
         var lab = el("label", "field");
@@ -348,7 +381,7 @@
         }));
         row.appendChild(button("btn--secondary", "assistant.cancel", function () { card.state = "cancelled"; card.error = ""; save(); render(); }));
       } else if (card.state === "done" && card.undo) {
-        row.appendChild(button("btn--secondary", "assistant.undo", function () { undo(card); }));
+        row.appendChild(button("btn--secondary", bulk ? "assistant.undo_all" : "assistant.undo", function () { undo(card); }));
       }
       var says = {
         working: "assistant.card_working", done: card.action.kind === "add" ? "" : "assistant.card_done",
@@ -515,6 +548,7 @@
     return { ready: init(), send: send, poll: poll, stop: function () { if (pollTimer) win.clearInterval(pollTimer); } };
   }
 
-  return { start: start, scanSummary: scanSummary, cleanLog: cleanLog, toSend: toSend, memory: memory, describe: describe, fmtValue: fmtValue,
+  return { start: start, scanSummary: scanSummary, cleanLog: cleanLog, toSend: toSend, memory: memory, describe: describe,
+           describeBulk: describeBulk, fmtValue: fmtValue,
            QUESTION_RESERVE: QUESTION_RESERVE, STORE_KEY: STORE_KEY };
 });

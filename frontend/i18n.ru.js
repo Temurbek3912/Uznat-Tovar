@@ -909,7 +909,25 @@
     "assistant.tip_code.no_photo": "нет фото: по виду не узнаётся — добавьте 2–3 фото с разных сторон",
     "assistant.tip_code.more_photos": "добавьте ещё 2–3 фото с разных сторон",
     "assistant.tip_code.check_photos": "проверьте фото (на всех ли сам товар) и добавьте крупное фото этикетки",
-    "assistant.tip_code.add_barcode": "добавьте штрихкод — по нему узнаётся сразу"
+    "assistant.tip_code.add_barcode": "добавьте штрихкод — по нему узнаётся сразу",
+    "assistant.tool.propose_bulk": "изменение многих товаров",
+    "assistant.card_bulk": "Изменить сразу несколько товаров ({n}): {what}",
+    "assistant.bulk.price_percent": "цена {value} %",
+    "assistant.bulk.price_add": "цена {value} сум",
+    "assistant.bulk.price_set": "новая цена {value}",
+    "assistant.bulk.category": "категория «{value}»",
+    "assistant.bulk.brand": "бренд «{value}»",
+    "assistant.bulk.in_stock": "в наличии: {value}",
+    "assistant.bulk.archive": "убрать в архив (вернуть можно в любой момент)",
+    "assistant.bulk.restore": "вернуть из архива",
+    "assistant.bulk_row": "«{name}» ({sku}): {before} → {after}",
+    "assistant.bulk_row_status": "«{name}» ({sku})",
+    "assistant.bulk_skipped": "Не меняются (уже так или нет цены): {n}.",
+    "assistant.bulk_together": "Всё меняется вместе: если хоть один товар успели изменить, не изменится ничего.",
+    "assistant.undo_all": "Отменить всё",
+    "assistant.bulk_where.category": "Выбраны товары, у которых в категории есть «{query}».",
+    "assistant.bulk_where.brand": "Выбраны товары, у которых в бренде есть «{query}».",
+    "assistant.bulk_where.name": "Выбраны товары, у которых в названии есть «{query}»."
   };
   if (root.I18N) root.I18N.add("ru", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

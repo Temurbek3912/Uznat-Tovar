@@ -345,7 +345,7 @@ def scan_problems(db, args: dict) -> dict:
 
 TOOLS: tuple[Tool, ...] = (
     Tool("catalog_overview", Permission.CATALOG_READ,
-         "Сводка каталога: сколько товаров, в архиве, без фото, без штрихкода, без цены, без бренда, без категории; категории.",
+         "Сводка каталога: сколько товаров, в архиве, без фото, штрихкода, цены, бренда, категории; категории.",
          {}, catalog_overview),
     Tool("find_products", Permission.CATALOG_READ,
          "Найти товары по названию, бренду, артикулу или штрихкоду.",
@@ -366,7 +366,7 @@ TOOLS: tuple[Tool, ...] = (
 )
 TOOLS += (
     Tool("propose_update", Permission.CATALOG_WRITE,
-         "Предложить изменить одно поле товара (несколько полей — несколько вызовов).",
+         "Предложить изменить одно поле одного товара.",
          {"product": "артикул или штрихкод", "field": "|".join(actions.EDIT_FIELDS),
           "value": "новое значение; пусто — убрать; in_stock: да/нет"},
          lambda db, args, props: props.update(db, args), "propose",
@@ -377,9 +377,14 @@ TOOLS += (
          lambda db, args, props: props.status(db, args), "propose",
          required=("product", "status"), choices={"status": ["archived", "active"]}),
     Tool("propose_add", Permission.CATALOG_WRITE,
-         "Предложить новый товар; фото добавит владелец (штрихкод с фото привяжется сам).",
+         "Предложить новый товар; фото добавит владелец.",
          {"name": "", "price": "", "brand": "", "category": ""},
          lambda db, args, props: props.add(db, args), "propose", required=("name",)),
+    Tool("propose_bulk", Permission.CATALOG_WRITE,
+         "Одно изменение многим товарам (до 50).",
+         {"where": "|".join(actions.BULK_WHERE), "query": "", "change": "|".join(actions.BULK_CHANGES), "value": ""},
+         lambda db, args, props: props.bulk(db, args), "propose", required=("where", "query", "change", "value"),
+         choices={"where": list(actions.BULK_WHERE), "change": list(actions.BULK_CHANGES)}),
     Tool("set_language", Permission.ASSISTANT_USE, "Сменить язык программы сразу.",
          {"lang": "|".join(actions.UI_LANGS)}, lambda args: actions.ui_action(args, "lang"), "ui",
          required=("lang",), choices={"lang": list(actions.UI_LANGS)}),

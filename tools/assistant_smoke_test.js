@@ -144,4 +144,23 @@ test("сводка сканов сверху страницы: числа и с�
   ["title", "days", "period", "missing_tip", "error"].forEach((k) => tr("assistant.scans_" + k, { n: 1 }));
 });
 
+test("массовое изменение: заголовок с числом и знаком, строки «было → станет», пропущенные и «всё вместе»; в архив — без «было»", () => {
+  const action = { kind: "bulk", field: "price", change: "price_percent", value: 10, skipped: 1, where: "category", query: "Напитки",
+                   rows: [{ sku: "COLA", name: "Кока-кола", before: 9000, after: 9900 }, { sku: "FANTA", name: "Фанта", before: 8000, after: 8800 }] };
+  const lines = Assistant.describe(action, tr);
+  assert.strictEqual(lines[0], "Изменить сразу несколько товаров (2): цена +10 %");
+  assert.deepStrictEqual(lines.slice(1), ["«Кока-кола» (COLA): 9000 → 9900", "«Фанта» (FANTA): 8000 → 8800"]);
+  assert.deepStrictEqual(Assistant.describeBulk(action, tr).notes, ["Выбраны товары, у которых в категории есть «Напитки».",
+    tr("assistant.bulk_skipped", { n: 1 }), tr("assistant.bulk_together")]);
+  assert.strictEqual(Assistant.describeBulk({ ...action, where: "sql" }, tr).notes.length, 2);       // неизвестный отбор не показывается
+  const arch = Assistant.describe({ kind: "bulk", field: "status", change: "archive", rows: [{ sku: "A", name: "Хлеб", before: "active", after: "archived" }] }, tr);
+  assert.deepStrictEqual(arch, ["Изменить сразу несколько товаров (1): убрать в архив (вернуть можно в любой момент)", "«Хлеб» (A)"]);
+  assert.ok(Assistant.describe({ kind: "bulk", change: "price_add", value: -500, rows: [] }, tr)[0].endsWith("цена -500 сум"));
+  assert.strictEqual(Assistant.describe({ kind: "bulk", change: "drop_table", rows: "x" }, tr)[0], "Изменить сразу несколько товаров (0): ");
+  const kept = Assistant.cleanLog([u("цены"), { role: "assistant", content: "ok", card: { action, state: "done", undo: { kind: "bulk", rows: [] } } }]);
+  assert.strictEqual(kept[1].card.action.kind, "bulk");                 // карточка переживает перезагрузку вкладки
+  ["price_set", "category", "brand", "in_stock", "restore"].forEach((k) => tr("assistant.bulk." + k, { value: 1 }));
+  tr("assistant.undo_all"); tr("assistant.tool.propose_bulk");
+});
+
 console.log(`\n${passed} passed`);

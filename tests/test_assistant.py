@@ -185,7 +185,7 @@ def test_no_tool_changes_the_database(Session):
     with Session() as db:
         for tool in T.TOOLS:
             args = {"query": "кола", "field": "price", "product": "COLA", "value": "15000", "status": "archived",
-                    "name": "Новый сок", "lang": "uz", "theme": "dark"}
+                    "name": "Новый сок", "lang": "uz", "theme": "dark", "where": "name", "change": "price_set"}
             T.run_tool(db, OWNER, tool.name, args, A.assistant_actions.Proposals(), [])
         db.commit()
     assert snapshot() == before
@@ -593,3 +593,91 @@ def test_done_without_a_card_is_caught(Session):
 
     plain = _ask(Session, FakeModel({"tool": "", "text": "В архиве 1 товар."}))       # обычный ответ — без повторов
     assert not plain.no_card
+
+
+# --- этап A3: одно изменение многим товарам ----------------------------------------------------------------------------------
+
+def test_bulk_proposal_is_counted_by_the_program(Session):
+    """Модель называет только «какие товары» и «что сделать»; список и новые цены считает программа. Товары без цены и с уже
+    таким значением пропускаются; архив не трогается; больше BULK_MAX — отказ с понятным текстом."""
+    with Session() as db:
+        props = A.assistant_actions.Proposals()
+        out = T.run_tool(db, OWNER, "propose_bulk", {"where": "category", "query": "напитки", "change": "price_percent",
+                                                     "value": "10%"}, props)
+        card = props.items[0]
+        assert out["proposed"]["products"] == 1 and card["kind"] == "bulk" and card["field"] == "price"
+        assert [(r["sku"], r["before"], r["after"]) for r in card["rows"]] == [("COLA", 9000, 9900.0)]
+        assert card["skipped"] == 1                                  # COLA2 без цены — процент не к чему прибавить
+        with pytest.raises(T.ToolError):                             # второе предложение в том же вопросе — нельзя
+            T.run_tool(db, OWNER, "propose_update", {"product": "BREAD", "field": "price", "value": "1"}, props)
+
+        brand = A.assistant_actions.bulk_card(db, {"where": "brand", "query": "coca", "change": "category", "value": "Газировка"})
+        assert sorted(r["sku"] for r in brand["rows"]) == ["COLA", "COLA2"]          # «содержит»
+        latin = A.assistant_actions.bulk_card(db, {"where": "category", "query": "Napitki", "change": "in_stock", "value": "нет"})
+        assert sorted(r["sku"] for r in latin["rows"]) == ["COLA", "COLA2"]          # по-узбекски модель пишет латиницей
+        with pytest.raises(A.assistant_actions.ActionError, match="Категории в каталоге: .*Напитки"):
+            A.assistant_actions.bulk_card(db, {"where": "category", "query": "ichimliklar", "change": "archive", "value": ""})
+        archive = A.assistant_actions.bulk_card(db, {"where": "name", "query": "кока", "change": "archive", "value": ""})
+        assert {r["after"] for r in archive["rows"]} == {"archived"} and len(archive["rows"]) == 2
+        restore = A.assistant_actions.bulk_card(db, {"where": "category", "query": "Разное", "change": "restore", "value": ""})
+        assert [r["sku"] for r in restore["rows"]] == ["OLD"]                        # возвращаются только товары из архива
+        assert A.assistant_actions.bulk_card(db, {"where": "category", "query": "Напитки", "change": "price_add",
+                                                  "value": "-500"})["rows"][0]["after"] == 8500.0
+        for bad in ({"where": "category", "query": "Нет такой", "change": "price_set", "value": "1000"},
+                    {"where": "sku", "query": "COLA", "change": "price_set", "value": "1000"},
+                    {"where": "category", "query": "Напитки", "change": "price_percent", "value": "1000"},
+                    {"where": "category", "query": "Напитки", "change": "price_add", "value": "-9000"},
+                    {"where": "category", "query": "Напитки", "change": "name", "value": "X"},
+                    {"where": "category", "query": "Напитки", "change": "price_set", "value": "abc"}):
+            with pytest.raises(A.assistant_actions.ActionError):
+                A.assistant_actions.bulk_card(db, bad)
+        for i in range(A.assistant_actions.BULK_MAX + 1):
+            db.add(Product(sku=f"W{i}", name=f"Вода {i}", brand="Aqua", category="Вода", expected_price=3000))
+        db.commit()
+        with pytest.raises(A.assistant_actions.ActionError, match="не больше"):
+            A.assistant_actions.bulk_card(db, {"where": "category", "query": "Вода", "change": "price_percent", "value": 5})
+
+
+def test_bulk_change_is_all_or_nothing_logged_and_undone(client, Session):
+    from app.db.models import AuditEvent
+    with Session() as db:
+        card = A.assistant_actions.bulk_card(db, {"where": "brand", "query": "Coca-Cola", "change": "price_set", "value": 12000})
+    assert [r["after"] for r in card["rows"]] == [12000.0, 12000.0]
+    assert client.post("/api/v1/assistant/act", json={"action": card}, headers=client.analyst).status_code == 403
+
+    stale = json.loads(json.dumps(card))
+    stale["rows"][1]["version"] += 5                                  # второй товар успели изменить
+    res = client.post("/api/v1/assistant/act", json={"action": stale}, headers=client.owner)
+    assert res.status_code == 409
+    forged = json.loads(json.dumps(card))
+    forged["rows"][1]["after"] = -1                                   # страница прислала неверную цену
+    assert client.post("/api/v1/assistant/act", json={"action": forged}, headers=client.owner).status_code == 422
+    with Session() as db:                                             # ни одна из двух попыток не изменила ничего
+        assert {p.sku: p.expected_price for p in db.query(Product).filter(Product.brand == "Coca-Cola")} ==             {"COLA": 9000, "COLA2": None}
+
+    res = client.post("/api/v1/assistant/act", json={"action": card}, headers=client.owner)
+    assert res.status_code == 200, res.text
+    assert res.json()["changed"] == 2
+    with Session() as db:
+        assert {p.expected_price for p in db.query(Product).filter(Product.brand == "Coca-Cola")} == {12000.0}
+    assert client.post("/api/v1/assistant/act", json={"action": card}, headers=client.owner).status_code == 409   # двойное нажатие
+    undo = res.json()["undo"]
+    res = client.post("/api/v1/assistant/act", json={"action": undo}, headers=client.owner)
+    assert res.status_code == 200, res.text
+    with Session() as db:
+        assert {p.sku: p.expected_price for p in db.query(Product).filter(Product.brand == "Coca-Cola")} ==             {"COLA": 9000, "COLA2": None}
+        events = db.query(AuditEvent).filter(AuditEvent.via == "assistant").all()
+        assert len(events) == 4 and {e.action for e in events} == {"assistant.product.updated"}
+        assert all("товаров: 2" in (e.reason or "") for e in events)
+    too_many = {**card, "rows": [dict(card["rows"][0], product_id=f"p{i}") for i in range(A.assistant_actions.BULK_MAX + 1)]}
+    assert client.post("/api/v1/assistant/act", json={"action": too_many}, headers=client.owner).status_code == 422
+
+
+def test_chat_gives_a_bulk_card_without_a_second_model_call(Session):
+    model = FakeModel({"tool": "propose_bulk", "args": {"where": "category", "query": "Напитки", "change": "price_percent",
+                                                        "value": 10}},
+                      {"tool": "", "text": "Цены подняты."})
+    reply = _ask(Session, model, "Подними цены на напитки на 10%")
+    assert reply.proposal["kind"] == "bulk" and len(model.calls) == 1 and reply.text == ""
+    with Session() as db:
+        assert db.query(Product).filter_by(sku="COLA").one().expected_price == 9000      # пока не нажали — не изменилось

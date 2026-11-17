@@ -909,7 +909,25 @@
     "assistant.tip_code.no_photo": "no photos: cannot be recognized by look — add 2–3 photos from different sides",
     "assistant.tip_code.more_photos": "add 2–3 more photos from different sides",
     "assistant.tip_code.check_photos": "check the photos (is it the product on all of them) and add a close-up of the label",
-    "assistant.tip_code.add_barcode": "add the barcode — it is recognized instantly by it"
+    "assistant.tip_code.add_barcode": "add the barcode — it is recognized instantly by it",
+    "assistant.tool.propose_bulk": "change many products",
+    "assistant.card_bulk": "Change several products at once ({n}): {what}",
+    "assistant.bulk.price_percent": "price {value}%",
+    "assistant.bulk.price_add": "price {value} sum",
+    "assistant.bulk.price_set": "new price {value}",
+    "assistant.bulk.category": "category “{value}”",
+    "assistant.bulk.brand": "brand “{value}”",
+    "assistant.bulk.in_stock": "in stock: {value}",
+    "assistant.bulk.archive": "move to archive (you can bring them back at any time)",
+    "assistant.bulk.restore": "bring back from the archive",
+    "assistant.bulk_row": "“{name}” ({sku}): {before} → {after}",
+    "assistant.bulk_row_status": "“{name}” ({sku})",
+    "assistant.bulk_skipped": "Not changed (already so or no price): {n}.",
+    "assistant.bulk_together": "Everything changes together: if any product was changed in the meantime, nothing changes.",
+    "assistant.undo_all": "Undo all",
+    "assistant.bulk_where.category": "Selected: products whose category contains “{query}”.",
+    "assistant.bulk_where.brand": "Selected: products whose brand contains “{query}”.",
+    "assistant.bulk_where.name": "Selected: products whose name contains “{query}”."
   };
   if (root.I18N) root.I18N.add("en", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

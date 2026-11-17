@@ -910,7 +910,25 @@
     "assistant.tip_code.no_photo": "сурати йўқ: кўринишидан танилмайди — турли томондан 2–3 та сурат қўшинг",
     "assistant.tip_code.more_photos": "турли томондан яна 2–3 та сурат қўшинг",
     "assistant.tip_code.check_photos": "суратларни текширинг (ҳаммасида товарнинг ўзими) ва ёрлиқнинг йирик суратини қўшинг",
-    "assistant.tip_code.add_barcode": "штрих-код қўшинг — у билан дарҳол танилади"
+    "assistant.tip_code.add_barcode": "штрих-код қўшинг — у билан дарҳол танилади",
+    "assistant.tool.propose_bulk": "кўп маҳсулотни ўзгартириш",
+    "assistant.card_bulk": "Бир нечта маҳсулотни бирданига ўзгартириш ({n}): {what}",
+    "assistant.bulk.price_percent": "нарх {value} %",
+    "assistant.bulk.price_add": "нарх {value} сўм",
+    "assistant.bulk.price_set": "янги нарх {value}",
+    "assistant.bulk.category": "категория «{value}»",
+    "assistant.bulk.brand": "бренд «{value}»",
+    "assistant.bulk.in_stock": "мавжуд: {value}",
+    "assistant.bulk.archive": "архивга олиш (исталган пайт қайтариш мумкин)",
+    "assistant.bulk.restore": "архивдан қайтариш",
+    "assistant.bulk_row": "«{name}» ({sku}): {before} → {after}",
+    "assistant.bulk_row_status": "«{name}» ({sku})",
+    "assistant.bulk_skipped": "Ўзгармайди (аллақачон шундай ёки нарх йўқ): {n}.",
+    "assistant.bulk_together": "Ҳаммаси бирга ўзгаради: агар бирор маҳсулот аллақачон ўзгартирилган бўлса, ҳеч нарса ўзгармайди.",
+    "assistant.undo_all": "Ҳаммасини қайтариш",
+    "assistant.bulk_where.category": "Категориясида «{query}» бўлган маҳсулотлар танланди.",
+    "assistant.bulk_where.brand": "Брендида «{query}» бўлган маҳсулотлар танланди.",
+    "assistant.bulk_where.name": "Номида «{query}» бўлган маҳсулотлар танланди."
   };
   if (typeof module === "object" && module.exports) module.exports = dict;
   if (root.I18N) root.I18N.add("uz-Cyrl", dict);

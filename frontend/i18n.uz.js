@@ -909,7 +909,25 @@
     "assistant.tip_code.no_photo": "surati yoʻq: koʻrinishidan tanilmaydi — turli tomondan 2–3 ta surat qoʻshing",
     "assistant.tip_code.more_photos": "turli tomondan yana 2–3 ta surat qoʻshing",
     "assistant.tip_code.check_photos": "suratlarni tekshiring (hammasida tovarning oʻzimi) va yorliqning yirik suratini qoʻshing",
-    "assistant.tip_code.add_barcode": "shtrix-kod qoʻshing — u bilan darhol taniladi"
+    "assistant.tip_code.add_barcode": "shtrix-kod qoʻshing — u bilan darhol taniladi",
+    "assistant.tool.propose_bulk": "koʻp mahsulotni oʻzgartirish",
+    "assistant.card_bulk": "Bir nechta mahsulotni birdaniga oʻzgartirish ({n}): {what}",
+    "assistant.bulk.price_percent": "narx {value} %",
+    "assistant.bulk.price_add": "narx {value} soʻm",
+    "assistant.bulk.price_set": "yangi narx {value}",
+    "assistant.bulk.category": "kategoriya «{value}»",
+    "assistant.bulk.brand": "brend «{value}»",
+    "assistant.bulk.in_stock": "mavjud: {value}",
+    "assistant.bulk.archive": "arxivga olish (istalgan payt qaytarish mumkin)",
+    "assistant.bulk.restore": "arxivdan qaytarish",
+    "assistant.bulk_row": "«{name}» ({sku}): {before} → {after}",
+    "assistant.bulk_row_status": "«{name}» ({sku})",
+    "assistant.bulk_skipped": "Oʻzgarmaydi (allaqachon shunday yoki narx yoʻq): {n}.",
+    "assistant.bulk_together": "Hammasi birga oʻzgaradi: agar biror mahsulot allaqachon oʻzgartirilgan boʻlsa, hech narsa oʻzgarmaydi.",
+    "assistant.undo_all": "Hammasini qaytarish",
+    "assistant.bulk_where.category": "Kategoriyasida «{query}» boʻlgan mahsulotlar tanlandi.",
+    "assistant.bulk_where.brand": "Brendida «{query}» boʻlgan mahsulotlar tanlandi.",
+    "assistant.bulk_where.name": "Nomida «{query}» boʻlgan mahsulotlar tanlandi."
   };
   if (root.I18N) root.I18N.add("uz", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

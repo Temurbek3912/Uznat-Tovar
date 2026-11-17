@@ -961,7 +961,9 @@
     "filters.missing": "Не заполнено",
     "filters.no_price": "Без цены",
     "filters.no_photo": "Без фото",
-    "filters.no_barcode": "Без штрих-кода"
+    "filters.no_barcode": "Без штрих-кода",
+    "assistant.tool.staff_list": "список сотрудников",
+    "assistant.tool.backup_status": "резервные копии"
   };
   if (root.I18N) root.I18N.add("ru", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

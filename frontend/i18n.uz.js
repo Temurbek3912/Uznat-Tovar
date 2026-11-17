@@ -961,7 +961,9 @@
     "filters.missing": "Toʻldirilmagan",
     "filters.no_price": "Narxi yoʻq",
     "filters.no_photo": "Surati yoʻq",
-    "filters.no_barcode": "Shtrix-kodi yoʻq"
+    "filters.no_barcode": "Shtrix-kodi yoʻq",
+    "assistant.tool.staff_list": "xodimlar roʻyxatini",
+    "assistant.tool.backup_status": "zaxira nusxalarni"
   };
   if (root.I18N) root.I18N.add("uz", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

@@ -8,7 +8,7 @@
 - каждый инструмент требует права пользователя (Permission) — список для модели собирается по правам ЭТОГО пользователя, и сервер
   ещё раз проверяет право перед вызовом (модель могла назвать чужой инструмент);
 - аргументы проверяются здесь, а не моделью: неизвестные поля отбрасываются, числа ограничиваются, строки обрезаются;
-- в ответах нет паролей, токенов, пользователей, журналов — только товары.
+- в ответах нет паролей, токенов, ключей, журналов; о сотрудниках и копиях — только посмотреть (кто есть, когда была копия), §10.15.
 """
 from __future__ import annotations
 
@@ -258,18 +258,22 @@ _I18N_FILES = {"ru": "i18n.ru.js", "uz": "i18n.uz.js", "uz-Cyrl": "i18n.uz-cyrl.
 _NO_NAME = {"ru": "без названия", "uz": "nomsiz", "uz-Cyrl": "номсиз", "en": "no name"}
 
 
-def _kind_label(code: str, lang: str = "ru") -> str:
-    """Код вида (drink) -> подпись на языке владельца из словаря страниц (frontend/i18n.<язык>.js, kind.<код>).
-    Нет подписи на этом языке — по-русски; нет и её — код как есть («dairy» модель печатала владельцу прямо так)."""
+def _page_label(key: str, lang: str = "ru") -> str:
+    """Ключ словаря страниц (kind.drink, role.admin) -> подпись на языке владельца (frontend/i18n.<язык>.js). Нет подписи на
+    этом языке — по-русски; нет и её — код после точки как есть («dairy» модель печатала владельцу прямо так)."""
     lang = lang if lang in _I18N_FILES else "ru"
     if lang not in _KINDS:
         try:
             text = (Path(__file__).resolve().parents[2] / "frontend" / _I18N_FILES[lang]).read_text(encoding="utf-8")
-            _KINDS[lang] = dict(re.findall(r'"kind\.(\w+)":\s*"([^"]+)"', text))
+            _KINDS[lang] = dict(re.findall(r'"([\w.]+)":\s*"([^"]+)"', text))
         except OSError:
             _KINDS[lang] = {}
-    label = _KINDS[lang].get(code)
-    return label if label else (code if lang == "ru" else _kind_label(code, "ru"))
+    label = _KINDS[lang].get(key)
+    return label if label else (key.split(".", 1)[-1] if lang == "ru" else _page_label(key, "ru"))
+
+
+def _kind_label(code: str, lang: str = "ru") -> str:
+    return _page_label(f"kind.{code}", lang)
 
 
 def _days(args: dict) -> int:
@@ -406,26 +410,150 @@ def scan_problems(db, args: dict) -> dict:
     return out
 
 
+# --- сотрудники и резервные копии: только посмотреть (этап A4, первая часть, §10.15) ----------------------------------------------
+# Права — те же, что у страницы «Управление» (USER_MANAGE — список сотрудников, STORE_MANAGE — копии). В итоге нет паролей, хешей,
+# токенов, ПИН-кодов, второго фактора, почты Google, причин блокировки (их пишет человек) и путей к папкам — по построению: эти
+# поля сюда просто не берутся. Менять — только на странице «Управление».
+
+_STATES = ("active", "pending_first_login", "blocked", "expired", "archived")
+_STATE_KEYS = {"active": "admin.active", "pending_first_login": "admin.awaiting_first_login", "blocked": "admin.disabled",
+               "expired": "admin.status_expired", "archived": "admin.status_archived"}
+_STATE_WORDS = {"active": "действуют", "pending_first_login": "ждут первого входа", "blocked": "заблокированы",
+                "expired": "срок доступа истёк", "archived": "в архиве"}
+
+
+def _change_on_admin(lang: str) -> str:
+    # Название страницы — как в меню на языке владельца: в узбекском ответе модель оставляла «Управление» по-русски.
+    return f"Изменить что-то здесь можно только на странице «{_page_label('nav.admin', lang)}»."
+
+
+def _shop_tz():
+    from app.core.config import get_settings
+    from app.services.admin_service import tz_for
+    try:
+        return tz_for(get_settings().app_timezone)
+    except ValueError:
+        return tz_for(None)
+
+
+def _when(value) -> tuple[str, int] | None:
+    """Время (datetime: наивное — UTC из базы; ISO-строка с поясом — из файла копий) -> («17.11.2026 14:30», сколько дней назад)."""
+    from datetime import datetime, timezone
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value) if value else None
+        except ValueError:
+            value = None
+    if value is None:
+        return None
+    tz = _shop_tz()
+    local = (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).astimezone(tz)
+    return local.strftime("%d.%m.%Y %H:%M"), (utcnow().replace(tzinfo=timezone.utc).astimezone(tz).date() - local.date()).days
+
+
+def _ago(days: int) -> str:
+    return "сегодня" if days <= 0 else "вчера" if days == 1 else f"{days} дн. назад"
+
+
+def staff_list(db, args: dict) -> dict:
+    from app.services.auth_service import AuthService
+    lang = args.get(LANG_ARG) if args.get(LANG_ARG) in _I18N_FILES else "ru"
+    service = AuthService(db)
+    rows = []
+    for user in service.list_users():
+        state = service.account_state(user)
+        rows.append((not service.is_owner(user.id), _STATES.index(state) if state in _STATES else 9, user.username, user, state))
+    rows.sort(key=lambda r: r[:3])
+    counts = Counter(r[4] for r in rows)
+    parts = [f"{_STATE_WORDS[s]} — {counts[s]}" for s in _STATES if counts[s]]
+    summary = f"Учётных записей: {len(rows)}" + (f" ({', '.join(parts)})." if parts else ".")
+    if len(rows) > MAX_ROWS:
+        summary += f" Ниже первые {MAX_ROWS}."
+    items = []
+    for not_owner, _order, username, user, state in rows[:MAX_ROWS]:
+        added = _when(user.created_at)
+        item = {"login": username, "role": _page_label(f"role.{user.role}", lang),
+                "state": _page_label(_STATE_KEYS.get(state, "admin.active"), lang), "added": added[0][:10] if added else ""}
+        if not not_owner:
+            item["owner"] = True
+        items.append(item)
+    return {"total": len(rows), "summary": summary + " " + _change_on_admin(lang), "items": items}
+
+
+_PATHS = re.compile(r"[A-Za-z]:[\\/][^\s,;)»\"']*|(?<![\w.])/[\w.-]+(?:/[\w. -]+)+")
+
+
+def _backup_source() -> dict | None:
+    """Состояние копий, как его видит страница «Управление» (GET /admin/backup); None — в этой установке копий из программы нет."""
+    from app.core.config import get_settings
+    from app.services import lite_backup
+    try:
+        service = lite_backup.service_from_settings(get_settings())
+    except lite_backup.BackupError:
+        return None
+    return service.status() if service is not None else None
+
+
+def backup_status(db, args: dict) -> dict:
+    lang = args.get(LANG_ARG) if args.get(LANG_ARG) in _I18N_FILES else "ru"
+    status = _backup_source()
+    if not status or not status.get("available"):
+        return {"available": False, "summary": "В этой установке резервную копию делает не программа, а администратор сервера."}
+    ok, tried = _when(status.get("last_ok")), _when(status.get("last_attempt"))
+    here = sum(d.get("copies", 0) for d in status.get("destinations") or [] if d.get("kind") != "cloud")
+    google = status.get("google") or {}
+    out = {"available": True, "last_ok": ok[0] if ok else "", "copies_on_this_computer": here,
+           "google_drive": google.get("state") or "unavailable", "running": bool(status.get("running"))}
+    # Первая фраза — со страницы «Управление» на языке владельца: русскую «последняя удачная копия» живая qwen3-vl-4b
+    # по-узбекски переводила как «Soniyalik nusxa» (3 из 3), готовую узбекскую фразу она переписывает как есть.
+    when = (f"{ok[0]} ({_ago(ok[1])})" if lang == "ru" else ok[0]) if ok else ""
+    text = [_page_label("bkp.last_ok", lang).replace("{when}", when) if ok else _page_label("bkp.never", lang)]
+    if ok and ok[1] >= 3:
+        text.append("Это давно: копия делается сама раз в сутки, когда программа включена.")
+    error = (status.get("last_error") or "").strip()
+    if error and tried and status.get("last_attempt", "") > status.get("last_ok", ""):
+        text.append(f"Последняя попытка {tried[0]} не удалась: {_cut(_PATHS.sub('(папка)', error))}.")
+    if out["running"]:
+        text.append("Сейчас делается копия.")
+    due = _when(status.get("next_due"))
+    if due and not out["running"]:
+        text.append(f"Следующая — около {due[0]}.")
+    text.append(f"Копий на этом компьютере: {here}.")
+    g_ok = _when(google.get("last_ok"))
+    text.append({"connected": "Google Диск подключён. " + (_page_label("bkp.g_last_ok", lang).replace("{when}", g_ok[0])
+                                                           if g_ok else "Копий там ещё нет."),
+                 "lost": "Google Диск отключился — подключите его заново.",
+                 "waiting": "Google Диск ждёт входа в аккаунт Google.",
+                 "off": "Google Диск не подключён.",
+                 "unavailable": "Google Диска в этой версии программы нет."}.get(out["google_drive"], ""))
+    out["summary"] = " ".join(t for t in text if t) + " " + _change_on_admin(lang)
+    return out
+
+
 TOOLS: tuple[Tool, ...] = (
     Tool("catalog_overview", Permission.CATALOG_READ,
-         "Сводка каталога: сколько товаров, в архиве, без фото, штрихкода, цены, бренда, категории; категории.",
+         "Сводка каталога: сколько товаров, в архиве, чего у них нет; категории.",
          {}, catalog_overview),
     Tool("find_products", Permission.CATALOG_READ,
          "Найти товары по названию, бренду, артикулу или штрихкоду.",
          {"query": "", "limit": "до 20"}, find_products, required=("query",)),
     Tool("products_missing", Permission.CATALOG_READ,
-         "Товары, у которых нет фото, штрихкода, цены, бренда или категории.",
+         "Товары без фото, штрихкода, цены, бренда или категории.",
          {"field": "|".join(MISSING_FIELDS), "limit": "до 20"}, products_missing,
          required=("field",), choices={"field": list(MISSING_FIELDS)}, answer_next=True),
     Tool("similar_names", Permission.CATALOG_READ,
-         "Возможные дубли: товары с одинаковым названием.",
+         "Дубли: товары с одинаковым названием.",
          {"limit": "до 20"}, similar_names),
     Tool("product_details", Permission.CATALOG_READ,
-         "Всё о товаре по артикулу (sku) или штрихкоду.",
+         "Всё о товаре по артикулу или штрихкоду.",
          {"product": "артикул или штрихкод"}, product_details, required=("product",)),
     Tool("scan_problems", Permission.CATALOG_READ,
-         "Почему не узнаёт: сканы покупателей за days дней — что узнаётся плохо, кому нужно больше фото, чего нет в каталоге.",
+         "Почему не узнаёт: сканы покупателей за days дней — что узнаётся плохо, чего нет в каталоге.",
          {"days": "1–90, обычно 30"}, scan_problems, answer_next=True, wants_lang=True),
+    Tool("staff_list", Permission.USER_MANAGE, "Сотрудники: кто есть, роль.", {}, staff_list,
+         answer_next=True, wants_lang=True),
+    Tool("backup_status", Permission.STORE_MANAGE, "Резервные копии (zaxira nusxa): когда последняя.", {}, backup_status,
+         answer_next=True, wants_lang=True),
 )
 TOOLS += (
     Tool("propose_update", Permission.CATALOG_WRITE,

@@ -962,7 +962,9 @@
     "filters.missing": "Тўлдирилмаган",
     "filters.no_price": "Нархи йўқ",
     "filters.no_photo": "Сурати йўқ",
-    "filters.no_barcode": "Штрих-коди йўқ"
+    "filters.no_barcode": "Штрих-коди йўқ",
+    "assistant.tool.staff_list": "ходимлар рўйхатини",
+    "assistant.tool.backup_status": "захира нусхаларни"
   };
   if (typeof module === "object" && module.exports) module.exports = dict;
   if (root.I18N) root.I18N.add("uz-Cyrl", dict);

@@ -1121,3 +1121,100 @@ def test_scans_are_not_called_products(Session, monkeypatch):
         "weak_total": 0, "weak": [], "missing_total": 0, "missing": [], "many_unknown": False})
     model = FakeModel({"tool": "scan_problems", "args": {"days": 30}}, {"tool": "", "text": "7 товаров узнались неуверенно."})
     assert _ask(Session, model, "Почему не узнал?").text == "7 сканов узнались неуверенно."
+
+
+# --- A4, первая часть: сотрудники и резервные копии — только посмотреть (§10.15) ----------------------------------------------------
+
+def _add_staff(Session):
+    from app.core.security import Role as R
+    from app.services.auth_service import AuthService
+    with Session() as db:
+        service = AuthService(db)
+        boss = service.create_user("boss", PASSWORD, R.ADMIN)
+        service.set_owner(boss.id)
+        newbie = service.create_user("dilnoza", PASSWORD, R.MERCHANDISER)
+        service.set_temporary_password(newbie.id, "Temp-pass-12345", hours=24)
+        gone = service.create_user("alisher", PASSWORD, R.ANALYST)
+        service.update_user(gone.id, is_active=False, block_reason="ушёл, пароль Secret-123")
+        db.commit()
+        return {u.username: u.password_hash for u in service.list_users()}
+
+
+def test_staff_list_tells_who_is_there_without_secrets(Session):
+    hashes = _add_staff(Session)
+    with Session() as db:
+        out = T.run_tool(db, OWNER, "staff_list", {"login": "x"}, lang="ru")
+        uz = T.run_tool(db, OWNER, "staff_list", {}, lang="uz")
+    assert out["total"] == 3 and [i["login"] for i in out["items"]] == ["boss", "dilnoza", "alisher"]      # владелец — первым
+    assert out["items"][0] == {"login": "boss", "role": "Администратор", "state": "активен",
+                               "added": out["items"][0]["added"], "owner": True}
+    assert out["items"][1]["state"] == "ждёт первого входа" and out["items"][2]["state"] == "отключён"
+    assert out["summary"].startswith("Учётных записей: 3 (действуют — 1, ждут первого входа — 1, заблокированы — 1).")
+    assert "«Управление»" in out["summary"]
+    assert uz["items"][0]["role"] == "Administrator" and uz["items"][0]["state"] == "faol"
+    assert uz["summary"].endswith("на странице «Boshqaruv».")           # название страницы — как в меню владельца
+    text = json.dumps([out, uz], ensure_ascii=False)
+    for secret in [PASSWORD, "Temp-pass-12345", "Secret-123", "ушёл", *hashes.values()]:
+        assert secret not in text
+    assert "hash" not in text and "token" not in text and "pin" not in text
+
+
+def test_backup_status_says_when_the_last_copy_was_without_paths_or_email(Session, monkeypatch):
+    monkeypatch.setattr(T, "utcnow", lambda: datetime(2026, 11, 17, 9, 0))              # 14:00 в Ташкенте
+    monkeypatch.setattr(T, "_backup_source", lambda: {
+        "available": True, "running": False, "last_ok": "2026-11-16T08:30:00+05:00",
+        "last_attempt": "2026-11-17T08:30:00+05:00",
+        "last_error": r"нет доступа к папке D:\Users\boss\Копии магазина, ключ AUTH_SECRET_KEY",
+        "next_due": "2026-11-17T08:30:00+05:00",
+        "destinations": [{"kind": "local", "path": r"D:\Users\boss\Копии", "copies": 4, "newest": "x"},
+                         {"kind": "cloud", "path": r"C:\Users\boss\Yandex.Disk", "copies": 2, "newest": "x"}],
+        "local": {"path": r"D:\Users\boss\Копии", "chosen": r"D:\Users\boss"},
+        "google": {"state": "connected", "email": "boss@gmail.com", "last_ok": "2026-11-16T08:40:00+05:00",
+                   "user_code": "ABCD-EFGH"}})
+    with Session() as db:
+        out = T.run_tool(db, OWNER, "backup_status", {})
+    assert out["last_ok"] == "16.11.2026 08:30" and out["copies_on_this_computer"] == 4 and out["google_drive"] == "connected"
+    s = out["summary"]
+    assert s.startswith("Последняя копия: 16.11.2026 08:30 (вчера).")
+    assert "Последняя попытка 17.11.2026 08:30 не удалась: нет доступа к папке (папка)" in s
+    assert "Google Диск подключён. Последняя копия в облаке: 16.11.2026 08:40." in s and "«Управление»" in s
+    with Session() as db:
+        uz = T.run_tool(db, OWNER, "backup_status", {}, lang="uz")["summary"]
+    assert uz.startswith("Oxirgi nusxa: 16.11.2026 08:30.") and "Bulutdagi oxirgi nusxa: 16.11.2026 08:40." in uz
+    text = json.dumps(out, ensure_ascii=False)
+    for secret in ["boss@gmail.com", "ABCD-EFGH", "Users", "Yandex", "D:\\"]:
+        assert secret not in text
+    monkeypatch.setattr(T, "_backup_source", lambda: {"available": True, "last_ok": "", "destinations": [], "google": {"state": "off"}})
+    with Session() as db:
+        none = T.backup_status(db, {})
+    assert none["summary"].startswith("Копий ещё не было.") and "Google Диск не подключён." in none["summary"]
+    monkeypatch.setattr(T, "_backup_source", lambda: None)
+    with Session() as db:
+        assert T.backup_status(db, {})["available"] is False
+
+
+def test_staff_and_backups_are_refused_without_the_rights_of_the_admin_page(Session, monkeypatch):
+    """Права — как у страницы «Управление»: без них инструментов нет ни в списке для модели, ни при вызове по имени."""
+    monkeypatch.setattr(T, "_backup_source", lambda: pytest.fail("без права копии не читаются"))
+    for role in (Role.ANALYST, Role.MERCHANDISER, Role.REGIONAL_MANAGER, Role.CAMERA_AGENT):
+        user = CurrentUser(id="u2", username="worker", role=role)
+        names = [t.name for t in T.allowed_tools(user)]
+        assert "staff_list" not in names and "backup_status" not in names
+        with Session() as db:
+            for name in ("staff_list", "backup_status"):
+                with pytest.raises(T.ToolError):
+                    T.run_tool(db, user, name, {})
+    assert {"staff_list", "backup_status"} <= {t.name for t in T.allowed_tools(OWNER)}
+    assert all(T.get_tool(n).kind == "read" for n in ("staff_list", "backup_status"))       # только чтение: ничего не меняют
+
+
+def test_chat_about_staff_answers_from_the_list_and_changes_nothing(Session):
+    _add_staff(Session)
+    model = FakeModel({"tool": "staff_list", "args": {}}, {"tool": "", "text": "У вас 3 учётные записи."})
+    reply = _ask(Session, model, "Кто у меня работает?")
+    assert reply.text == "У вас 3 учётные записи." and reply.tools == [{"name": "staff_list", "ok": True}]
+    assert not reply.proposal and reply.ui == []
+    second = model.calls[1][1]
+    assert second["response_format"]["json_schema"]["schema"]["properties"]["tool"]["enum"] == [""]     # итог полный — только ответ
+    sent = json.dumps(second["messages"], ensure_ascii=False)
+    assert "dilnoza" in sent and PASSWORD not in sent and "Temp-pass-12345" not in sent

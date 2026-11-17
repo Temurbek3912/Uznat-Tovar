@@ -961,7 +961,9 @@
     "filters.missing": "Missing",
     "filters.no_price": "No price",
     "filters.no_photo": "No photos",
-    "filters.no_barcode": "No barcode"
+    "filters.no_barcode": "No barcode",
+    "assistant.tool.staff_list": "the staff list",
+    "assistant.tool.backup_status": "backups"
   };
   if (root.I18N) root.I18N.add("en", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

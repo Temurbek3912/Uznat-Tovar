@@ -582,6 +582,8 @@
         var code = barcodeFromSearch((win.location || {}).search);                 // со страницы «Узнать товар»: «Добавить товар со штрих-кодом»
         if (code) { $("barcodeInput").value = code; $("moreDetails").setAttribute("open", ""); openAddPanel(true); }
         else if ((win.location || {}).hash === "#add") openAddPanel(true);       // пункт меню «Добавить товар»
+        var missing = win.Catalog ? win.Catalog.missingFromSearch((win.location || {}).search) : "";   // из подсказок помощника: «Открыть товары» без фото / цены / штрих-кода
+        if (missing) { var mf = {}; mf[missing] = true; list.state.filters = Object.assign(win.Catalog.emptyFilters(), mf); list.refresh(); }
         return loadProducts();
       }, function (e) { if (!isNetError(e)) throw e; });
     }

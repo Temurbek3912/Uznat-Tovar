@@ -32,6 +32,8 @@
   var HINT_ASK = { no_photo: "assistant.hint_ask.no_photo", no_price: "assistant.example_price",
                    no_barcode: "assistant.hint_ask.no_barcode", same_name: "assistant.example_dupes",
                    weak: "assistant.example_scans", missing: "assistant.example_scans" };
+  // «Открыть товары» у подсказки: сразу с фильтром «без …» на странице «Товары» (products.html?missing=…); у остальных — весь список.
+  var HINT_OPEN = { no_photo: "photo", no_price: "price", no_barcode: "barcode" };
   var HINT_CODES = ["empty", "no_photo", "no_price", "no_barcode", "same_name", "weak", "missing"];
   // Тексты, которые пишет сама страница (а не модель), хранятся ключом: после смены языка они переводятся, а модель видит
   // их на языке нового вопроса (на прежнем языке она и сама отвечала не на том).
@@ -266,7 +268,7 @@
 
   /** Подсказки (GET /assistant/hints) -> строки на языке страницы. Считает программа, модель не нужна; помощник ничего не меняет.
       canAsk — есть ли модель (тогда у подсказки кнопка с готовым вопросом). Возвращает {rows: [{code, text, names, ask}], none}:
-      names — «Fanta», «Sprite» и ещё 3 (или ""); ask — ключ вопроса или ""; none — текст «подсказок нет» или "". */
+      names — «Fanta», «Sprite» и ещё 3 (или ""); ask — ключ вопроса или ""; open — адрес «Товаров» (с фильтром «без …», если он есть); none — текст «подсказок нет» или "". */
   function hintList(rep, t, canAsk) {
     var out = { rows: [], none: "" };
     if (!isObj(rep)) return out;
@@ -276,7 +278,8 @@
         var n = num(h.n), list = names.map(function (x) { return "«" + x + "»"; }).join(", ");
         if (list && n > names.length) list += " " + t("assistant.hint_more", { n: n - names.length });
         out.rows.push({ code: h.code, text: t("assistant.hint." + h.code, { n: n, days: num(rep.days) }), names: list,
-                        ask: canAsk && HINT_ASK[h.code] ? HINT_ASK[h.code] : "" });
+                        ask: canAsk && HINT_ASK[h.code] ? HINT_ASK[h.code] : "",
+                        open: "products.html" + (HINT_OPEN[h.code] ? "?missing=" + HINT_OPEN[h.code] : "") });
       });
     if (!out.rows.length && num(rep.active) > 0) out.none = t("assistant.hints_none");
     return out;
@@ -385,7 +388,7 @@
           acts.appendChild(b);
         }
         var a = el("a", "btn btn--secondary", t("assistant.hint_open"));
-        a.setAttribute("href", "products.html");
+        a.setAttribute("href", row.open);
         acts.appendChild(a);
         item.appendChild(acts);
         list.appendChild(item);

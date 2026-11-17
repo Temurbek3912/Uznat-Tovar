@@ -16,7 +16,8 @@
       .replace(/[\u02BB\u02BC\u2018\u2019'`\u00B4]/g, "").replace(/\s+/g, " ").trim();
   }
   function emptyFilters() {
-    return { q: "", categories: [], brands: [], priceMin: null, priceMax: null, onlyWithPrice: false, onlyWithPhoto: false, onlyWithBarcode: false };
+    return { q: "", categories: [], brands: [], priceMin: null, priceMax: null, onlyWithPrice: false, onlyWithPhoto: false, onlyWithBarcode: false,
+             missingPrice: false, missingPhoto: false, missingBarcode: false };
   }
   function num(v) { return v === null || v === undefined || v === "" || !isFinite(Number(v)) ? null : Number(v); }
   function hasPrice(p) { return num(p.expected_price) !== null; }
@@ -49,6 +50,9 @@
       if (f.onlyWithPrice && price === null) return false;
       if (f.onlyWithPhoto && !(Number(p.photo_count) > 0)) return false;
       if (f.onlyWithBarcode && !((p.barcodes || []).length > 0)) return false;
+      if (f.missingPrice && price !== null) return false;     // «без цены / фото / штрих-кода» — что надо дозаполнить (ссылки из подсказок помощника)
+      if (f.missingPhoto && Number(p.photo_count) > 0) return false;
+      if (f.missingBarcode && (p.barcodes || []).length > 0) return false;
       return true;
     });
   }
@@ -109,8 +113,17 @@
   function activeCount(f) {
     f = Object.assign(emptyFilters(), f || {});
     return (f.categories.length ? 1 : 0) + (f.brands.length ? 1 : 0) + ((num(f.priceMin) !== null || num(f.priceMax) !== null) ? 1 : 0)
-      + (f.onlyWithPrice ? 1 : 0) + (f.onlyWithPhoto ? 1 : 0) + (f.onlyWithBarcode ? 1 : 0);
+      + (f.onlyWithPrice ? 1 : 0) + (f.onlyWithPhoto ? 1 : 0) + (f.onlyWithBarcode ? 1 : 0)
+      + (f.missingPrice ? 1 : 0) + (f.missingPhoto ? 1 : 0) + (f.missingBarcode ? 1 : 0);
   }
 
-  return { norm: norm, emptyFilters: emptyFilters, filterProducts: filterProducts, facets: facets, sortProducts: sortProducts, groupProducts: groupProducts, activeCount: activeCount };
+  /** Фильтр «без …» из адреса страницы «Товары» (?missing=photo | price | barcode) -> имя поля фильтра или "" (остальное — мусор). */
+  var MISSING = { photo: "missingPhoto", price: "missingPrice", barcode: "missingBarcode" };
+  function missingFromSearch(search) {
+    var v;
+    try { v = new URLSearchParams(search || "").get("missing"); } catch (e) { return ""; }
+    return v && Object.prototype.hasOwnProperty.call(MISSING, v) ? MISSING[v] : "";
+  }
+
+  return { norm: norm, emptyFilters: emptyFilters, filterProducts: filterProducts, facets: facets, sortProducts: sortProducts, groupProducts: groupProducts, activeCount: activeCount, missingFromSearch: missingFromSearch };
 });

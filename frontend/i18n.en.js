@@ -957,7 +957,11 @@
     "assistant.hint_ask": "Ask",
     "assistant.hint_open": "Open products",
     "assistant.hint_ask.no_photo": "Which products have no photo?",
-    "assistant.hint_ask.no_barcode": "Which products have no barcode?"
+    "assistant.hint_ask.no_barcode": "Which products have no barcode?",
+    "filters.missing": "Missing",
+    "filters.no_price": "No price",
+    "filters.no_photo": "No photos",
+    "filters.no_barcode": "No barcode"
   };
   if (root.I18N) root.I18N.add("en", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

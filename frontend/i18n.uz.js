@@ -957,7 +957,11 @@
     "assistant.hint_ask": "Soʻrash",
     "assistant.hint_open": "Mahsulotlarni ochish",
     "assistant.hint_ask.no_photo": "Qaysi mahsulotlarda rasm yoʻq?",
-    "assistant.hint_ask.no_barcode": "Qaysi mahsulotlarda shtrixkod yoʻq?"
+    "assistant.hint_ask.no_barcode": "Qaysi mahsulotlarda shtrixkod yoʻq?",
+    "filters.missing": "Toʻldirilmagan",
+    "filters.no_price": "Narxi yoʻq",
+    "filters.no_photo": "Surati yoʻq",
+    "filters.no_barcode": "Shtrix-kodi yoʻq"
   };
   if (root.I18N) root.I18N.add("uz", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

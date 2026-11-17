@@ -60,7 +60,7 @@ function boot(opts) {
   };
   class FormDataFake { constructor() { this.items = []; } append(k, v, n) { this.items.push([k, v, n]); } get(k) { const f = this.items.find((x) => x[0] === k); return f ? f[1] : null; } all(k) { return this.items.filter((x) => x[0] === k); } }
   const win = {
-    document: doc, I18N: i18n, Theme: theme, Auth, Icons, Ticket, ProductList, fetch, FormData: FormDataFake, localStorage: local, sessionStorage: session, navigator: { languages: ["ru"] },
+    document: doc, I18N: i18n, Theme: theme, Auth, Icons, Ticket, Catalog, ProductList, fetch, FormData: FormDataFake, localStorage: local, sessionStorage: session, navigator: { languages: ["ru"] },
     location: { search: opts.search || "", protocol: "http:", origin: "http://app", href: "", pathname: "/ui/products.html", hash: opts.hash || "",
                 replace(u) { win.redirects.push(u); } }, redirects: [], matchMedia: () => ({ matches: false }),
     URL: { createObjectURL: () => "blob:u" + (++urls.made), revokeObjectURL: (u) => { urls.revoked.push(u); } },
@@ -370,6 +370,22 @@ const sorted = (a) => a.slice().sort();
     });
     await withPage({ list: MANY(2), search: "?barcode=4780001234562" }, async (s) => { assert.strictEqual(s.$("barcodeInput").value, "4780001234562"); assert.ok(s.shown("addCard") && s.$("moreDetails").hasAttribute("open")); });
     await withPage({ list: MANY(2), search: "?barcode=<script>1</script>" }, async (s) => { assert.strictEqual(s.$("barcodeInput").value, ""); assert.ok(!s.shown("addCard")); });
+  });
+
+  await test("из подсказок помощника: адрес ?missing=photo | price | barcode сразу включает фильтр «без …» (чип и значок видны); мусор в адресе — весь список", async () => {
+    const list = [P(1), P(2, { photo_count: 0 }), P(3, { expected_price: null }), P(4, { barcodes: ["4780001234562"] })];
+    await withPage({ list, search: "?missing=photo" }, async (s) => {
+      assert.deepStrictEqual(s.rows(), ["Товар 2"]);
+      assert.ok(s.$("productList").byClass("chip--filter").some((c) => c.textContent === "Без фото"));
+      assert.strictEqual(s.$("productList").byClass("plist__badge")[0].textContent, "1");
+      assert.ok(!s.shown("addCard"));
+    });
+    await withPage({ list, search: "?missing=price" }, async (s) => { assert.deepStrictEqual(s.rows(), ["Товар 3"]); });
+    await withPage({ list, search: "?missing=barcode", lang: "uz" }, async (s) => {
+      assert.deepStrictEqual(s.rows(), ["Товар 1", "Товар 2", "Товар 3"]);
+      assert.ok(s.$("productList").byClass("chip--filter").some((c) => c.textContent === "Shtrix-kodi yoʻq"));
+    });
+    await withPage({ list, search: "?missing=<script>" }, async (s) => { assert.strictEqual(s.rows().length, 4); assert.strictEqual(s.$("productList").byClass("plist__badge").length, 0); });
   });
 
   // ============================================================ фото к существующему, правка

@@ -957,7 +957,11 @@
     "assistant.hint_ask": "Спросить",
     "assistant.hint_open": "Открыть товары",
     "assistant.hint_ask.no_photo": "Какие товары без фото?",
-    "assistant.hint_ask.no_barcode": "У каких товаров нет штрихкода?"
+    "assistant.hint_ask.no_barcode": "У каких товаров нет штрихкода?",
+    "filters.missing": "Не заполнено",
+    "filters.no_price": "Без цены",
+    "filters.no_photo": "Без фото",
+    "filters.no_barcode": "Без штрих-кода"
   };
   if (root.I18N) root.I18N.add("ru", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

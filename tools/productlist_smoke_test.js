@@ -142,6 +142,28 @@ function setup(lang, items, extra) {
     assert.deepStrictEqual(s.rows(), ["Ergo M200", "Ergo M200 Pro", "Ergo H3"]);
   });
 
+  await test("«Не заполнено»: без цены / без фото / без штрих-кода; противоположное «С …» выключается; чип снимает фильтр; «Сбросить» очищает", async () => {
+    const s = setup();
+    s.check("Без цены"); assert.deepStrictEqual(s.rows(), ["Compact K75"]);
+    assert.ok(s.host.byClass("chip--filter").some((c) => c.textContent === "Без цены"));
+    s.check("С ценой");                                    // включили противоположное — «Без цены» выключилось
+    assert.strictEqual(s.rows().length, 5);
+    assert.strictEqual(s.host.byClass("plist__badge")[0].textContent, "1");
+    s.check("Без цены");                                   // и наоборот
+    assert.deepStrictEqual(s.rows(), ["Compact K75"]);
+    assert.strictEqual(s.host.byClass("plist__badge")[0].textContent, "1");
+    s.host.byClass("chip--filter").find((c) => c.textContent === "Без цены").click();
+    assert.strictEqual(s.rows().length, 6);
+    s.check("Без фото"); assert.deepStrictEqual(s.rows(), ["Compact K10"]);
+    s.check("Без штрих-кода"); assert.deepStrictEqual(s.rows(), ["Compact K10"]);
+    s.check("Без фото", false); assert.strictEqual(s.rows().length, 5);
+    s.host.byClass("link").find((l) => l.textContent === "Сбросить").click();
+    assert.strictEqual(s.rows().length, 6);
+    const u = setup("uz");
+    u.check("Surati yoʻq"); assert.deepStrictEqual(u.rows(), ["Compact K10"]);
+    assert.ok(u.host.byClass("filters__legend").some((l) => l.textContent === "Toʻldirilmagan"));
+  });
+
   await test("ничего не найдено: понятное сообщение и кнопка «Сбросить», которая очищает и поиск", async () => {
     const s = setup(); s.search("такого нет");
     assert.strictEqual(s.rows().length, 0);

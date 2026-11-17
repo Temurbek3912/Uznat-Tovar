@@ -249,6 +249,9 @@ test("подсказки сверху страницы: текст с число
   assert.ok(res.rows[2].text.indexOf("30") !== -1);
   assert.deepStrictEqual(res.rows.map((r) => r.ask), ["assistant.hint_ask.no_photo", "assistant.example_dupes", "assistant.example_scans"]);
   assert.strictEqual(res.none, "");
+  assert.deepStrictEqual(res.rows.map((r) => r.open), ["products.html?missing=photo", "products.html", "products.html"]);   // «Открыть товары» — сразу с фильтром «без …»
+  assert.deepStrictEqual(Assistant.hintList({ active: 6, hints: [{ code: "no_price", n: 1, names: [] }, { code: "no_barcode", n: 1, names: [] }, { code: "empty", n: 0, names: [] }] }, tr, false).rows.map((r) => r.open),
+    ["products.html?missing=price", "products.html?missing=barcode", "products.html"]);
   assert.ok(Assistant.hintList(rep, tr, false).rows.every((r) => r.ask === ""));   // модели нет — только «Открыть «Товары»»
   assert.strictEqual(Assistant.hintList({ active: 6, hints: [] }, tr, true).none, tr("assistant.hints_none"));
   assert.deepStrictEqual(Assistant.hintList({ active: 0, hints: [{ code: "empty", n: 0, names: [] }] }, tr, true).rows[0].ask, "");

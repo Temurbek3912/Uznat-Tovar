@@ -95,6 +95,21 @@ const names = (list) => list.map((p) => p.sku).join(",");
     assert.deepStrictEqual(C.groupProducts([], "category"), []);
   });
 
+  await test("«без цены / фото / штрих-кода» и фильтр из адреса (?missing=photo | price | barcode)", async () => {
+    assert.strictEqual(names(C.filterProducts(ITEMS, { missingPrice: true })), "A4");
+    assert.strictEqual(names(C.filterProducts(ITEMS, { missingPhoto: true })), "A3");
+    assert.strictEqual(names(C.filterProducts(ITEMS, { missingBarcode: true })), "A2,A3,A4,A5,A6,A7");
+    assert.strictEqual(names(C.filterProducts(ITEMS, { missingBarcode: true, categories: ["Клавиатуры"] })), "A3,A4");
+    assert.strictEqual(names(C.filterProducts(ITEMS, { missingPhoto: true, onlyWithPhoto: true })), "");
+    assert.strictEqual(C.activeCount({ missingPrice: true, missingPhoto: true, missingBarcode: true }), 3);
+    assert.strictEqual(C.emptyFilters().missingPhoto, false);
+    assert.strictEqual(C.missingFromSearch("?missing=photo"), "missingPhoto");
+    assert.strictEqual(C.missingFromSearch("?x=1&missing=price"), "missingPrice");
+    assert.strictEqual(C.missingFromSearch("?missing=barcode"), "missingBarcode");
+    for (const bad of ["", "?missing=", "?missing=Photo", "?missing=constructor", "?missing=__proto__", "?missing=<b>", "?barcode=4780001234562"]) assert.strictEqual(C.missingFromSearch(bad), "", bad);
+    assert.strictEqual(C.missingFromSearch(undefined), "");
+  });
+
   await test("значок «Фильтры (N)»: считает включённые фильтры, поиск не считает", async () => {
     assert.strictEqual(C.activeCount(C.emptyFilters()), 0);
     assert.strictEqual(C.activeCount({ q: "abc" }), 0);

@@ -1,4 +1,4 @@
-/* Экран «Товары»: список с поиском, фильтрами (категория, бренд, цена, «с фото / ценой / штрих-кодом»), группировкой и сортировкой.
+/* Экран «Товары»: список с поиском, фильтрами (категория, бренд, цена, «с фото / ценой / штрих-кодом» и «без …»), группировкой и сортировкой.
    Логика — catalog.js; здесь только отрисовка. Всё из базы попадает на страницу через textContent. На телефоне панель фильтров открывается
    поверх списка («Фильтры (N)»), на ноутбуке стоит слева. Группы сворачиваются. Цена в полях вводится числом, применяется по Enter/уходу из поля.
    ProductList.create(document, hostElement, {t, onOpen(product), photoUrl(product), loadThumb(product), getLang()}) -> {setItems, refresh, setState, state}.
@@ -15,6 +15,8 @@
   var Ticket = root.Ticket || (typeof require === "function" ? require("./ticket.js") : null);
   var SORTS = ["new", "name", "price_asc", "price_desc"];
   var GROUPS = ["none", "category", "brand"];
+  // «без …»: [поле, подпись, противоположное поле «только с …»]
+  var MISSING = [["missingPrice", "filters.no_price", "onlyWithPrice"], ["missingPhoto", "filters.no_photo", "onlyWithPhoto"], ["missingBarcode", "filters.no_barcode", "onlyWithBarcode"]];
 
   function node(doc, tag, cls, text) {
     var el = doc.createElement(tag);
@@ -123,9 +125,24 @@
       var only = node(doc, "fieldset", "filters__group");
       only.appendChild(node(doc, "legend", "filters__legend", t("filters.only")));
       [["onlyWithPrice", "filters.with_price"], ["onlyWithPhoto", "filters.with_photo"], ["onlyWithBarcode", "filters.with_barcode"]].forEach(function (o) {
-        only.appendChild(checkbox(t(o[1]), null, f[o[0]], function (on) { state.filters[o[0]] = on; refreshBody(); }, "only:" + o[0]));
+        only.appendChild(checkbox(t(o[1]), null, f[o[0]], function (on) {
+          state.filters[o[0]] = on;
+          MISSING.forEach(function (m) { if (on && m[2] === o[0]) state.filters[m[0]] = false; });
+          refreshBody();
+        }, "only:" + o[0]));
       });
       panel.appendChild(only);
+
+      var missing = node(doc, "fieldset", "filters__group");     // «без …»: противоположен «только с …» — включить одно значит выключить другое
+      missing.appendChild(node(doc, "legend", "filters__legend", t("filters.missing")));
+      MISSING.forEach(function (o) {
+        missing.appendChild(checkbox(t(o[1]), null, f[o[0]], function (on) {
+          state.filters[o[0]] = on;
+          if (on) state.filters[o[2]] = false;
+          refreshBody();
+        }, "missing:" + o[0]));
+      });
+      panel.appendChild(missing);
 
       var show = node(doc, "button", "btn btn--primary filters__show", t("filters.show", { count: facets.total }));
       show.setAttribute("type", "button");
@@ -192,6 +209,9 @@
       f.brands.forEach(function (v) { active.push([labelOf("brand", v), function () { state.filters.brands = toggleIn(f.brands, v, false); }]); });
       if (f.priceMin !== null || f.priceMax !== null) active.push([t("filters.price") + ": " + (f.priceMin !== null ? Ticket.formatPrice(f.priceMin) : "…") + "–" + (f.priceMax !== null ? Ticket.formatPrice(f.priceMax) : "…"), function () { state.filters.priceMin = null; state.filters.priceMax = null; }]);
       [["onlyWithPrice", "filters.with_price"], ["onlyWithPhoto", "filters.with_photo"], ["onlyWithBarcode", "filters.with_barcode"]].forEach(function (o) {
+        if (f[o[0]]) active.push([t(o[1]), function () { state.filters[o[0]] = false; }]);
+      });
+      MISSING.forEach(function (o) {
         if (f[o[0]]) active.push([t(o[1]), function () { state.filters[o[0]] = false; }]);
       });
       active.forEach(function (a) {

@@ -18,7 +18,7 @@ import re
 
 from app.core import text_search
 from app.db.models import PRODUCT_ACTIVE, PRODUCT_ARCHIVED, Product, ProductBarcodeORM
-from app.services import category_words, shop_card
+from app.services import category_words, price_list, shop_card
 from app.services.barcode import explain_invalid, normalize_code, search_keys
 from app.services.catalog_upload import (
     DEFAULT_BRAND,
@@ -63,6 +63,12 @@ def find_product(db, key: str) -> Product | None:
     if product is None:             # модель часто пишет название вместо артикула: годится, только если такой товар один
         found = apply_search(db, db.query(Product), key)[0].limit(2).all()
         product = found[0] if len(found) == 1 else None
+        if product is None and not found:
+            # «Поставь Фанте цену 9500»: модель передаёт слово владельца как есть — кириллицей и в падеже, а товар — «Fanta
+            # 0,5 л». Слова названия в любом алфавите и по основе слова, как в списке цен (§10.9, §10.13); только один товар.
+            active = db.query(Product).filter(Product.status == PRODUCT_ACTIVE).order_by(Product.sku).all()
+            how, products = price_list.find(db, key, active)
+            product = products[0] if how == "found" else None
     return product
 
 

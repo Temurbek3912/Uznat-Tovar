@@ -25,7 +25,7 @@ from app.core import text_search
 from app.core.security import CurrentUser, Permission, utcnow
 from app.db.models import PRODUCT_ACTIVE, PRODUCT_ARCHIVED, Product, ProductBarcodeORM, ScanEventORM
 from app.services import assistant_actions as actions
-from app.services import category_words, scan_log
+from app.services import category_words, price_list, scan_log
 from app.services.barcode import search_keys
 from app.services.catalog_upload import DEFAULT_BRAND, DEFAULT_CATEGORY
 from app.services.product_images import PhotoRegistry
@@ -149,8 +149,19 @@ def find_products(db, args: dict) -> dict:
             if total:
                 by_word = word
                 break
+    stemmed: list[Product] = []
+    if not total:
+        # «Какая цена у Фанты?»: модель ищет «Фанты» — кириллицей и в падеже, а товар — «Fanta 0,5 л». Тогда — слова названия
+        # в любом алфавите и по основе слова (price_list.by_stem, §10.13): сначала фраза, потом её слова по одному.
+        active = _active(db).order_by(Product.sku).all()
+        for part in [query, *sorted({w for w in re.split(r"[\s,.;:()«»\"'?!]+", query) if len(w) >= 3} - {query},
+                                     key=lambda w: (-len(w), w))]:
+            stemmed = price_list.by_stem(part, active)
+            if stemmed:
+                total, by_word = len(stemmed), part
+                break
     order = (exact.desc(), Product.sku) if exact is not None else (Product.sku,)
-    products = q.order_by(*order).limit(_limit(args)).all()
+    products = stemmed[:_limit(args)] if stemmed else q.order_by(*order).limit(_limit(args)).all()
     ids = [p.id for p in products]
     codes, photos = _codes_of(db, ids), _photo_counts(db, ids)
     out = {"query": query, "total": total, "items": [_row(p, codes, photos) for p in products]}

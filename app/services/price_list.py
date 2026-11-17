@@ -136,9 +136,65 @@ def _fits(words: list[str], product_words: list[str]) -> bool:
     return True
 
 
+# --- слово в падеже: «Фанте», «у Фанты», «хлеба», «Fantaning» (задача 3 плана, 2026-11-17, документ 16, §10.13) ----------------
+# Владелец пишет название так, как говорит: «Поставь Фанте цену 9500», «Смени бренд у хлеба на Lays», «Fanta narxini …» — а
+# в каталоге «Fanta 0,5 л», «Хлеб белый». Слово сравнивается по основе: русское окончание отбрасывается у обоих слов
+# («fante» → fant = «fanta» → fant), узбекский суффикс — у слова владельца («fantaning» = fanta + ning). Буквы, которые
+# пишут по-разному, сравниваются как одна: «Принц» (prints) = «Prince», «Кока» = «Coca», «Нутела» = «Nutella».
+# Это ЗАПАСНОЙ путь: только если обычным сравнением (начало слова) не подошёл ни один товар, и годится только один товар.
+_RU_ENDINGS = ("yami", "ami", "yah", "yam", "ov", "ev", "om", "em", "oy", "ey", "ah", "am", "yu", "ya",
+               "a", "e", "i", "o", "u", "y")
+_WORD_SUFFIXES = {"ning", "ni", "ga", "ka", "qa", "da", "dan", "dagi", "niki", "lar", "larni", "larga", "mi",   # узбекские
+                  "a", "u", "e", "om", "y", "i", "ov", "oy", "ah", "ami"}                                  # русские
+MIN_STEM = 3
+
+
+def _sound(word: str) -> str:
+    """Буквы, которые пишут по-разному, — одной: ts/c/ck/q → k, w → v, ph → f, двойные — одной."""
+    value = word.replace("ts", "c").replace("ck", "k").replace("ph", "f").replace("c", "k").replace("q", "k").replace("w", "v")
+    return re.sub(r"(.)\1+", r"\1", value)
+
+
+def _stem(word: str) -> str:
+    for end in _RU_ENDINGS:
+        if word.endswith(end) and len(word) - len(end) >= MIN_STEM:
+            return word[:-len(end)]
+    return word
+
+
+def _same_word(word: str, product_word: str) -> bool:
+    """Слово владельца в падеже (или с узбекским суффиксом) — то же слово названия."""
+    w, p = _sound(word), _sound(product_word)
+    if len(w) < MIN_STEM or len(p) < MIN_STEM:
+        return False
+    if w.startswith(p) and w[len(p):] in _WORD_SUFFIXES:
+        return True
+    return _stem(w) == _stem(p) and len(_stem(w)) >= MIN_STEM
+
+
+def _fits_stem(words: list[str], product_words: list[str]) -> bool:
+    """Как _fits, но буквенное слово годится и по основе (_same_word)."""
+    for w in words:
+        if w[0].isdigit():
+            if not _fits([w], product_words):
+                return False
+        elif not any(p.startswith(w) or _same_word(w, p) for p in product_words if not p[0].isdigit()):
+            return False
+    return True
+
+
+def by_stem(text: str, products: list[Product]) -> list[Product]:
+    """Товары, к названию которых слова text подходят по основе (активные — первыми). Для поиска помощника (find_products)."""
+    words = _tokens(text)
+    if not any(not w[0].isdigit() for w in words):
+        return []
+    fit = [p for p in products if _fits_stem(words, _tokens(p.name or ""))]
+    return sorted(fit, key=lambda p: (p.status or PRODUCT_ACTIVE) != PRODUCT_ACTIVE)
+
+
 def find(db, name: str, products: list[Product]) -> tuple[str, list[Product]]:
     """Название из строки -> (found | many | new, товары). Точный артикул или штрихкод — сразу; потом точное название;
-    потом «все слова строки есть в названии»."""
+    потом «все слова строки есть в названии»; если не подошло ничего — то же по основе слова («Фанте» → Fanta, §10.13)."""
     key = name.strip()
     exact = [p for p in products if p.sku == key]
     if not exact:
@@ -155,7 +211,7 @@ def find(db, name: str, products: list[Product]) -> tuple[str, list[Product]]:
         return "found", exact[:1]
     if not words:
         return "new", []
-    fit = [p for p in products if _fits(words, _tokens(p.name or ""))]
+    fit = [p for p in products if _fits(words, _tokens(p.name or ""))] or by_stem(key, products)
     active = [p for p in fit if (p.status or PRODUCT_ACTIVE) == PRODUCT_ACTIVE]
     if len(active) == 1 or (len(fit) == 1):
         return "found", (active or fit)[:1]

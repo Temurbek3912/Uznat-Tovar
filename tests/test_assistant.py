@@ -891,6 +891,59 @@ def test_brand_change_needs_the_right_to_propose(Session):
     assert reply.proposal is None and len(model.calls) == 1
 
 
+def _add_declension_products(Session):
+    with Session() as db:
+        db.add_all([Product(sku="FANTA", name="Fanta 0,5 л", brand="Fanta", category="Напитки", expected_price=9000),
+                    Product(sku="PRINCE", name="Печенье Prince", brand="Prince", category="Сладости", expected_price=12000),
+                    Product(sku="NUT", name="Nutella 350 г", brand="Ferrero", category="Сладости", expected_price=45000)])
+        db.commit()
+
+
+def test_product_name_in_a_case_is_found_by_the_word_stem(Session):
+    """«Поставь Фанте цену 9500», «у Фанты», «хлеба», «Fantaning»: слово владельца кириллицей и в падеже — тот же товар
+    (§10.13). Точные совпадения — как раньше; несколько товаров или чужое слово — ничего не угадывается."""
+    from app.services import assistant_actions as act
+    from app.services import price_list
+    _add_declension_products(Session)
+    with Session() as db:
+        for word, sku in (("Фанте", "FANTA"), ("Фанты", "FANTA"), ("Фантой", "FANTA"), ("фанту", "FANTA"),
+                          ("Fantaning", "FANTA"), ("Fantani", "FANTA"), ("Fantaga", "FANTA"), ("Фанта 0,5", "FANTA"),
+                          ("хлеба", "BREAD"), ("Хлебу", "BREAD"), ("хлебом", "BREAD"), ("Принца", "PRINCE"),
+                          ("печенья Принц", "PRINCE"), ("Нутеллы", "NUT"), ("Нутела", "NUT"),
+                          ("Fanta", "FANTA"), ("FANTA", "FANTA"), ("4780001234562", "COLA")):
+            product = act.find_product(db, word)
+            assert product is not None and product.sku == sku, word
+        for word in ("Кока-колы", "Фантик", "Спрайта", "Фанте 1,5", "Старого товара", "ее", ""):
+            assert act.find_product(db, word) is None, word    # две «кока-колы», другое слово, другой объём, архив
+        found = T.find_products(db, {"query": "Фанты"})
+        assert [i["sku"] for i in found["items"]] == ["FANTA"] and "Фанты" in found["note"]
+        assert [i["sku"] for i in T.find_products(db, {"query": "цена у Фанты"})["items"]] == ["FANTA"]
+        assert T.find_products(db, {"query": "Fanta"}).get("note") is None             # точное — без пометки
+        assert T.find_products(db, {"query": "Спрайта"})["total"] == 0
+        both = T.find_products(db, {"query": "кока-колы"})
+        assert sorted(i["sku"] for i in both["items"]) == ["COLA", "COLA2"]              # список — оба, выбирает модель
+        active = db.query(Product).filter(Product.status != PRODUCT_ARCHIVED).all()
+        assert price_list.find(db, "Фанте", active)[1][0].sku == "FANTA"
+        assert price_list.find(db, "Спрайт 0,5", active)[0] == "new"
+
+
+def test_price_and_brand_by_a_name_in_a_case(Session):
+    """Живые фразы задачи 3: модель передаёт слово владельца как есть («Фанте») — карточка на нужный товар; «Смени бренд у
+    хлеба на Lays» решает программа без модели (раньше «хлеба» не находилось и вопрос уходил модели)."""
+    _add_declension_products(Session)
+    model = FakeModel({"tool": "propose_update", "args": {"product": "Фанте", "field": "price", "value": 9500}})
+    card = _ask(Session, model, "Поставь Фанте цену 9500").proposal
+    assert card["sku"] == "FANTA" and card["changes"] == {"price": 9500.0}
+    uz = FakeModel({"tool": "propose_update", "args": {"product": "Fantaning", "field": "price", "value": 9500}})
+    assert _ask(Session, uz, "Fantaning narxini 9500 soʻm qiling", lang="uz").proposal["sku"] == "FANTA"
+    for text in ("Смени бренд у хлеба на Lays", "Поставь хлебу бренд Lays", "Смени бренд у Фанты на Pepsi"):
+        none = FakeModel()
+        reply = _ask(Session, none, text)
+        assert none.calls == [] and reply.proposal["sku"] == ("FANTA" if "Фант" in text else "BREAD"), text
+    many = FakeModel({"tool": "", "text": "Какой из двух?"})
+    assert _ask(Session, many, "Смени бренд у кока-колы на Pepsi").text == "Какой из двух?"      # не угадываем
+
+
 def test_wrong_tool_for_a_category_change_is_sent_back(Session):
     """По-русски: не тот инструмент (архив, новый товар) — если товар и категория по словарю понятны, карточку готовит
     программа, иначе реплика программы просит propose_update. Категорию, которую владелец не называл, помощник не предлагает.

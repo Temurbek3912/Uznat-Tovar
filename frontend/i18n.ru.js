@@ -927,7 +927,8 @@
     "assistant.undo_all": "Отменить всё",
     "assistant.bulk_where.category": "Выбраны товары, у которых в категории есть «{query}».",
     "assistant.bulk_where.brand": "Выбраны товары, у которых в бренде есть «{query}».",
-    "assistant.bulk_where.name": "Выбраны товары, у которых в названии есть «{query}»."
+    "assistant.bulk_where.name": "Выбраны товары, у которых в названии есть «{query}».",
+    "assistant.bulk_where.categories": "Выбраны товары категорий: {list} (по слову «{query}»)."
   };
   if (root.I18N) root.I18N.add("ru", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from app.core import text_search
 from app.db.models import PRODUCT_ACTIVE, PRODUCT_ARCHIVED, Product, ProductBarcodeORM
-from app.services import shop_card
+from app.services import category_words, shop_card
 from app.services.barcode import explain_invalid, normalize_code, search_keys
 from app.services.catalog_upload import (
     DEFAULT_BRAND,
@@ -129,7 +129,7 @@ def clean_value(db, product: Product, field: str, value):
         if field == "brand":
             return clean_text(value, label="бренд", max_len=MAX_TEXT_LEN, default=DEFAULT_BRAND)
         if field == "category":
-            return clean_text(value, label="категорию", max_len=MAX_TEXT_LEN, default=DEFAULT_CATEGORY)
+            return category_value(db, value)
         if field in shop_card.TEXT_FIELDS:
             return shop_card.clean_detail(field, value)
         if field == "in_stock":
@@ -153,6 +153,17 @@ def clean_value(db, product: Product, field: str, value):
     except shop_card.CardFieldsError as exc:
         raise ActionError(exc.message) from exc
     raise ActionError("Поле field: одно из " + ", ".join(EDIT_FIELDS) + ".")
+
+
+def _categories(db) -> list[str]:
+    return sorted({c for (c,) in db.query(Product.category).distinct().all() if c})
+
+
+def category_value(db, value) -> str:
+    """Категория, которую назвал владелец, — как её сохранить. Если это уже есть в каталоге на другом языке или в другом
+    написании («Gazaklar» при «Снеки»), берём существующую: иначе появилась бы вторая такая же категория (2026-11-17)."""
+    text = clean_text(value, label="категорию", max_len=MAX_TEXT_LEN, default=DEFAULT_CATEGORY)
+    return category_words.existing_category(text, _categories(db)) or text
 
 
 def _head(product: Product) -> dict:
@@ -223,7 +234,7 @@ class Proposals:
                 "name": _check_name(db, _text(args.get("name")), None),
                 "price": parse_price(_text(args.get("price"))),
                 "brand": clean_text(args.get("brand"), label="бренд", max_len=MAX_TEXT_LEN, default=DEFAULT_BRAND),
-                "category": clean_text(args.get("category"), label="категорию", max_len=MAX_TEXT_LEN, default=DEFAULT_CATEGORY),
+                "category": category_value(db, args.get("category")),
                 "barcode": None,
             }
             if _text(args.get("barcode")):
@@ -282,7 +293,8 @@ def _latin(text: str) -> str:
 
 def bulk_select(db, where: str, query: str, status: str) -> list[Product]:
     """Товары по отбору: категория или бренд содержит query (без учёта регистра и «ё/е»); name — поиск по
-    названию, как на странице «Товары». Только товары с этим status (в каталоге; для «вернуть из архива» — в архиве)."""
+    названию, как на странице «Товары». Только товары с этим status (в каталоге; для «вернуть из архива» — в архиве).
+    Категория ещё и по словарю языков (category_words): «gazak» — это «Снеки», «shirinliklar» — «Сладости»."""
     if where not in BULK_WHERE:
         raise ActionError("where — по чему выбрать товары: category (категория), brand (бренд) или name (слово в названии).")
     query = _text(query)[:100]
@@ -295,8 +307,15 @@ def bulk_select(db, where: str, query: str, status: str) -> list[Product]:
     # магазина). Лишнее владелец увидит в карточке до «Сделать».
     # И без учёта алфавита: по-узбекски модель пишет категорию латиницей — «Sladosti» при категории «Сладости».
     key, lat = _norm(query), _latin(query)
-    return [p for p in base.order_by(Product.sku).all()
-            if key and (key in _norm(getattr(p, where)) or (lat and lat in _latin(getattr(p, where))))]
+    products = base.order_by(Product.sku).all()
+    # Категория по-узбекски при русском каталоге (и наоборот): слово сопоставляет программа по словарю, а не модель — модель
+    # раз приняла «gazak» (снеки) за «Газированные напитки» (2026-11-17).
+    by_words = set()
+    if where == "category":
+        by_words = set(category_words.matching_categories(query, sorted({p.category for p in products if p.category})))
+    return [p for p in products
+            if (key and (key in _norm(getattr(p, where)) or (lat and lat in _latin(getattr(p, where)))))
+            or (p.category in by_words)]
 
 
 def _bulk_after(change: str, value, product: Product):
@@ -354,7 +373,7 @@ def bulk_card(db, args: dict) -> dict:
         elif change == "brand":
             value = clean_text(raw, label="бренд", max_len=MAX_TEXT_LEN, default=DEFAULT_BRAND)
         elif change == "category":
-            value = clean_text(raw, label="категорию", max_len=MAX_TEXT_LEN, default=DEFAULT_CATEGORY)
+            value = category_value(db, raw)
         elif change == "in_stock":
             value = _in_stock(raw)
         else:
@@ -380,8 +399,11 @@ def bulk_card(db, args: dict) -> dict:
     if len(rows) > BULK_MAX:
         raise ActionError(f"Подходит {len(rows)} товаров — за раз не больше {BULK_MAX}. Уточните отбор или измените их на "
                           "странице «Товары».")
-    return {"kind": "bulk", "field": field, "change": change, "value": value, "where": where,
+    card = {"kind": "bulk", "field": field, "change": change, "value": value, "where": where,
             "query": _text(args.get("query"))[:100], "rows": rows, "skipped": skipped}
+    if where == "category":                     # какие категории каталога выбраны: видно, если слово понято не так
+        card["categories"] = sorted({p.category for p in products if p.category})[:10]
+    return card
 
 
 def clean_bulk_value(field: str, value):

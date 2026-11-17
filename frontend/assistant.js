@@ -141,7 +141,11 @@
     });
     var notes = [];
     // по чему выбраны товары — так владелец сразу видит, если модель поняла категорию не так («gazak» -> «Газированные…»)
-    if (["category", "brand", "name"].indexOf(action.where) !== -1 && action.query) {
+    // категорию по-узбекски сопоставляет программа («gazak» -> «Снеки»): показываем, какие категории каталога вышли
+    var cats = Array.isArray(action.categories) ? action.categories.filter(function (c) { return typeof c === "string" && c; }) : [];
+    if (action.where === "category" && action.query && cats.length) {
+      notes.push(t("assistant.bulk_where.categories", { query: String(action.query), list: cats.join(", ") }));
+    } else if (["category", "brand", "name"].indexOf(action.where) !== -1 && action.query) {
       notes.push(t("assistant.bulk_where." + action.where, { query: String(action.query) }));
     }
     if (num(action.skipped) > 0) notes.push(t("assistant.bulk_skipped", { n: num(action.skipped) }));

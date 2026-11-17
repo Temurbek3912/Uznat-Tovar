@@ -163,4 +163,13 @@ test("массовое изменение: заголовок с числом и
   tr("assistant.undo_all"); tr("assistant.tool.propose_bulk");
 });
 
+test("категория по-узбекски: карточка называет категории каталога, которые выбрала программа", () => {
+  const action = { kind: "bulk", field: "status", change: "archive", where: "category", query: "gazak", categories: ["Снеки", 5, ""],
+                   rows: [{ sku: "P", name: "Pringles", before: "active", after: "archived" }] };
+  assert.deepStrictEqual(Assistant.describeBulk(action, tr).notes, ["Выбраны товары категорий: Снеки (по слову «gazak»)."]);
+  assert.strictEqual(Assistant.describeBulk({ ...action, categories: [] }, tr).notes[0],
+    "Выбраны товары, у которых в категории есть «gazak».");                 // старые карточки без списка — как раньше
+  assert.strictEqual(Assistant.describeBulk({ ...action, where: "brand" }, tr).notes[0], "Выбраны товары, у которых в бренде есть «gazak».");
+});
+
 console.log(`\n${passed} passed`);

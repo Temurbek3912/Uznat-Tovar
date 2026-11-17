@@ -616,7 +616,7 @@ def test_bulk_proposal_is_counted_by_the_program(Session):
         latin = A.assistant_actions.bulk_card(db, {"where": "category", "query": "Napitki", "change": "in_stock", "value": "нет"})
         assert sorted(r["sku"] for r in latin["rows"]) == ["COLA", "COLA2"]          # по-узбекски модель пишет латиницей
         with pytest.raises(A.assistant_actions.ActionError, match="Категории в каталоге: .*Напитки"):
-            A.assistant_actions.bulk_card(db, {"where": "category", "query": "ichimliklar", "change": "archive", "value": ""})
+            A.assistant_actions.bulk_card(db, {"where": "category", "query": "telefonlar", "change": "archive", "value": ""})
         archive = A.assistant_actions.bulk_card(db, {"where": "name", "query": "кока", "change": "archive", "value": ""})
         assert {r["after"] for r in archive["rows"]} == {"archived"} and len(archive["rows"]) == 2
         restore = A.assistant_actions.bulk_card(db, {"where": "category", "query": "Разное", "change": "restore", "value": ""})
@@ -681,3 +681,74 @@ def test_chat_gives_a_bulk_card_without_a_second_model_call(Session):
     assert reply.proposal["kind"] == "bulk" and len(model.calls) == 1 and reply.text == ""
     with Session() as db:
         assert db.query(Product).filter_by(sku="COLA").one().expected_price == 9000      # пока не нажали — не изменилось
+
+
+# --- категории на разных языках (решение владельца 2026-11-17) -------------------------------------------------------------------
+
+def test_category_words_match_uzbek_and_russian_names():
+    """Категорию по-узбекски сопоставляет программа, а не модель: живая qwen3-vl-4b раз приняла «gazak» (снеки) за
+    «Газированные напитки»."""
+    from app.services.category_words import existing_category, matching_categories
+    cats = ["Сладости", "Напитки", "Снеки", "Без категории", "Газированные напитки", "Молочные продукты", "Минеральная вода"]
+    cases = {
+        "gazak": ["Снеки"], "Gazaklar": ["Снеки"], "газак": ["Снеки"], "sneklar": ["Снеки"],
+        "shirinliklar": ["Сладости"], "Ширинликлар": ["Сладости"],
+        "ichimliklar": ["Напитки", "Газированные напитки"],
+        "gazli ichimliklar": ["Газированные напитки"],          # длинное слово важнее: не все напитки
+        "Газированные напитки": ["Газированные напитки"],       # и газированные, и напитки — просто «Напитки» сюда нет
+        "sut mahsulotlari": ["Молочные продукты"], "suv": ["Минеральная вода"],
+        "shirinliklar va gazaklar": ["Сладости", "Снеки"],
+        "telefonlar": [], "suvenir": [], "": [],
+    }
+    for query, expected in cases.items():
+        assert matching_categories(query, cats) == expected, query
+    assert matching_categories("Sladosti", ["Shirinliklar"]) == ["Shirinliklar"]      # и наоборот: каталог по-узбекски
+    assert existing_category("Gazaklar", cats) == "Снеки"
+    assert existing_category("сладости", cats) == "Сладости"
+    assert existing_category("ichimliklar", cats) is None        # две подходят — будет новая, как написал владелец
+    assert existing_category("Telefonlar", cats) is None
+
+
+def test_bulk_and_single_change_use_the_catalog_category(Session):
+    with Session() as db:
+        card = A.assistant_actions.bulk_card(db, {"where": "category", "query": "ichimliklar", "change": "archive", "value": ""})
+        assert sorted(r["sku"] for r in card["rows"]) == ["COLA", "COLA2"] and card["categories"] == ["Напитки"]
+        moved = A.assistant_actions.bulk_card(db, {"where": "name", "query": "Хлеб", "change": "category",
+                                                   "value": "Ichimliklar"})
+        assert moved["value"] == "Напитки" and moved["rows"][0]["after"] == "Напитки"   # не вторая категория «Ichimliklar»
+        assert "categories" not in moved
+        props = A.assistant_actions.Proposals()
+        T.run_tool(db, OWNER, "propose_update", {"product": "BREAD", "field": "category", "value": "ichimliklar"}, props)
+        assert props.items[0]["changes"] == {"category": "Напитки"}
+        new = A.assistant_actions.bulk_card(db, {"where": "name", "query": "Хлеб", "change": "category", "value": "Non"})
+        assert new["value"] == "Non"                                   # такой категории нет — как написал владелец
+        found = T.find_products(db, {"query": "ichimliklar"})          # модель ищет категорию как товар
+        assert found["total"] == 0 and "категория Напитки" in found["note"] and "propose_bulk" in found["note"]
+
+
+def test_bulk_price_number_comes_from_the_owner(Session):
+    """Живая модель на «Barcha gazaklarni oʻchiring» («удалите все снеки») предложила всем цену 100 — выдумала число."""
+    bulk = {"tool": "propose_bulk", "args": {"where": "category", "query": "Напитки", "change": "price_set", "value": 100}}
+    reply = _ask(Session, FakeModel(bulk, {"tool": "", "text": "Не получилось."}), "Barcha ichimliklarni oʻchiring", lang="uz")
+    assert reply.proposal is None and "не придумывает" in reply.proposal_error
+    for said, value in (("Сделай всем напиткам цену 8 000", 8000), ("Barcha ichimliklar narxi 8 ming", 8000),
+                        ("Подними цены напиткам на 2,5%", -2.5)):
+        step = {"tool": "propose_bulk", "args": {"where": "category", "query": "Напитки",
+                                                 "change": "price_percent" if value < 0 else "price_set", "value": value}}
+        assert _ask(Session, FakeModel(step), said).proposal["kind"] == "bulk", said
+
+
+def test_missing_category_tool_is_redirected_when_the_owner_names_a_category(Session):
+    """«Убери в архив все газированные напитки»: живая модель всегда звала products_missing(field=category) и отвечала о
+    товарах без категории. Программа говорит ей, что это категория, и данные «без категории» не показывает."""
+    model = FakeModel({"tool": "products_missing", "args": {"field": "category"}},
+                      {"tool": "propose_bulk", "args": {"where": "category", "query": "Напитки", "change": "archive"}})
+    reply = _ask(Session, model, "Barcha ichimliklarni arxivga oling", lang="uz")
+    assert reply.proposal["kind"] == "bulk" and len(model.calls) == 2
+    sent = [m["content"] for m in model.calls[1][1]["messages"]]
+    assert any("ПРОВЕРКА ПРОГРАММЫ" in m and "query=Напитки" in m for m in sent)
+    assert not any("BREAD" in m for m in sent)                       # список «без категории» модели не дали
+
+    plain = FakeModel({"tool": "products_missing", "args": {"field": "category"}}, {"tool": "", "text": "Один: Хлеб."})
+    reply = _ask(Session, plain, "Сколько товаров без категории?")    # «Без категории» — не названная категория
+    assert reply.text == "Один: Хлеб." and not any("ПРОВЕРКА" in m["content"] for m in plain.calls[1][1]["messages"])

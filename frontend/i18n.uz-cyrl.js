@@ -928,7 +928,8 @@
     "assistant.undo_all": "Ҳаммасини қайтариш",
     "assistant.bulk_where.category": "Категориясида «{query}» бўлган маҳсулотлар танланди.",
     "assistant.bulk_where.brand": "Брендида «{query}» бўлган маҳсулотлар танланди.",
-    "assistant.bulk_where.name": "Номида «{query}» бўлган маҳсулотлар танланди."
+    "assistant.bulk_where.name": "Номида «{query}» бўлган маҳсулотлар танланди.",
+    "assistant.bulk_where.categories": "Категориялар маҳсулотлари танланди: {list} («{query}» сўзи бўйича)."
   };
   if (typeof module === "object" && module.exports) module.exports = dict;
   if (root.I18N) root.I18N.add("uz-Cyrl", dict);

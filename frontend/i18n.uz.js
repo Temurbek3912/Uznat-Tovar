@@ -927,7 +927,8 @@
     "assistant.undo_all": "Hammasini qaytarish",
     "assistant.bulk_where.category": "Kategoriyasida «{query}» boʻlgan mahsulotlar tanlandi.",
     "assistant.bulk_where.brand": "Brendida «{query}» boʻlgan mahsulotlar tanlandi.",
-    "assistant.bulk_where.name": "Nomida «{query}» boʻlgan mahsulotlar tanlandi."
+    "assistant.bulk_where.name": "Nomida «{query}» boʻlgan mahsulotlar tanlandi.",
+    "assistant.bulk_where.categories": "Kategoriyalar mahsulotlari tanlandi: {list} («{query}» soʻzi boʻyicha)."
   };
   if (root.I18N) root.I18N.add("uz", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

@@ -25,8 +25,10 @@ import time
 from dataclasses import dataclass, field
 
 from app.core.security import CurrentUser
-from app.services import assistant_actions, assistant_tools, model_gate
+from app.db.models import PRODUCT_ACTIVE, Product
+from app.services import assistant_actions, assistant_tools, category_words, model_gate
 from app.services.assistant_tools import ToolError
+from app.services.catalog_upload import DEFAULT_CATEGORY
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +226,53 @@ def invented_code(name: str, args: dict, history: list[dict]) -> None:
         raise ToolError("Штрихкод помощник не придумывает: напишите цифры кода с упаковки.")
 
 
+_THOUSAND = re.compile(r"\s*(?:тыс|ming|минг|k\b)", re.I)
+
+
+def _numbers_said(history: list[dict]) -> set[float]:
+    """Числа из реплик владельца: «8 000», «8000», «2,5», «8 тысяч» / «8 ming» = 8000."""
+    out: set[float] = set()
+    for m in history:
+        if m.get("role") != "user":
+            continue
+        text = re.sub(r"(?<=\d)[\s  ](?=\d{3}\b)", "", str(m.get("content") or ""))
+        for match in re.finditer(r"\d+(?:[.,]\d+)?", text):
+            value = float(match.group(0).replace(",", "."))
+            out.add(value)
+            if _THOUSAND.match(text, match.end()):
+                out.add(value * 1000)
+    return out
+
+
+def invented_number(name: str, args: dict, history: list[dict]) -> None:
+    """Число массового изменения цены — только из слов владельца. Живая qwen3-vl-4b (2026-11-17) на «Barcha gazaklarni
+    oʻchiring» («удалите все снеки») предложила всем снекам цену 100 — число выдумала сама."""
+    if name != "propose_bulk" or not isinstance(args, dict):
+        return
+    if str(args.get("change") or "").lower() not in ("price_percent", "price_add", "price_set"):
+        return
+    try:
+        value = abs(float(str(args.get("value")).replace(" ", "").replace(",", ".").rstrip("%")))
+    except ValueError:
+        return                                   # не число — откажет сам propose_bulk
+    if value not in _numbers_said(history):
+        raise ToolError("Число для цены помощник не придумывает: напишите его (например, «на 10%» или «цена 8000»).")
+
+
+def named_categories(db, name: str, args: dict, history: list[dict]) -> list[str]:
+    """Категории каталога, названные в последней реплике владельца, — если модель вместо них ищет «товары без категории».
+    Живая qwen3-vl-4b (2026-11-17) на «Убери в архив все газированные напитки» (и по-узбекски «Barcha gazli ichimliklarni
+    arxivga oling») всегда звала products_missing(field=category) и отвечала «нет товаров без категории»."""
+    if name != "products_missing" or str(args.get("field") or "").lower() not in ("category", "brand"):
+        return []
+    said = next((m["content"] for m in reversed(history) if m.get("role") == "user"), "")
+    cats = [c for (c,) in db.query(Product.category).filter(Product.status == PRODUCT_ACTIVE).distinct().all()
+            if c and c != DEFAULT_CATEGORY]
+    text = category_words.latin(said)
+    direct = [c for c in cats if category_words.latin(c) in text]
+    return sorted(set(direct) | set(category_words.matching_categories(said, cats)))[:5]
+
+
 def claims_change(text: str) -> bool:
     return bool(_CLAIM.search(text or ""))
 
@@ -318,6 +367,7 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                 args = step_answer.get("args") if isinstance(step_answer.get("args"), dict) else {}
                 try:
                     invented_code(name, args, history)
+                    invented_number(name, args, history)
                     result, ok = assistant_tools.run_tool(db, user, name, args, proposals, ui, lang), True
                 except ToolError as exc:
                     result, ok = {"error": str(exc)}, False
@@ -332,12 +382,23 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                 # «Почему не узнал» (scan_problems) уже содержит и товары, и советы: живая qwen3-vl-4b (2026-11-17) после него
                 # «перепроверяла» его же данные find_products/products_missing и по-узбекски отвечала уже о другом.
                 answer_now = ok and getattr(assistant_tools.get_tool(name), "answer_next", False)
+                named = named_categories(db, name, args, history) if ok and can_propose else []
+                if named:
+                    # Данные «товаров без категории» модели не показываем вовсе: с ними она отвечала о них (о другом товаре).
+                    answer_now = False
+                    result = {"error": f"Не тот инструмент: владелец назвал категорию {', '.join(named)}, а не товары без "
+                                       f"{'категории' if args.get('field') == 'category' else 'бренда'}."}
                 logger.info("ИИ-помощник: инструмент %s (%s)", name if name in names else "?", "ok" if ok else "ошибка")
                 convo.append({"role": "assistant", "content": json.dumps({"tool": name, "args": args}, ensure_ascii=False)})
                 # Данные — по-русски, и по-узбекски модель после них отвечала кириллицей (2026-11-17, scan_problems): язык ответа
                 # напоминается рядом с данными, а не только в начале разговора.
                 convo.append({"role": "user", "content": _result_text(name, result)
                               + (f"\nОтвет — на {LANGS[lang]} языке." if lang != "ru" else "")})
+                if named:
+                    # Отдельной репликой программы: подсказку внутри данных инструмента модель читает как «не указания».
+                    convo.append({"role": "user", "content": f"ПРОВЕРКА ПРОГРАММЫ: все товары категории {named[0]} меняются "
+                                  f"одним вызовом propose_bulk(where=category, query={named[0]}, change=…); убрать или удалить — "
+                                  f"change=archive. Вызови его."})
                 if proposals.items:
                     # Карточка готова — модель больше не спрашиваем: живая qwen3-vl-4b (2026-11-17) после карточки писала
                     # «цена установлена», «товар добавлен» ещё до «Сделать», мешала кириллицу с латиницей в узбекском и даже

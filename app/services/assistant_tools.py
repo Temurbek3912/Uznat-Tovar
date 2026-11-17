@@ -25,7 +25,7 @@ from app.core import text_search
 from app.core.security import CurrentUser, Permission, utcnow
 from app.db.models import PRODUCT_ACTIVE, PRODUCT_ARCHIVED, Product, ProductBarcodeORM, ScanEventORM
 from app.services import assistant_actions as actions
-from app.services import scan_log
+from app.services import category_words, scan_log
 from app.services.barcode import search_keys
 from app.services.catalog_upload import DEFAULT_BRAND, DEFAULT_CATEGORY
 from app.services.product_images import PhotoRegistry
@@ -156,6 +156,14 @@ def find_products(db, args: dict) -> dict:
     out = {"query": query, "total": total, "items": [_row(p, codes, photos) for p in products]}
     if by_word:
         out["note"] = f"Точного совпадения нет; найдено по слову «{by_word}» — проверь, тот ли это товар."
+    if not total:
+        # «Gazaklar narxini 10% oshiring»: модель искала категорию как товар и отвечала «не найдено» (2026-11-17). Слово —
+        # категория по словарю языков: говорим модели, какая это категория в каталоге.
+        cats = category_words.matching_categories(query, sorted({c for (c,) in _active(db).with_entities(Product.category)
+                                                                 .distinct().all() if c}))
+        if cats:
+            out["note"] = (f"Товара с таким названием нет, но «{query}» — это категория {', '.join(cats)}. Изменить все её "
+                           f"товары — propose_bulk(where=category, query={cats[0]}).")
     return out
 
 
@@ -180,6 +188,10 @@ def products_missing(db, args: dict) -> dict:
     summary = f"Товаров {MISSING_LABELS[field]}: {len(found)} из {len(products)}."
     if len(found) > limit:
         summary += f" Ниже первые {limit}; весь список — на странице «Товары»."
+    if field in ("category", "brand"):
+        # «Убери в архив все газированные напитки» модель уводила сюда и отвечала «нет товаров без категории» (2026-11-17)
+        summary += (f" Это товары БЕЗ {'категории' if field == 'category' else 'бренда'}. Если владелец просит изменить все "
+                    f"товары какой-то {'категории' if field == 'category' else 'бренда'} — propose_bulk(where={field}, …).")
     return {"field": field, "total": len(found), "summary": summary,
             "items": [{"sku": p.sku, "name": _cut(p.name)} for p in found[:limit]]}
 

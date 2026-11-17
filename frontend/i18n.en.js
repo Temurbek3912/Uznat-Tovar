@@ -927,7 +927,8 @@
     "assistant.undo_all": "Undo all",
     "assistant.bulk_where.category": "Selected: products whose category contains “{query}”.",
     "assistant.bulk_where.brand": "Selected: products whose brand contains “{query}”.",
-    "assistant.bulk_where.name": "Selected: products whose name contains “{query}”."
+    "assistant.bulk_where.name": "Selected: products whose name contains “{query}”.",
+    "assistant.bulk_where.categories": "Selected: products in categories {list} (from the word “{query}”)."
   };
   if (root.I18N) root.I18N.add("en", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

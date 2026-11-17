@@ -181,7 +181,7 @@ def _act_bulk(db: Session, user: CurrentUser, action: dict) -> dict:
         raise
     for row in undo_rows:
         row["version"] = row.pop("_product").version
-    undo = {**{k: action.get(k) for k in ("field", "change", "value", "where", "query")}, "kind": "bulk", "undo": True,
+    undo = {**{k: action.get(k) for k in ("field", "change", "value", "where", "query", "categories")}, "kind": "bulk", "undo": True,
             "rows": undo_rows, "skipped": 0} if undo_rows else None
     return {"ok": True, "changed": len(undo_rows), "undo": undo}
 

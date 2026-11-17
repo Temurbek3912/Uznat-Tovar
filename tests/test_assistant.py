@@ -345,6 +345,21 @@ def test_answer_language_follows_the_page():
     assert "английском" in A.system_prompt(OWNER, tools, "en")
 
 
+def test_wrong_currency_after_a_number_becomes_sum():
+    """Живая qwen3-vl-4b (2026-11-17) на «Какая цена у Фанты?» писала «9000 тенге» или «сом»: валюту правит программа (§10.14)."""
+    assert A.tidy_text("Цена Фанты 0,5 л — 9000 тенге.", "ru") == "Цена Фанты 0,5 л — 9000 сум."
+    assert A.tidy_text("Нутелла стоит 45 000 сомов, Pringles — 32000сом", "ru") == "Нутелла стоит 45 000 сум, Pringles — 32000 сум"
+    assert A.tidy_text("Цена — 100 рублей или 5 руб.", "ru") == "Цена — 100 сум или 5 сум."
+    assert A.tidy_text("Fanta narxi 9000 som.", "uz") == "Fanta narxi 9000 soʻm."
+    assert A.tidy_text("Fanta narxi 9000 so'm.", "uz") == "Fanta narxi 9000 soʻm."
+    assert A.tidy_text("Fanta costs 9000 tenge.", "en") == "Fanta costs 9000 UZS."
+    assert A.tidy_text("Фанта нархи 9000 сом.", "uz-Cyrl") == "Фанта нархи 9000 сўм."
+    # без числа перед словом, и правильная валюта — не трогаются
+    assert A.tidy_text("Сыр «Сомов» 2 шт, Сомса", "ru") == "Сыр «Сомов» 2 шт, Сомса"
+    assert A.tidy_text("9000 сум, 9000 сумов", "ru") == "9000 сум, 9000 сумов"
+    assert A.tidy_text("9 сомса", "ru") == "9 сомса"
+
+
 # --- очерёдность с распознаванием ------------------------------------------------------------------------------------------------
 
 def test_assistant_waits_for_customers_and_gives_up_politely(Session, monkeypatch):

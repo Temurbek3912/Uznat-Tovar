@@ -205,12 +205,26 @@ def _to_latin(word: str) -> str:
     return "".join(out)
 
 
+# Цены в программе — в сумах, а живая qwen3-vl-4b (2026-11-17) по-русски писала «9000 тенге» (9 ответов из 9), а с подсказкой
+# «Цены — в сумах» в начале разговора — «9000 сом» (12 из 12); «сум» — ни разу. Поэтому валюту после числа правит программа (§10.14) —
+# тем же словом, что и страницы (ticket.price_unit). Слово без числа перед ним («сом» в названии товара) не трогается, слово
+# другого алфавита — тоже: русский ответ на узбекской странице (запасной, wrong_script) не получает «soʻm» среди кириллицы.
+_CURRENCY = {"ru": "сум", "uz": "soʻm", "uz-Cyrl": "сўм", "en": "UZS"}
+_WRONG_CURRENCY = {
+    "cyr": re.compile(r"(?<=\d)(\s?)(?:тенге|₸|сом(?:а|ов|ы)?|рубл(?:ь|я|ей)|руб)(?![\wʻ'’])", re.I),
+    "lat": re.compile(r"(?<=\d)(\s?)(?:tenge|₸|soms?|rubl\w*)(?![\wʻ'’])", re.I),
+}
+
+
 def tidy_text(text: str, lang: str) -> str:
     text = _CJK.sub("", text)
     if lang == "uz":
         text = _MIXED.sub(lambda m: _to_latin(m.group(0)), text)
         # oʻ и gʻ — с ʻ (U+02BB), как на страницах; модель пишет «qo'shing», «yo'q» обычным апострофом.
         text = _UZ_APOS.sub(lambda m: m.group(1) + "ʻ", text)
+    unit = _CURRENCY.get(lang, _CURRENCY["ru"])
+    wrong = _WRONG_CURRENCY["lat" if lang in ("uz", "en") else "cyr"]
+    text = wrong.sub(lambda m: (m.group(1) or " ") + unit, text)
     return re.sub(r"[ \t]{2,}", " ", text).strip()
 
 

@@ -225,7 +225,27 @@ def tidy_text(text: str, lang: str) -> str:
     unit = _CURRENCY.get(lang, _CURRENCY["ru"])
     wrong = _WRONG_CURRENCY["lat" if lang in ("uz", "en") else "cyr"]
     text = wrong.sub(lambda m: (m.group(1) or " ") + unit, text)
+    if lang == "uz-Cyrl":                                   # русское «сум» на узбекской кириллице — «сўм» (§10.17)
+        text = _SUM_CYR.sub(lambda m: (m.group(1) or " ") + unit, text)
     return re.sub(r"[ \t]{2,}", " ", text).strip()
+
+
+# §10.17: на узбекской (латиница) странице живая qwen3-vl-4b (2026-11-17) писала валюту кириллицей — «Pringles Original 165 г —
+# 32 000 сом», «Nutella паста ореховая 400 г 45000 сом» (3 из 3). Такое слово после числа — тоже «soʻm», но только если ответ в
+# основном латиницей (кириллица слов каталога и вопроса не считается, как в wrong_script): русский ответ («Нутелла стоит 45000 сум»)
+# остаётся кириллицей целиком. На uz-Cyrl русское «сум» — «сўм» (tidy_text).
+_UZ_CYR_CURRENCY = re.compile(r"(?<=\d)(\s?)(?:тенге|сом(?:а|ов|ы)?|сум(?:а|ов|ы)?|сўм|рубл(?:ь|я|ей)|руб)(?![\wʻ'’])", re.I)
+_SUM_CYR = re.compile(r"(?<=\d)(\s?)(?:сум(?:а|ов|ы)?)(?![\wʻ'’])", re.I)
+
+
+def uz_currency(db, text: str, question: str) -> str:
+    """Ответ на uz в основном латиницей: «45000 сом» → «45000 soʻm»; русская фраза — без изменений."""
+    rest = _UZ_CYR_CURRENCY.sub("", text)
+    known = _known_words(db, question)
+    cyr = sum(len(w) for w in _CYR_WORD.findall(rest) if w.lower() not in known)
+    if cyr > len(re.findall(r"[a-z]", rest, re.I)):
+        return text
+    return _UZ_CYR_CURRENCY.sub(lambda m: (m.group(1) or " ") + _CURRENCY["uz"], text)
 
 
 # Владелец сменил язык посреди разговора: в истории ответы на прежнем языке, и живая qwen3-vl-4b (2026-11-17) после русских
@@ -700,7 +720,9 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                         continue
                     if (text and spare and lang == "uz" and _UZ_CYRILLIC.search(text)
                             and wrong_script(db, text, lang, history[-1]["content"])):
-                        text = latinize(db, text, history[-1]["content"])    # переписала узбекской кириллицей
+                        text = tidy_text(latinize(db, text, history[-1]["content"]), lang)  # узбекской кириллицей; «сом» → «soʻm»
+                    if text and lang == "uz":
+                        text = uz_currency(db, text, history[-1]["content"])  # «45000 сом» → «45000 soʻm» (§10.17)
                     if text:
                         return done(text)
                     break

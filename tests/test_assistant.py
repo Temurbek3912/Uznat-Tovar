@@ -360,6 +360,30 @@ def test_wrong_currency_after_a_number_becomes_sum():
     assert A.tidy_text("9 сомса", "ru") == "9 сомса"
 
 
+def test_cyrillic_currency_on_latin_uzbek_page_becomes_som(Session):
+    """Живая qwen3-vl-4b (2026-11-17) на uz писала «32 000 сом» / «45000 сом» кириллицей: в латинском ответе это «soʻm» (§10.17)."""
+    with Session() as db:
+        def uz(text, question="Narxi qancha?"):
+            return A.uz_currency(db, text, question)
+        assert uz("Pringles Original 165 г — 32 000 сом") == "Pringles Original 165 г — 32 000 soʻm"
+        assert uz("45000 сом") == "45000 soʻm"
+        assert uz("Nutella narxi 45000 сум, Fanta — 9000сўм.") == "Nutella narxi 45000 soʻm, Fanta — 9000 soʻm."
+        assert uz("Narxi 100 тенге") == "Narxi 100 soʻm"
+        # кириллица из каталога («Кока-кола 0,5 л») и из вопроса не мешает
+        assert uz("Кока-кола 0,5 л 9000 сом.") == "Кока-кола 0,5 л 9000 soʻm."
+        assert uz("Хлеб 4000 сом", "Хлеб qancha?") == "Хлеб 4000 soʻm"
+        # русский ответ на узбекской странице — кириллицей целиком, не трогается; без числа — тоже
+        assert uz("Хлеб стоит 4000 сом") == "Хлеб стоит 4000 сом"
+        assert uz("Somsa va сомса") == "Somsa va сомса"
+    # и в самом разговоре
+    model = FakeModel({"tool": "", "text": "Кока-кола 0,5 л 9000 сом."})
+    assert _ask(Session, model, "Koka-kola qancha turadi?", lang="uz").text == "Кока-кола 0,5 л 9000 soʻm."
+    # uz-Cyrl: и «сом», и русское «сум» — «сўм»; правильное «сўм» остаётся; по-русски «сум» не трогается
+    assert A.tidy_text("Нутелла нархи 45000 сум.", "uz-Cyrl") == "Нутелла нархи 45000 сўм."
+    assert A.tidy_text("Нутелла нархи 45000 сом, 9000 сўм", "uz-Cyrl") == "Нутелла нархи 45000 сўм, 9000 сўм"
+    assert A.tidy_text("9000 сум", "ru") == "9000 сум"
+
+
 # --- очерёдность с распознаванием ------------------------------------------------------------------------------------------------
 
 def test_assistant_waits_for_customers_and_gives_up_politely(Session, monkeypatch):

@@ -887,7 +887,8 @@
     "server.assistant_action_invalid": "Помощник предложил непонятное действие — попросите ещё раз.",
     "assistant.proposal_failed": "Изменение не предложено, в базе ничего не изменилось. Причина: {why}",
     "assistant.no_card": "Ничего не изменилось: изменения делаются только кнопкой «Сделать» в карточке, а карточки нет. Попросите ещё раз и назовите товар точнее.",
-    "assistant.proposal_not_made": "Не получилось предложить изменение."
+    "assistant.proposal_not_made": "Не получилось предложить изменение.",
+    "assistant.example_scans": "Какие товары плохо узнаются и что с ними сделать?"
   };
   if (root.I18N) root.I18N.add("ru", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

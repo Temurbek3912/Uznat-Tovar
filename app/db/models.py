@@ -446,3 +446,19 @@ class AgentStateORM(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     version: Mapped[str | None] = mapped_column(String, nullable=True)
     cameras_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ScanEventORM(Base):
+    """Один скан покупателя «Узнать товар» — для помощника владельца «почему не узнал» (решение владельца 2026-11-17, документ 16,
+    §10.5). Только итог: когда, что ответила программа, какой товар или какое название вне базы. Кадра, адреса, устройства и
+    чего-либо о покупателе нет (D-10, D-10а). Строки старше 90 дней удаляются сами (app/services/scan_log.py). Миграция 0009."""
+
+    __tablename__ = "scan_events"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    status: Mapped[str] = mapped_column(String(16))                   # matched | uncertain | not_in_catalog | unknown
+    via: Mapped[str | None] = mapped_column(String(8), nullable=True)  # barcode | look
+    product_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    guess_name: Mapped[str | None] = mapped_column(String(120), nullable=True)   # not_in_catalog: как программа назвала товар
+    guess_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)    # not_in_catalog: вид товара (drink, …)

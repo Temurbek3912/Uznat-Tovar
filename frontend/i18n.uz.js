@@ -887,7 +887,8 @@
     "server.assistant_action_invalid": "Yordamchi tushunarsiz amalni taklif qildi — yana bir bor soʻrang.",
     "assistant.proposal_failed": "Oʻzgarish taklif qilinmadi, bazada hech narsa oʻzgarmadi. Sababi: {why}",
     "assistant.no_card": "Hech narsa oʻzgarmadi: oʻzgarishlar faqat kartadagi «Bajarish» tugmasi bilan qilinadi, karta esa yoʻq. Yana bir bor soʻrang va mahsulotni aniqroq ayting.",
-    "assistant.proposal_not_made": "Oʻzgarishni taklif qilib boʻlmadi."
+    "assistant.proposal_not_made": "Oʻzgarishni taklif qilib boʻlmadi.",
+    "assistant.example_scans": "Qaysi tovarlar yomon taniladi va nima qilish kerak?"
   };
   if (root.I18N) root.I18N.add("uz", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

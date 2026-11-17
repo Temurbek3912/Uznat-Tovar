@@ -16,11 +16,16 @@ import re
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import timedelta
+from pathlib import Path
+
+from sqlalchemy import func
 
 from app.core import text_search
-from app.core.security import CurrentUser, Permission
-from app.db.models import PRODUCT_ACTIVE, PRODUCT_ARCHIVED, Product, ProductBarcodeORM
+from app.core.security import CurrentUser, Permission, utcnow
+from app.db.models import PRODUCT_ACTIVE, PRODUCT_ARCHIVED, Product, ProductBarcodeORM, ScanEventORM
 from app.services import assistant_actions as actions
+from app.services import scan_log
 from app.services.barcode import search_keys
 from app.services.catalog_upload import DEFAULT_BRAND, DEFAULT_CATEGORY
 from app.services.product_images import PhotoRegistry
@@ -45,6 +50,7 @@ class Tool:
     kind: str = "read"          # read — смотреть; propose — предложить изменение владельцу; ui — язык/тема страницы
     required: tuple = ()        # обязательные аргументы — модель не сможет их пропустить (своя JSON-схема у каждого инструмента)
     choices: dict = field(default_factory=dict)     # {аргумент: [допустимые значения]}
+    answer_next: bool = False   # после успешного вызова модель только отвечает: итог уже полный (иначе она «перепроверяет»)
 
 
 def _cut(value, limit: int = MAX_TEXT):
@@ -200,6 +206,97 @@ def product_details(db, args: dict) -> dict:
     return out
 
 
+FEW_PHOTOS = 2                  # 1–2 фото: по виду узнаётся хуже, нужно 2–3 с разных сторон
+OFTEN = 3                       # «часто сканируют» — от стольких сканов за выбранные дни
+SHOW_ROWS = 8                   # строк в каждом списке: итог для модели — до 2000 знаков
+
+
+_KINDS: dict[str, str] | None = None
+
+
+def _kind_label(code: str) -> str:
+    """Код вида (drink) -> подпись по-русски из словаря страниц (frontend/i18n.ru.js, kind.<код>); модель переведёт сама.
+    Код без подписи — как есть: «dairy» модель печатала владельцу прямо так."""
+    global _KINDS
+    if _KINDS is None:
+        try:
+            text = (Path(__file__).resolve().parents[2] / "frontend" / "i18n.ru.js").read_text(encoding="utf-8")
+            _KINDS = dict(re.findall(r'"kind\.(\w+)":\s*"([^"]+)"', text))
+        except OSError:
+            _KINDS = {}
+    return _KINDS.get(code, code)
+
+
+def _days(args: dict) -> int:
+    try:
+        value = int(args.get("days", 30))
+    except (TypeError, ValueError):
+        value = 30
+    return max(1, min(value, scan_log.KEEP_DAYS))
+
+
+def _advice(scans: int, unsure: int, photos: int, has_code: bool) -> str:
+    if not photos:
+        return "нет фото: по виду не узнаётся — добавьте 2–3 фото с разных сторон"
+    tips = []
+    if photos <= FEW_PHOTOS:
+        tips.append("добавьте ещё 2–3 фото с разных сторон")
+    elif unsure:
+        tips.append("проверьте фото товара (на всех ли он сам) и добавьте крупное фото этикетки")
+    if unsure and not has_code:
+        tips.append("добавьте штрихкод — по нему узнаётся сразу")
+    return "; ".join(tips)
+
+
+def scan_problems(db, args: dict) -> dict:
+    """«Почему не узнал» (документ 16, §10.5): по сканам покупателей за N дней (app/services/scan_log.py) — товары, которые
+    узнавались неуверенно или часто сканируются при 1–2 фото; что сканировали, а в каталоге этого нет; сколько не поняли совсем."""
+    days = _days(args)
+    since = utcnow() - timedelta(days=days)
+    rows = db.query(ScanEventORM.status, ScanEventORM.product_id, ScanEventORM.guess_name, ScanEventORM.guess_kind) \
+        .filter(ScanEventORM.at >= since).all()
+    first = db.query(func.min(ScanEventORM.at)).scalar()
+    counts = Counter(r.status for r in rows)
+    # Счёт — сканов, а не товаров: с полями «unsure: 7» модель писала «7 товаров не распознаются». Готовая фраза summary
+    # переписывается моделью без ошибок.
+    out = {"days": days, "scans": len(rows), "summary": (f"За {days} дн. покупатели сделали {len(rows)} сканов: узнано {counts['matched']}, неуверенно "
+                       f"{counts['uncertain']}, товара нет в каталоге {counts['not_in_catalog']}, не понято {counts['unknown']}.")}
+    if first is None:
+        out["note"] = "Сканов покупателей ещё нет: программа начала их считать с этого обновления."
+    per: dict[str, list[int]] = {}
+    for r in rows:
+        if r.product_id:
+            item = per.setdefault(r.product_id, [0, 0])
+            item[0] += 1
+            item[1] += r.status == "uncertain"
+    products = {p.id: p for p in _active(db).filter(Product.id.in_(list(per))).all()} if per else {}
+    photos, codes = _photo_counts(db, list(products)), _codes_of(db, list(products))
+    weak = []
+    for pid, (scans, unsure) in per.items():
+        p = products.get(pid)
+        if p is None or not (unsure or (scans >= OFTEN and photos.get(pid, 0) <= FEW_PHOTOS)):
+            continue
+        weak.append({"sku": p.sku, "name": _cut(p.name, 60), "scans": scans, "unsure": unsure, "photos": photos.get(pid, 0),
+                     "advice": _advice(scans, unsure, photos.get(pid, 0), pid in codes)})
+    weak.sort(key=lambda w: (-w["unsure"], -w["scans"], w["sku"]))
+    out["weak_total"], out["weak"] = len(weak), weak[:SHOW_ROWS]
+    names: Counter = Counter()
+    shown: dict[str, str] = {}
+    for r in rows:
+        if r.status == "not_in_catalog":
+            label = (r.guess_name or "").strip() or (f"без названия ({_kind_label(r.guess_kind)})" if r.guess_kind else "")
+            if label:
+                key = " ".join(text_search.normalize(label).split())
+                names[key] += 1
+                shown.setdefault(key, label)
+    out["missing"] = [{"name": _cut(shown[k], 60), "times": n} for k, n in names.most_common(SHOW_ROWS)]
+    if out["missing"]:
+        out["missing_advice"] = "этих товаров нет в каталоге (уже проверено, искать не нужно): если они продаются — добавьте их с фото"
+    if rows and counts["unknown"] * 4 >= len(rows):
+        out["not_understood_advice"] = "много сканов не поняли совсем: попросите снимать ближе, при хорошем свете, штрихкодом к камере"
+    return out
+
+
 TOOLS: tuple[Tool, ...] = (
     Tool("catalog_overview", Permission.CATALOG_READ,
          "Сводка каталога: сколько товаров, в архиве, без фото, без штрихкода, без цены, без бренда, без категории; категории.",
@@ -217,6 +314,9 @@ TOOLS: tuple[Tool, ...] = (
     Tool("product_details", Permission.CATALOG_READ,
          "Всё о товаре по артикулу (sku) или штрихкоду.",
          {"product": "артикул или штрихкод"}, product_details, required=("product",)),
+    Tool("scan_problems", Permission.CATALOG_READ,
+         "Почему не узнаёт: сканы покупателей за days дней — что узнаётся плохо, кому нужно больше фото, чего нет в каталоге.",
+         {"days": "1–90, обычно 30"}, scan_problems, answer_next=True),
 )
 TOOLS += (
     Tool("propose_update", Permission.CATALOG_WRITE,
@@ -267,3 +367,7 @@ def run_tool(db, user: CurrentUser, name: str, args, proposals: actions.Proposal
         return tool.run(db, clean)
     except actions.ActionError as exc:
         raise ToolError(str(exc)) from exc
+
+
+def get_tool(name: str) -> Tool | None:
+    return _BY_NAME.get(name)

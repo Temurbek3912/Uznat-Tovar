@@ -147,7 +147,7 @@ def system_prompt(user: CurrentUser, tools: list, lang: str) -> str:
 
 
 def _arg_schema(tool, name: str) -> dict:
-    if name == "limit":
+    if name in ("limit", "days"):
         return {"type": "integer"}
     if name in tool.choices:
         return {"type": "string", "enum": tool.choices[name]}
@@ -265,6 +265,7 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
     failed = {"error": ""}                  # последняя ошибка инструмента propose_*
     can_propose = any(t.kind == "propose" for t in tools)
     nudged = False
+    answer_now = False                      # инструмент дал полный итог (Tool.answer_next) — следующий шаг только ответ
     started = clock()
 
     def done(text: str) -> Reply:
@@ -276,7 +277,7 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
     try:
         with model_gate.assistant_slot(WAIT_FOR_SLOT):
             for step in range(MAX_STEPS + 1):
-                final = step == MAX_STEPS
+                final = step == MAX_STEPS or answer_now
                 step_answer = _ask_model(post, url, model, convo, answer_schema(tools, final=final))
                 if step_answer is None:
                     break
@@ -309,9 +310,15 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                     db.rollback()
                     result, ok = {"error": "Данные сейчас недоступны."}, False
                 used.append({"name": name, "ok": ok})
+                # «Почему не узнал» (scan_problems) уже содержит и товары, и советы: живая qwen3-vl-4b (2026-11-17) после него
+                # «перепроверяла» его же данные find_products/products_missing и по-узбекски отвечала уже о другом.
+                answer_now = ok and getattr(assistant_tools.get_tool(name), "answer_next", False)
                 logger.info("ИИ-помощник: инструмент %s (%s)", name if name in names else "?", "ok" if ok else "ошибка")
                 convo.append({"role": "assistant", "content": json.dumps({"tool": name, "args": args}, ensure_ascii=False)})
-                convo.append({"role": "user", "content": _result_text(name, result)})
+                # Данные — по-русски, и по-узбекски модель после них отвечала кириллицей (2026-11-17, scan_problems): язык ответа
+                # напоминается рядом с данными, а не только в начале разговора.
+                convo.append({"role": "user", "content": _result_text(name, result)
+                              + (f"\nОтвет — на {LANGS[lang]} языке." if lang != "ru" else "")})
                 if proposals.items:
                     # Карточка готова — модель больше не спрашиваем: живая qwen3-vl-4b (2026-11-17) после карточки писала
                     # «цена установлена», «товар добавлен» ещё до «Сделать», мешала кириллицу с латиницей в узбекском и даже

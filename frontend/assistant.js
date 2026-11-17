@@ -17,7 +17,7 @@
   var MAX_SENT = 8;            // реплик уходит на сервер (сервер всё равно возьмёт не больше)
   var QUESTION_RESERVE = 100;  // символов памяти оставить новому вопросу (обычный вопрос короче)
   var BUSY_POLL_MS = 30000;    // как часто узнавать, заняты ли покупатели распознаванием
-  var EXAMPLES = ["assistant.example_photo", "assistant.example_dupes", "assistant.example_price", "assistant.example_theme"];
+  var EXAMPLES = ["assistant.example_scans", "assistant.example_photo", "assistant.example_dupes", "assistant.example_price", "assistant.example_theme"];
   var CARD_STATES = ["ask", "working", "done", "cancelled", "undone", "error"];
   var KINDS = ["update", "status", "add"];
   // инструменты-действия: в строке «Смотрел: …» не показываются (их видно по карточке и по строке «Сделано»)

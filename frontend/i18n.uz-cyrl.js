@@ -888,7 +888,8 @@
     "server.assistant_action_invalid": "Ёрдамчи тушунарсиз амални таклиф қилди — яна бир бор сўранг.",
     "assistant.proposal_failed": "Ўзгариш таклиф қилинмади, базада ҳеч нарса ўзгармади. Сабаби: {why}",
     "assistant.no_card": "Ҳеч нарса ўзгармади: ўзгаришлар фақат картадаги «Бажариш» тугмаси билан қилинади, карта эса йўқ. Яна бир бор сўранг ва маҳсулотни аниқроқ айтинг.",
-    "assistant.proposal_not_made": "Ўзгаришни таклиф қилиб бўлмади."
+    "assistant.proposal_not_made": "Ўзгаришни таклиф қилиб бўлмади.",
+    "assistant.example_scans": "Қайси товарлар ёмон танилади ва нима қилиш керак?"
   };
   if (typeof module === "object" && module.exports) module.exports = dict;
   if (root.I18N) root.I18N.add("uz-Cyrl", dict);

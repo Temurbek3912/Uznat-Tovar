@@ -163,7 +163,12 @@ async def public_identify(request: Request, lang: str | None = None, db: Session
         raise
     finally:
         del data
-    return public_result(db, result)
+    answer = public_result(db, result)
+    if not result.get("demo_mode"):          # заглушка вместо модели — не скан, а неготовность программы: в счёт не идёт
+        from app.services import scan_log      # итог скана для помощника «почему не узнал» (без кадра и без покупателя)
+        product = result.get("product") if isinstance(result.get("product"), dict) else None
+        scan_log.record(db, answer, product_id=product.get("id") if answer.get("product") and product else None)
+    return answer
 
 
 @router.get("/store")

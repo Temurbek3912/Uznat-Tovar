@@ -89,6 +89,61 @@ def test_find_missing_duplicates_and_details(Session):
             T.find_products(db, {})
 
 
+def test_scan_problems_shows_weak_products_missing_ones_and_advice(Session, monkeypatch):
+    """«Почему не узнал»: неуверенные сканы, частые сканы при 1–2 фото, что ищут вне каталога; старые сканы не в счёт."""
+    from datetime import timedelta
+
+    from app.core.security import utcnow
+    from app.db.models import ScanEventORM
+    from app.services import scan_log
+
+    now = utcnow()
+    with Session() as db:
+        empty = T.scan_problems(db, {})
+        assert empty["scans"] == 0 and "ещё нет" in empty["note"] and empty["weak"] == [] and empty["missing"] == []
+        ids = {p.sku: p.id for p in db.query(Product).all()}
+        rows = ([("uncertain", ids["COLA"], None, None)] * 2 + [("matched", ids["COLA"], None, None)]
+                + [("matched", ids["BREAD"], None, None)] * 3 + [("matched", ids["COLA2"], None, None)]
+                + [("not_in_catalog", None, "Pepsi 1 л", None), ("not_in_catalog", None, "PEPSI 1 Л", None),
+                   ("not_in_catalog", None, None, "drink"), ("unknown", None, None, None)])
+        for status, pid, name, kind in rows:
+            db.add(ScanEventORM(at=now - timedelta(days=1), status=status, product_id=pid, guess_name=name, guess_kind=kind))
+        db.add(ScanEventORM(at=now - timedelta(days=40), status="uncertain", product_id=ids["COLA2"]))   # вне 30 дней
+        db.commit()
+        monkeypatch.setattr(T, "_photo_counts", lambda _db, pids: {ids["COLA"]: 4, ids["BREAD"]: 1, ids["COLA2"]: 1})
+        out = T.run_tool(db, OWNER, "scan_problems", {"days": "30"})
+        assert out["scans"] == 11 and "узнано 5, неуверенно 2, товара нет в каталоге 3, не понято 1" in out["summary"]
+        assert [w["sku"] for w in out["weak"]] == ["COLA", "BREAD"]           # COLA2: 1 скан и уверенно — не в списке
+        cola, bread = out["weak"]
+        assert cola["unsure"] == 2 and "этикетки" in cola["advice"] and "штрихкод" not in cola["advice"]   # код у COLA есть
+        assert bread["scans"] == 3 and "2–3 фото" in bread["advice"]
+        assert out["missing"][0] == {"name": "Pepsi 1 л", "times": 2} and {"name": "без названия (Напиток)", "times": 1} in out["missing"]
+        assert "добавьте" in out["missing_advice"] and "not_understood_advice" not in out and "note" not in out
+        assert "неуверенно 3" in T.scan_problems(db, {"days": 90})["summary"] and T.scan_problems(db, {"days": 999})["days"] == 90
+        assert len(json.dumps(out, ensure_ascii=False)) < A.MAX_RESULT_CHARS
+        db.add(ScanEventORM(at=now - timedelta(days=scan_log.KEEP_DAYS + 1), status="unknown"))
+        db.commit()
+        assert scan_log.purge_old(db) == 1
+        db.commit()
+
+
+def test_scan_log_records_only_the_outcome_and_never_breaks_the_answer(Session, monkeypatch):
+    from app.db.models import ScanEventORM
+    from app.services import scan_log
+
+    monkeypatch.setattr(scan_log, "_last_purge", 0.0)
+    with Session() as db:
+        scan_log.record(db, {"status": "not_in_catalog", "by": None, "product": None,
+                             "guess": {"name": "Pepsi", "brand": "PepsiCo", "kind": "drink"}})
+        scan_log.record(db, {"status": "matched", "by": "look", "product": {"name": "Кола"}}, product_id="p1")
+        scan_log.record(db, {"status": "weird"})
+        got = sorted((r.status, r.via, r.product_id, r.guess_name, r.guess_kind) for r in db.query(ScanEventORM).all())
+        assert got == [("matched", "look", "p1", None, None), ("not_in_catalog", None, None, "Pepsi", "drink"),
+                       ("unknown", None, None, None, None)]
+        broken = types.SimpleNamespace(add=lambda _r: (_ for _ in ()).throw(RuntimeError("db down")), rollback=lambda: None)
+        scan_log.record(broken, {"status": "matched"})                   # ошибка базы — только строка в журнале
+
+
 def test_tools_follow_the_users_rights(Session):
     agent = CurrentUser(id="a", username="cam", role=Role.CAMERA_AGENT)         # нет права читать каталог
     assert T.allowed_tools(agent) == [] and len(T.allowed_tools(OWNER)) == len(T.TOOLS)
@@ -140,6 +195,21 @@ SETTINGS = types.SimpleNamespace(naming_enabled=True, assistant_enabled=True, na
 def _ask(Session, model, text="Сколько товаров без фото?", settings=SETTINGS, lang="ru"):
     with Session() as db:
         return A.chat(db, OWNER, [{"role": "user", "content": text}], lang, settings, http_post=model)
+
+
+def test_after_scan_problems_the_model_may_only_answer(Session):
+    """Итог «почему не узнал» полный: живая модель после него перепроверяла данные другими инструментами и уходила от вопроса."""
+    model = FakeModel({"tool": "scan_problems", "args": {"days": 30}},
+                      {"tool": "", "text": "Сканов пока нет."})
+    reply = _ask(Session, model, "Какие товары плохо узнаются?")
+    assert reply.text == "Сканов пока нет." and reply.tools == [{"name": "scan_problems", "ok": True}]
+    second = model.calls[1][1]["response_format"]["json_schema"]["schema"]
+    assert "anyOf" not in second and second["properties"]["tool"]["enum"] == [""]
+    assert "scan_problems(days=" in model.calls[0][1]["messages"][0]["content"]
+    assert "Ответ — на" not in model.calls[1][1]["messages"][-1]["content"]          # по-русски напоминать не нужно
+    uz = FakeModel({"tool": "scan_problems", "args": {}}, {"tool": "", "text": "Skanlar yoʻq."})
+    _ask(Session, uz, "Qaysi tovarlar yomon taniladi?", lang="uz")
+    assert uz.calls[1][1]["messages"][-1]["content"].endswith("Ответ — на узбекском (латиница, апостроф ʻ) языке.")
 
 
 def test_model_calls_a_tool_then_answers_from_the_data(Session):

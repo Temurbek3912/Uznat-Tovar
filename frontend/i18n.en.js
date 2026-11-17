@@ -887,7 +887,8 @@
     "server.assistant_action_invalid": "The assistant proposed an unclear action — please ask again.",
     "assistant.proposal_failed": "No change was proposed; nothing changed in the database. Reason: {why}",
     "assistant.no_card": "Nothing changed: changes are made only with the “Do it” button on a card, and there is no card. Ask again and name the product more precisely.",
-    "assistant.proposal_not_made": "Could not propose the change."
+    "assistant.proposal_not_made": "Could not propose the change.",
+    "assistant.example_scans": "Which products are recognized poorly and what should I do?"
   };
   if (root.I18N) root.I18N.add("en", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

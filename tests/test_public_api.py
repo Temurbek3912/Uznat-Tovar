@@ -182,6 +182,24 @@ def test_uncertain_shows_public_candidates_and_unknown_or_demo_say_not_found(env
     assert identify(env).json()["status"] == "unknown"                  # заглушка вместо модели — честное «не узнали»
 
 
+def test_each_answer_leaves_one_scan_row_without_frame_or_customer_data(env):
+    """«Почему не узнал» (решение владельца 2026-11-17): итог скана — да; кадр, адрес, устройство — нет; заглушка не считается."""
+    from app.db.models import ScanEventORM
+
+    assert identify(env, barcode_jpeg()).status_code == 200
+    env.answer = lambda e: {"status": "uncertain", "product": {"id": e.fanta}, "candidates": [{"id": e.fanta}], "demo_mode": False}
+    identify(env)
+    env.answer = {"status": "unknown", "product": None, "candidates": [], "demo_mode": False}
+    identify(env)
+    env.answer = lambda e: {"status": "matched", "product": {"id": e.cola}, "candidates": [], "demo_mode": True}
+    identify(env)
+    with env.Session() as db:
+        rows = db.query(ScanEventORM).all()
+        got = [(r.status, r.via, r.product_id) for r in rows]
+    assert sorted(got, key=str) == sorted([("matched", "barcode", env.cola), ("uncertain", "look", env.fanta), ("unknown", None, None)], key=str)
+    assert set(ScanEventORM.__table__.columns.keys()) == {"id", "at", "status", "via", "product_id", "guess_name", "guess_kind"}
+
+
 def test_server_problems_are_explained_without_technical_details(env):
     env.answer = TimeoutError("no answer")
     resp = identify(env)

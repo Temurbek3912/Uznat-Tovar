@@ -2129,6 +2129,18 @@ OAuth-клиент в Google Cloud и вход через браузер с хр
 * Тесты: `tools/catalog_smoke_test.js` (+1), `tools/productlist_smoke_test.js` (+1), `tools/products_smoke_test.js` (+1),
   `tools/assistant_smoke_test.js` (ссылки у подсказок); полный pytest (1807 passed), JS-тесты (293), `static_check`, `uz_translit check`.
 
+### 2026-11-17. Помощник: смена бренда — решает программа (задача 2 плана после A5)
+
+* «Pringles brendini Lays qiling», «Fanta brendini Coca-Colaga oʻzgartiring», «Поставь Pringles бренд Lays», «Смени бренд
+  Fanta на Lays», «Barcha Pringles brendini Lays qiling» — карточку готовит программа (`assistant.brand_meant`), модель не
+  спрашивают (0 с). Товар не найден или их несколько — вопрос уходит модели, как раньше. Решения — документ 16, §10.12.
+* Бренд в другом написании («coca cola» при «Coca-Cola») — берётся существующий (`assistant_actions.brand_value`), и для
+  обычного `propose_update(brand)` и массовой смены бренда.
+* Проверено: копия базы (8210) с живой qwen3-vl-4b — uz и ru на странице (карточка, «Сделать»), остальные фразы через API;
+  обычный вопрос о бренде — отвечает модель. База копии восстановлена побайтно, сервер и модель остановлены.
+* Тесты: `tests/test_assistant.py` (+2); полный pytest (1809 passed), JS-тесты (293), `assistant_smoke_test` (17),
+  `static_check`, `uz_translit check`.
+
 ## 5. Противоречия и открытые вопросы
 
 | № | Что | Как решено или что нужно |

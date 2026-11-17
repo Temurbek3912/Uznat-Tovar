@@ -479,6 +479,78 @@ def category_meant(db, name: str, args: dict, history: list[dict]) -> tuple[str,
                       f"value={value or 'новая категория из слов владельца'}).")
 
 
+_VERB_UZ = rf"(?:qil|qo{_A}y|o{_A}tkaz|o{_A}zgartir|almashtir|қил|қўй|ўтказ|ўзгартир|алмаштир)\w*"
+# «Pringles brendini Lays qiling», «Pringles brendini Laysga oʻzgartiring» (и кириллицей «… брендини … қилинг»)
+_UZ_BRAND = re.compile(rf"^\s*(?P<product>.+?)\s+(?:brend|бренд)(?:i|и)?(?:ni|ни)?\s+(?P<brand>.+?)\s+(?P<verb>{_VERB_UZ})"
+                       r"\s*[.!]?\s*$", re.I)
+_SET_RU = r"(?:поставь|сделай|укажи|напиши|назначь|задай|установи)(?:те)?"
+_CHANGE_RU = r"(?:смени|поменяй|измени|замени|исправь)(?:те)?"
+# «Поставь Pringles бренд Lays», «Смени бренд Pringles на Lays», «Поставь бренд Lays для Pringles», «У Pringles бренд поменяй на Lays»
+_RU_BRAND = (
+    re.compile(rf"^\s*{_SET_RU}\s+(?:товару\s+)?(?P<product>.+?)\s+бренд\s+(?P<brand>.+?)\s*[.!]?\s*$", re.I),
+    re.compile(rf"^\s*{_CHANGE_RU}\s+бренд\s+(?:у\s+)?(?:товара\s+)?(?P<product>.+?)\s+на\s+(?P<brand>.+?)\s*[.!]?\s*$",
+               re.I),
+    re.compile(rf"^\s*{_SET_RU}\s+бренд\s+(?P<brand>.+?)\s+(?:для|у|товару)\s+(?:товара\s+)?(?P<product>.+?)\s*[.!]?\s*$", re.I),
+    re.compile(rf"^\s*(?:у\s+)?(?:товара\s+)?(?P<product>.+?)\s+бренд\s+{_CHANGE_RU}\s+на\s+(?P<brand>.+?)\s*[.!]?\s*$",
+               re.I),
+)
+_ALL_BRAND = re.compile(r"^(?:barcha|hamma|butun|все[мх]?|всему)\s+(?:товар(?:ам|ов|ы)?\s+|tovarlar\s+|mahsulotlar\s+)?(.+)$",
+                        re.I)
+_QUOTES = " «»\"'“”"
+
+
+def _brand_phrase(said: str) -> tuple[str, str] | None:
+    """Фраза о смене бренда → (товар, бренд как сказал владелец) или None."""
+    if not said or "\n" in said.strip() or _CATEGORY_CHANGE.search(category_words.latin(said)):
+        return None
+    match = _UZ_BRAND.match(said)
+    if match:
+        brand = re.sub(r"\s+(?:qilib|қилиб)$", "", match.group("brand").strip(_QUOTES), flags=re.I)
+        if not match.group("verb").lower().startswith(("qil", "қил", "qo", "қўй")):     # «…ga oʻzgartiring» — без «-ga»
+            brand = re.sub(r"[ʻ'’`]?\s*(?:ga|ka|qa|га|ка|қа)$", "", brand, flags=re.I) or brand
+    else:
+        match = next((m for m in (r.match(said) for r in _RU_BRAND) if m), None)
+        if not match:
+            return None
+        brand = match.group("brand")
+    product, brand = match.group("product").strip(_QUOTES), brand.strip(_QUOTES)
+    return (product, brand) if product and brand else None
+
+
+def brand_meant(db, history: list[dict]) -> tuple[str, dict] | None:
+    """Смену бренда решает программа, как категорию (§10.8): «Pringles brendini Lays qiling», «Поставь Pringles бренд Lays».
+    Маленькая модель путает инструмент и по-узбекски часто отвечает текстом без карточки, а здесь всё понятно из слов: товар
+    (по названию в любом алфавите: «Фанта» → Fanta, «Xleb» → Хлеб) и бренд как сказал владелец (тот же бренд в другом написании — уже
+    существующий, assistant_actions.brand_value). «Barcha Lays …», «Смени бренд всех Lays на …» — propose_bulk по бренду
+    (иначе по категории или по слову в названии). Товар не найден или найдено несколько — решает модель, как раньше.
+    Ответ: (инструмент, args) или None."""
+    phrase = _brand_phrase(_last_said(history))
+    if phrase is None:
+        return None
+    every = _ALL_BRAND.match(phrase[0])
+    if every:
+        query = every.group(1).strip(_QUOTES)
+        brands = [b for (b,) in db.query(Product.brand).filter(Product.status == PRODUCT_ACTIVE).distinct().all() if b]
+        key = assistant_actions._brand_key(query)
+        cats = [c for (c,) in db.query(Product.category).filter(Product.status == PRODUCT_ACTIVE).distinct().all() if c]
+        if key and any(assistant_actions._brand_key(b) == key for b in brands):
+            where = "brand"
+        elif category_words.matching_categories(query, cats):
+            where = "category"
+        else:
+            where = "name"
+        return "propose_bulk", {"where": where, "query": query, "change": "brand", "value": phrase[1]}
+    product = (assistant_actions.find_product(db, phrase[0])
+               or assistant_actions.find_product(db, category_words.latin(phrase[0])))      # «Фанта» → «fanta»
+    if product is None:                 # «Xleb» → «Хлеб»: слова названия в любом алфавите, как в списке цен (§10.9)
+        active = db.query(Product).filter(Product.status == PRODUCT_ACTIVE).order_by(Product.sku).all()
+        found, products = price_list.find(db, phrase[0], active)
+        product = products[0] if found == "found" else None
+    if product is None:
+        return None
+    return "propose_update", {"product": product.sku, "field": "brand", "value": phrase[1]}
+
+
 def claims_change(text: str) -> bool:
     return bool(_CLAIM.search(text or ""))
 
@@ -554,6 +626,17 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
         if listed is not None:
             return Reply(text="", tools=[{"name": "price_list", "ok": True}], seconds=round(clock() - started, 1),
                          proposal=listed)
+    if can_propose:
+        # Смена бренда понятна из слов владельца — карточку готовит программа без модели (§10.12).
+        meant = brand_meant(db, history)
+        if meant is not None and meant[0] in names:
+            try:
+                assistant_tools.run_tool(db, user, meant[0], meant[1], proposals, ui, lang)
+            except ToolError as exc:
+                return Reply(text="", tools=[{"name": meant[0], "ok": False}], seconds=round(clock() - started, 1),
+                             proposal_error=str(exc)[:300])
+            return Reply(text="", tools=[{"name": meant[0], "ok": True}], seconds=round(clock() - started, 1),
+                         proposal=proposals.items[0] if proposals.items else None)
     nudged = False
     spare = ""                              # ответ не тем алфавитом (wrong_script) — если переписать не вышло, отдаётся он
     redirected = False                      # «ПРОВЕРКА ПРОГРАММЫ» о смене категории — не больше одного раза

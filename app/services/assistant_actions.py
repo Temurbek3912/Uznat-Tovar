@@ -14,6 +14,8 @@ POST /api/v1/assistant/act только после нажатия владель
 """
 from __future__ import annotations
 
+import re
+
 from app.core import text_search
 from app.db.models import PRODUCT_ACTIVE, PRODUCT_ARCHIVED, Product, ProductBarcodeORM
 from app.services import category_words, shop_card
@@ -127,7 +129,7 @@ def clean_value(db, product: Product, field: str, value):
         if field == "price":
             return parse_price(_text(value))
         if field == "brand":
-            return clean_text(value, label="бренд", max_len=MAX_TEXT_LEN, default=DEFAULT_BRAND)
+            return brand_value(db, value)
         if field == "category":
             return category_value(db, value)
         if field in shop_card.TEXT_FIELDS:
@@ -164,6 +166,22 @@ def category_value(db, value) -> str:
     написании («Gazaklar» при «Снеки»), берём существующую: иначе появилась бы вторая такая же категория (2026-11-17)."""
     text = clean_text(value, label="категорию", max_len=MAX_TEXT_LEN, default=DEFAULT_CATEGORY)
     return category_words.existing_category(text, _categories(db)) or text
+
+
+def _brand_key(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", _latin(text))
+
+
+def brand_value(db, value) -> str:
+    """Бренд, который назвал владелец, — как его сохранить. Тот же бренд в другом написании («lays», «LAYS», «Coca cola» при
+    «Coca-Cola») — берём существующий, иначе в каталоге появился бы второй такой же бренд (2026-11-17)."""
+    text = clean_text(value, label="бренд", max_len=MAX_TEXT_LEN, default=DEFAULT_BRAND)
+    key = _brand_key(text)
+    if key:
+        for (brand,) in db.query(Product.brand).distinct().all():
+            if brand and _brand_key(brand) == key:
+                return brand
+    return text
 
 
 def _head(product: Product) -> dict:
@@ -371,7 +389,7 @@ def bulk_card(db, args: dict) -> dict:
             if value is None:
                 raise ActionError("Новая цена — число, например 9900.")
         elif change == "brand":
-            value = clean_text(raw, label="бренд", max_len=MAX_TEXT_LEN, default=DEFAULT_BRAND)
+            value = brand_value(db, raw)
         elif change == "category":
             value = category_value(db, raw)
         elif change == "in_stock":

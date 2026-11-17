@@ -853,6 +853,44 @@ def test_uzbek_category_change_of_one_product_is_done_by_the_program(Session):
     assert card["kind"] == "bulk" and card["value"] == "Desertlar" and sorted(r["sku"] for r in card["rows"]) == ["COLA", "COLA2"]
 
 
+def test_brand_change_is_done_by_the_program_without_the_model(Session):
+    """«Pringles brendini Lays qiling», «Поставь Pringles бренд Lays»: бренд — как категорию (§10.12) — разбирает программа,
+    модель не спрашивают. Тот же бренд в другом написании — существующий; «Barcha Coca-Cola …» — все товары бренда."""
+    for text, lang in (("Хлеб brendini Lays qiling", "uz"), ("Xleb brendini Laysga oʻzgartiring", "uz"),
+                       ("Хлеб брендини Lays қилинг", "uz"), ("Поставь хлеб бренд Lays", "ru"),
+                       ("Смени бренд у Хлеб на Lays", "ru"), ("Смени бренд Хлеб на «Lays».", "ru"),
+                       ("Укажите бренд Lays для товара BREAD", "ru"), ("У BREAD бренд поменяй на Lays", "ru")):
+        model = FakeModel()                                        # любой вызов модели — ошибка
+        reply = _ask(Session, model, text, lang=lang)
+        assert model.calls == [] and reply.proposal is not None, text
+        assert reply.proposal["kind"] == "update" and reply.proposal["sku"] == "BREAD", text
+        assert reply.proposal["changes"] == {"brand": "Lays"}, text
+        assert reply.tools == [{"name": "propose_update", "ok": True}]
+    same = _ask(Session, FakeModel(), "Хлеб brendini coca cola qiling", lang="uz").proposal
+    assert same["changes"] == {"brand": "Coca-Cola"}               # второго «coca cola» в каталоге не появится
+    every = _ask(Session, FakeModel(), "Barcha Coca-Cola brendini Pepsi qiling", lang="uz").proposal
+    assert every["kind"] == "bulk" and every["value"] == "Pepsi" and sorted(r["sku"] for r in every["rows"]) == ["COLA", "COLA2"]
+    ru_all = _ask(Session, FakeModel(), "Смени бренд всех Coca-Cola на Pepsi").proposal
+    assert ru_all["kind"] == "bulk" and sorted(r["sku"] for r in ru_all["rows"]) == ["COLA", "COLA2"]
+    # несколько товаров «Кока-кола» — какой из них, не угадываем: решает модель
+    many = FakeModel({"tool": "", "text": "Какой из двух?"})
+    assert _ask(Session, many, "Поставь Кока-кола бренд Pepsi").text == "Какой из двух?" and len(many.calls) == 1
+    # категория и обычные вопросы о бренде — не смена бренда
+    for text in ("Хлеб kategoriyasini Lays qiling", "Какой бренд у хлеба?", "Поставь хлеб бренд Lays\nи цену 5000"):
+        other = FakeModel({"tool": "", "text": "Ок."})
+        _ask(Session, other, text, lang="uz" if "kategor" in text else "ru")
+        assert len(other.calls) == 1, text
+
+
+def test_brand_change_needs_the_right_to_propose(Session):
+    """Без права менять каталог программа карточку не готовит: вопрос, как раньше, уходит модели."""
+    analyst = CurrentUser(id="x", username="an", role=Role.ANALYST)
+    model = FakeModel({"tool": "", "text": "Изменить бренд можно на странице «Товары»."})
+    with Session() as db:
+        reply = A.chat(db, analyst, [{"role": "user", "content": "Поставь хлеб бренд Lays"}], "ru", SETTINGS, http_post=model)
+    assert reply.proposal is None and len(model.calls) == 1
+
+
 def test_wrong_tool_for_a_category_change_is_sent_back(Session):
     """По-русски: не тот инструмент (архив, новый товар) — если товар и категория по словарю понятны, карточку готовит
     программа, иначе реплика программы просит propose_update. Категорию, которую владелец не называл, помощник не предлагает.

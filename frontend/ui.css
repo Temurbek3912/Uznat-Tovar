@@ -368,6 +368,10 @@ button.rail__item { width: 100%; background: none; border: 0; font: inherit; fon
 .scan-summary__group { margin-top: var(--sp-2); font-weight: var(--fw-bold); }
 .scan-summary__list { padding-left: var(--sp-4); overflow-wrap: anywhere; }
 .scan-summary__tip { color: var(--ink-muted); }
+.hints__list { list-style: none; margin: var(--sp-2) 0 0; padding: 0; display: grid; gap: var(--sp-3); }
+.hints__text, .hints__names { overflow-wrap: anywhere; }
+.hints__names { color: var(--ink-muted); }
+.hints__actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-1); }
 /* карточка «Помощник предлагает: … [Сделать] [Отмена]» */
 .chat__card { margin-top: var(--sp-3); padding: var(--sp-3); border: 1px solid var(--line); border-radius: var(--r-m); background: var(--surface-2); display: flex; flex-direction: column; gap: var(--sp-2); }
 .chat__card-title { font-weight: var(--fw-bold); }

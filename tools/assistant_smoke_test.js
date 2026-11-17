@@ -232,4 +232,30 @@ test("тексты страницы хранятся ключом: после с
    "assistant.empty_reply", "assistant.add_done", "assistant.add_queued", "error.generic"].forEach((k) => tr(k, { name: "x" }));
 });
 
+test("подсказки сверху страницы: текст с числом, первые названия и «ещё N»; кнопка-вопрос только при модели; мусор отбрасывается", () => {
+  const rep = { active: 6, days: 30, hints: [
+    { code: "no_photo", n: 5, names: ["Fanta", "Sprite", "Pepsi"] },
+    { code: "same_name", n: 1, names: ["Coca-Cola"] },
+    { code: "missing", n: 2, names: [] },
+    { code: "hack", n: 1, names: ["x"] }, null,
+  ] };
+  const res = Assistant.hintList(rep, tr, true);
+  assert.deepStrictEqual(res.rows.map((r) => r.code), ["no_photo", "same_name", "missing"]);
+  assert.strictEqual(res.rows[0].text, tr("assistant.hint.no_photo", { n: 5 }));
+  assert.ok(res.rows[0].text.indexOf("5") !== -1);
+  assert.strictEqual(res.rows[0].names, "«Fanta», «Sprite», «Pepsi» " + tr("assistant.hint_more", { n: 2 }));
+  assert.strictEqual(res.rows[1].names, "«Coca-Cola»");
+  assert.strictEqual(res.rows[2].names, "");
+  assert.ok(res.rows[2].text.indexOf("30") !== -1);
+  assert.deepStrictEqual(res.rows.map((r) => r.ask), ["assistant.hint_ask.no_photo", "assistant.example_dupes", "assistant.example_scans"]);
+  assert.strictEqual(res.none, "");
+  assert.ok(Assistant.hintList(rep, tr, false).rows.every((r) => r.ask === ""));   // модели нет — только «Открыть «Товары»»
+  assert.strictEqual(Assistant.hintList({ active: 6, hints: [] }, tr, true).none, tr("assistant.hints_none"));
+  assert.deepStrictEqual(Assistant.hintList({ active: 0, hints: [{ code: "empty", n: 0, names: [] }] }, tr, true).rows[0].ask, "");
+  assert.deepStrictEqual(Assistant.hintList(null, tr, true), { rows: [], none: "" });
+  ["empty", "no_photo", "no_price", "no_barcode", "same_name", "weak", "missing"].forEach((k) => tr("assistant.hint." + k, { n: 1, days: 30 }));
+  ["assistant.hints_title", "assistant.hint_ask", "assistant.hint_open", "assistant.hint_ask.no_barcode", "assistant.example_price"]
+    .forEach((k) => tr(k));
+});
+
 console.log(`\n${passed} passed`);

@@ -28,6 +28,11 @@
   var ERROR_CODES = ["no_price", "bad_price", "many", "archived", "repeat"];   // ошибки строк списка «товар — цена»
   var LIST_MAX = 50;
   var TIPS = ["no_photo", "more_photos", "check_photos", "add_barcode"];
+  // Подсказки сверху страницы (GET /assistant/hints, документ 16, §10.11): код -> готовый вопрос помощнику (кнопка «Спросить»).
+  var HINT_ASK = { no_photo: "assistant.hint_ask.no_photo", no_price: "assistant.example_price",
+                   no_barcode: "assistant.hint_ask.no_barcode", same_name: "assistant.example_dupes",
+                   weak: "assistant.example_scans", missing: "assistant.example_scans" };
+  var HINT_CODES = ["empty", "no_photo", "no_price", "no_barcode", "same_name", "weak", "missing"];
   // Тексты, которые пишет сама страница (а не модель), хранятся ключом: после смены языка они переводятся, а модель видит
   // их на языке нового вопроса (на прежнем языке она и сама отвечала не на том).
   var SAY_KEYS = ["assistant.list_reply", "assistant.proposal_default", "assistant.ui_default", "assistant.proposal_not_made",
@@ -259,6 +264,24 @@
     return out;
   }
 
+  /** Подсказки (GET /assistant/hints) -> строки на языке страницы. Считает программа, модель не нужна; помощник ничего не меняет.
+      canAsk — есть ли модель (тогда у подсказки кнопка с готовым вопросом). Возвращает {rows: [{code, text, names, ask}], none}:
+      names — «Fanta», «Sprite» и ещё 3 (или ""); ask — ключ вопроса или ""; none — текст «подсказок нет» или "". */
+  function hintList(rep, t, canAsk) {
+    var out = { rows: [], none: "" };
+    if (!isObj(rep)) return out;
+    (Array.isArray(rep.hints) ? rep.hints : []).filter(function (h) { return isObj(h) && HINT_CODES.indexOf(h.code) !== -1; })
+      .forEach(function (h) {
+        var names = (Array.isArray(h.names) ? h.names : []).filter(function (x) { return typeof x === "string" && x; });
+        var n = num(h.n), list = names.map(function (x) { return "«" + x + "»"; }).join(", ");
+        if (list && n > names.length) list += " " + t("assistant.hint_more", { n: n - names.length });
+        out.rows.push({ code: h.code, text: t("assistant.hint." + h.code, { n: n, days: num(rep.days) }), names: list,
+                        ask: canAsk && HINT_ASK[h.code] ? HINT_ASK[h.code] : "" });
+      });
+    if (!out.rows.length && num(rep.active) > 0) out.none = t("assistant.hints_none");
+    return out;
+  }
+
   function start(win) {
     var doc = win.document, I18N = win.I18N, Auth = win.Auth, Icons = win.Icons, Theme = win.Theme;
     var $ = function (id) { return doc.getElementById(id); };
@@ -267,6 +290,7 @@
     var log = [], busy = false, status = null, limits = null;      // status: {key, params} | {text} — строка под перепиской
     var customersBusy = false, pollTimer = null;
     var scanRep = null, scanFailed = false, scanDays = 30;
+    var hintRep = null, canAsk = false;
 
     function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
     function setHidden(el, hidden) { if (hidden) el.setAttribute("hidden", ""); else el.removeAttribute("hidden"); }
@@ -336,6 +360,48 @@
       return loadScans();
     }
 
+    // --- подсказки по своей инициативе (сверху страницы; считает программа, ничего не меняет) ---------------------------------
+
+    function renderHints() {
+      var host = $("hintBody");
+      clear(host);
+      if (!hintRep) return;
+      var res = hintList(hintRep, t, canAsk);
+      setHidden($("hints"), !res.rows.length && !res.none);
+      if (res.none) { host.appendChild(el("p", "", res.none)); return; }
+      var list = el("ul", "hints__list");
+      res.rows.forEach(function (row) {
+        var item = el("li", "hints__item");
+        item.appendChild(el("p", "hints__text", row.text));
+        if (row.names) item.appendChild(el("p", "hints__names", row.names));
+        var acts = el("div", "hints__actions");
+        if (row.ask) {
+          var b = button("btn--secondary", "assistant.hint_ask", function () {
+            if (busy) return;
+            $("question").value = t(row.ask);
+            send();
+          });
+          b.disabled = busy;
+          acts.appendChild(b);
+        }
+        var a = el("a", "btn btn--secondary", t("assistant.hint_open"));
+        a.setAttribute("href", "products.html");
+        acts.appendChild(a);
+        item.appendChild(acts);
+        list.appendChild(item);
+      });
+      host.appendChild(list);
+    }
+
+    function loadHints() {
+      return Promise.resolve().then(function () {
+        return win.fetch(auth.apiBase() + "/api/v1/assistant/hints", { headers: auth.authHeaders() });
+      }).then(function (res) {
+        if (!res.ok) { hintRep = null; return; }                 // 403 — нет права смотреть каталог: подсказок нет
+        return res.json().then(function (data) { hintRep = data; });
+      }, function () { /* сеть — подсказок нет, остальное работает */ }).then(renderHints);
+    }
+
     function note(key) { var n = $("note"); n.textContent = t(key); setHidden(n, false); setHidden($("chatArea"), true); }
 
     function renderTip() {
@@ -368,7 +434,7 @@
     }
 
     function finish(card, res, onOk) {
-      if (res.ok) return res.json().then(function (data) { onOk(data || {}); save(); render(); });
+      if (res.ok) return res.json().then(function (data) { onOk(data || {}); save(); render(); loadHints(); });
       return errorOf(res).then(function (err) { card.state = "error"; card.error = msgText(err); save(); render(); });
     }
 
@@ -527,6 +593,7 @@
       st.textContent = msgText(status); setHidden(st, !status);
       $("sendBtn").disabled = busy; $("question").disabled = busy;
       renderTip();
+      renderHints();
       if (host.lastChild && host.lastChild.scrollIntoView) host.lastChild.scrollIntoView({ block: "end" });
     }
 
@@ -604,8 +671,9 @@
         if (res.status === 403) { note("assistant.no_access"); return; }
         if (!res.ok) { note("error.generic"); return; }
         return res.json().then(function (data) {
-          var scans = showScans();                  // сводку считает программа: она видна и там, где модели нет
+          var scans = Promise.all([showScans(), loadHints()]);   // считает программа: видно и там, где модели нет
           if (!data.available) { note("server.assistant_disabled"); return scans; }
+          canAsk = true;
           limits = data.memory && typeof data.memory === "object" ? data.memory : null;
           customersBusy = !!data.customers_busy;
           setHidden($("chatArea"), false); load(); render();
@@ -618,7 +686,7 @@
     I18N.mountSwitcher($("langHost"));
     I18N.apply();
     relabel();
-    I18N.onChange(function () { relabel(); render(); renderScans(); });
+    I18N.onChange(function () { relabel(); render(); renderScans(); renderHints(); });
     $("scanDays").addEventListener("change", function () {
       var d = parseInt($("scanDays").value, 10);
       if (SCAN_DAYS.indexOf(d) === -1) return;
@@ -640,7 +708,7 @@
     return { ready: init(), send: send, poll: poll, stop: function () { if (pollTimer) win.clearInterval(pollTimer); } };
   }
 
-  return { start: start, scanSummary: scanSummary, cleanLog: cleanLog, toSend: toSend, memory: memory, describe: describe,
+  return { start: start, scanSummary: scanSummary, hintList: hintList, cleanLog: cleanLog, toSend: toSend, memory: memory, describe: describe,
            describeBulk: describeBulk, fmtValue: fmtValue, newItems: newItems, addAction: addAction, cleanCard: cleanCard,
            sayText: sayText,
            QUESTION_RESERVE: QUESTION_RESERVE, STORE_KEY: STORE_KEY };

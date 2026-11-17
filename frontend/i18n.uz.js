@@ -943,7 +943,21 @@
     "assistant.list_same": "Narxi allaqachon shunday: {n} ta.",
     "assistant.list_reply": "Roʻyxatingiz boʻyicha natija.",
     "assistant.list_add": "Rasm bilan qoʻshish: «{name}»",
-    "assistant.list_add_reply": "Roʻyxatingizdagi yangi mahsulot «{name}». Nomi va narxini tekshiring, mahsulot rasmini qoʻshing va «Bajarish» tugmasini bosing."
+    "assistant.list_add_reply": "Roʻyxatingizdagi yangi mahsulot «{name}». Nomi va narxini tekshiring, mahsulot rasmini qoʻshing va «Bajarish» tugmasini bosing.",
+    "assistant.hints_title": "Maslahatlar",
+    "assistant.hints_none": "Maslahat yoʻq: barcha mahsulotlarda rasm, narx va shtrixkod bor, bir xil nomlar yoʻq.",
+    "assistant.hint.empty": "Katalogda hali mahsulot yoʻq — ularni «Mahsulotlar» sahifasida rasm bilan qoʻshing.",
+    "assistant.hint.no_photo": "Rasmsiz mahsulotlar: {n}. Ular faqat shtrixkod orqali taniladi — har tomondan 2–3 ta rasm qoʻshing.",
+    "assistant.hint.no_price": "Narxsiz mahsulotlar: {n}. Xaridor mahsulotni skanerlaganda narxini koʻrmaydi.",
+    "assistant.hint.no_barcode": "Shtrixkodsiz mahsulotlar: {n}. Shtrixkod orqali mahsulot darhol va xatosiz taniladi.",
+    "assistant.hint.same_name": "Bir xil nomlar — guruhlar: {n}. Ehtimol, bitta mahsulot ikki marta qoʻshilgan; agar mahsulotlar har xil boʻlsa — nomini aniqlashtiring (hajmi, taʼmi).",
+    "assistant.hint.weak": "{days} kunda yomon taniladigan mahsulotlar: {n}. Ular koʻp skanerlanadi, lekin dastur ularni ishonchsiz taniydi yoki rasmlari kam. Batafsil — quyidagi skanlar hisobotida.",
+    "assistant.hint.missing": "{days} kunda xaridorlar katalogda yoʻq narsani skanerlagan: {n}. Agar bu sizda sotilsa — mahsulotni rasm bilan qoʻshing.",
+    "assistant.hint_more": "va yana {n} ta",
+    "assistant.hint_ask": "Soʻrash",
+    "assistant.hint_open": "Mahsulotlarni ochish",
+    "assistant.hint_ask.no_photo": "Qaysi mahsulotlarda rasm yoʻq?",
+    "assistant.hint_ask.no_barcode": "Qaysi mahsulotlarda shtrixkod yoʻq?"
   };
   if (root.I18N) root.I18N.add("uz", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

@@ -196,15 +196,20 @@ def products_missing(db, args: dict) -> dict:
             "items": [{"sku": p.sku, "name": _cut(p.name)} for p in found[:limit]]}
 
 
-def similar_names(db, args: dict) -> dict:
-    """Возможные дубли: одинаковое название (без учёта регистра, «ё/е», апострофов и лишних пробелов). Штрихкод дублем быть не
-    может — один код ведёт только на один товар (это проверяет сама база)."""
+def _same_names(products: list[Product]) -> list[list[Product]]:
+    """Группы товаров с одинаковым названием (без учёта регистра, «ё/е», апострофов и лишних пробелов)."""
     groups: dict[str, list[Product]] = {}
-    for p in _active(db).order_by(Product.sku).all():
+    for p in products:
         key = " ".join(text_search.normalize(p.name).split())
         if key:
             groups.setdefault(key, []).append(p)
-    dupes = [g for g in groups.values() if len(g) > 1]
+    return [g for g in groups.values() if len(g) > 1]
+
+
+def similar_names(db, args: dict) -> dict:
+    """Возможные дубли: одинаковое название (без учёта регистра, «ё/е», апострофов и лишних пробелов). Штрихкод дублем быть не
+    может — один код ведёт только на один товар (это проверяет сама база)."""
+    dupes = _same_names(_active(db).order_by(Product.sku).all())
     limit = _limit(args)
     return {"groups_total": len(dupes),
             "groups": [[{"sku": p.sku, "name": _cut(p.name), "brand": _cut(p.brand)} for p in g[:5]] for g in dupes[:limit]]}
@@ -326,6 +331,41 @@ def scan_report(db, days: int) -> dict:
             "missing_total": len(missing),
             "missing": sorted(missing.values(), key=lambda m: -m["times"])[:SHOW_ROWS],
             "many_unknown": bool(rows) and counts["unknown"] * 4 >= len(rows)}
+
+
+HINT_DAYS = 30                  # подсказки по сканам — за 30 дней (как сводка сканов по умолчанию)
+HINT_NAMES = 3                  # названий в подсказке: «Fanta, Sprite, Pepsi и ещё 37»
+HINTS = ("empty", "no_photo", "no_price", "no_barcode", "same_name", "weak", "missing")
+
+
+def hints(db) -> dict:
+    """Подсказки по своей инициативе (документ 16, §10.11, решение владельца 2026-11-17): «у 40 товаров нет фото», «у 5 нет
+    цены», «3 товара с одинаковым названием», «товар часто сканируют, а узнаёт неуверенно». Считает программа, модель не нужна
+    (числа всегда верные); помощник ничего не меняет — страница показывает подсказку и кнопку с готовым вопросом.
+    Каждая подсказка: code (HINTS), n — сколько (товаров, групп одинаковых названий, сканированного вне каталога),
+    names — первые HINT_NAMES названий."""
+    products = _active(db).order_by(Product.sku).all()
+    out: list[dict] = []
+    if not products:
+        return {"active": 0, "hints": [{"code": "empty", "n": 0, "names": []}]}
+    ids = [p.id for p in products]
+    photos, codes = _photo_counts(db, ids), _codes_of(db, ids)
+    tests = (("no_photo", lambda p: not photos.get(p.id)), ("no_price", lambda p: p.expected_price is None),
+             ("no_barcode", lambda p: p.id not in codes))
+    for code, test in tests:
+        found = [p for p in products if test(p)]
+        if found:
+            out.append({"code": code, "n": len(found), "names": [_cut(p.name, 60) for p in found[:HINT_NAMES]]})
+    dupes = _same_names(products)
+    if dupes:
+        out.append({"code": "same_name", "n": len(dupes), "names": [_cut(g[0].name, 60) for g in dupes[:HINT_NAMES]]})
+    rep = scan_report(db, HINT_DAYS)
+    if rep["weak_total"]:
+        out.append({"code": "weak", "n": rep["weak_total"], "names": [w["name"] for w in rep["weak"][:HINT_NAMES]]})
+    if rep["missing_total"]:
+        out.append({"code": "missing", "n": rep["missing_total"],
+                    "names": [m["name"] for m in rep["missing"] if m["name"]][:HINT_NAMES]})
+    return {"active": len(products), "days": HINT_DAYS, "hints": out}
 
 
 def scan_problems(db, args: dict) -> dict:

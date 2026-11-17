@@ -3,6 +3,7 @@
 
   GET  /api/v1/assistant/status   работает ли помощник, заняты ли покупатели распознаванием     — assistant:use (только владелец)
   GET  /api/v1/assistant/scans    ?days=30 — сводка сканов покупателей числами, без модели       — + catalog:read
+  GET  /api/v1/assistant/hints    подсказки «у 40 товаров нет фото», без модели, ничего не меняют — + catalog:read
   POST /api/v1/assistant/chat     {messages: [{role, content}], lang} -> {reply, tools, seconds, proposal, ui}
   POST /api/v1/assistant/act      {action: предложение} — владелец нажал «Сделать» (или «Отменить»)  — + catalog:write
   POST /api/v1/assistant/act/add  форма: name, price, brand, category, barcode, files — новый товар    — + catalog:write
@@ -69,6 +70,17 @@ def assistant_scans(
     """Сводка «Почему не узнал» сверху страницы помощника — считает программа, модель не нужна (цифры всегда верные, видны и
     там, где модели нет). Те же числа получает модель через scan_problems (документ 16, §10.5)."""
     return assistant_tools.scan_report(db, days)
+
+
+@router.get("/hints")
+def assistant_hints(
+    db: Session = Depends(get_db),
+    _assistant: CurrentUser = Depends(require_permission(Permission.ASSISTANT_USE)),
+    _reader: CurrentUser = Depends(require_permission(Permission.CATALOG_READ)),
+) -> dict:
+    """Подсказки сверху страницы помощника («у 40 товаров нет фото») — считает программа, модель не нужна, ничего не меняет
+    (документ 16, §10.11)."""
+    return assistant_tools.hints(db)
 
 
 @router.post("/chat")

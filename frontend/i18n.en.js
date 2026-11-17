@@ -943,7 +943,21 @@
     "assistant.list_same": "Price is already the same: {n}.",
     "assistant.list_reply": "Here is what came out of your list.",
     "assistant.list_add": "Add “{name}” with photos",
-    "assistant.list_add_reply": "New product “{name}” from your list. Check the name and price, add product photos and press “Do it”."
+    "assistant.list_add_reply": "New product “{name}” from your list. Check the name and price, add product photos and press “Do it”.",
+    "assistant.hints_title": "Tips",
+    "assistant.hints_none": "No tips: every product has a photo, a price and a barcode, and no names repeat.",
+    "assistant.hint.empty": "The catalog has no products yet — add them with photos on the Products page.",
+    "assistant.hint.no_photo": "Products without a photo: {n}. They are recognized only by barcode — add 2–3 photos from different sides.",
+    "assistant.hint.no_price": "Products without a price: {n}. Shoppers won't see the price when they scan them.",
+    "assistant.hint.no_barcode": "Products without a barcode: {n}. With a barcode a product is recognized at once and without mistakes.",
+    "assistant.hint.same_name": "Same names — groups: {n}. Maybe one product was added twice; if they are different, make the name clearer (size, flavour).",
+    "assistant.hint.weak": "Poorly recognized in {days} days — products: {n}. They are scanned often, but the program is unsure or they have few photos. Details are in the scan summary below.",
+    "assistant.hint.missing": "In {days} days shoppers scanned things that are not in the catalog: {n}. If you sell them, add them with photos.",
+    "assistant.hint_more": "and {n} more",
+    "assistant.hint_ask": "Ask",
+    "assistant.hint_open": "Open products",
+    "assistant.hint_ask.no_photo": "Which products have no photo?",
+    "assistant.hint_ask.no_barcode": "Which products have no barcode?"
   };
   if (root.I18N) root.I18N.add("en", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

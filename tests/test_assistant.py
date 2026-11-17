@@ -457,6 +457,44 @@ def test_scan_summary_route_needs_no_model_and_is_for_the_owner(client, Session,
     assert client.get("/api/v1/assistant/scans?days=0", headers=client.owner).status_code == 422
 
 
+def test_hints_count_gaps_same_names_and_weak_scans_without_the_model(client, Session, monkeypatch):
+    """Подсказки по своей инициативе (§10.11): считает программа — числа, первые названия; ничего не меняют; только владелец."""
+    from app.core.security import utcnow
+    from app.db.models import ScanEventORM
+
+    with Session() as db:
+        out = T.hints(db)
+        assert out["active"] == 4 and out["days"] == T.HINT_DAYS
+        by = {h["code"]: h for h in out["hints"]}
+        assert list(by) == ["no_photo", "no_price", "no_barcode", "same_name"]       # сканов нет — подсказок по ним нет
+        assert by["no_photo"]["n"] == 4 and len(by["no_photo"]["names"]) == T.HINT_NAMES
+        assert by["no_price"] == {"code": "no_price", "n": 1, "names": ["кока-кола  0,5 Л"]}
+        assert by["no_barcode"]["n"] == 3 and "Кока-кола 0,5 л" not in by["no_barcode"]["names"]   # у COLA код есть
+        assert by["same_name"] == {"code": "same_name", "n": 1, "names": ["Кока-кола 0,5 л"]}
+        assert all(h["code"] in T.HINTS for h in out["hints"])
+        ids = {p.sku: p.id for p in db.query(Product).all()}
+        db.add(ScanEventORM(at=utcnow(), status="uncertain", product_id=ids["COLA"]))
+        db.add(ScanEventORM(at=utcnow(), status="not_in_catalog", guess_name="Pepsi"))
+        db.add(ScanEventORM(at=utcnow(), status="not_in_catalog", guess_kind="drink"))
+        db.commit()
+        monkeypatch.setattr(T, "_photo_counts", lambda _db, pids: {pid: 3 for pid in pids})
+        by = {h["code"]: h for h in T.hints(db)["hints"]}
+        assert "no_photo" not in by
+        assert by["weak"] == {"code": "weak", "n": 1, "names": ["Кока-кола 0,5 л"]}
+        assert by["missing"] == {"code": "missing", "n": 2, "names": ["Pepsi"]}         # «без названия» — только числом
+        for p in db.query(Product).all():
+            p.status = PRODUCT_ARCHIVED
+        db.commit()
+        assert T.hints(db) == {"active": 0, "hints": [{"code": "empty", "n": 0, "names": []}]}
+
+    assert client.get("/api/v1/assistant/hints").status_code == 401
+    assert client.get("/api/v1/assistant/hints", headers=client.analyst).status_code == 403
+    from app.api import routes_assistant
+    monkeypatch.setattr(routes_assistant, "get_settings", lambda: types.SimpleNamespace(assistant_enabled=False))
+    res = client.get("/api/v1/assistant/hints", headers=client.owner)          # модели нет — подсказки всё равно есть
+    assert res.status_code == 200 and res.json()["hints"][0]["code"] == "empty"
+
+
 # --- этап A2: предложения, «Сделать», «Отменить» -------------------------------------------------------------------------------
 
 def test_proposals_are_checked_like_the_products_page(Session):

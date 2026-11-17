@@ -651,8 +651,12 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                              proposal_error=str(exc)[:300])
             return Reply(text="", tools=[{"name": meant[0], "ok": True}], seconds=round(clock() - started, 1),
                          proposal=proposals.items[0] if proposals.items else None)
+    # Вопрос без глагола изменения («Nutella qancha turadi?») — предлагать нечего: propose_* в шаге модели нет вовсе (§10.16).
+    asking = can_propose and price_words.asks_only(history[-1]["content"])
+    step_tools = [t for t in tools if t.kind != "propose"] if asking else tools
+    asks_price = asking and price_words.asks_price(history[-1]["content"])
     nudged = False
-    spare = ""                              # ответ не тем алфавитом (wrong_script) — если переписать не вышло, отдаётся он
+    spare = ""                            # ответ не тем алфавитом (wrong_script) — если переписать не вышло, отдаётся он
     redirected = False                      # «ПРОВЕРКА ПРОГРАММЫ» о смене категории — не больше одного раза
     answer_now = False                      # инструмент дал полный итог (Tool.answer_next) — следующий шаг только ответ
     scanned: dict = {}                      # итог scan_problems — чтобы не назвать сканы товарами (scan_words)
@@ -669,7 +673,7 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
         with model_gate.assistant_slot(WAIT_FOR_SLOT):
             for step in range(MAX_STEPS + 2):   # +1 — переписать ответ (wrong_script)
                 final = step >= MAX_STEPS or answer_now
-                step_answer = _ask_model(post, url, model, convo, answer_schema(tools, final=final))
+                step_answer = _ask_model(post, url, model, convo, answer_schema(step_tools, final=final))
                 if step_answer is None:
                     break
                 is_tool = bool(step_answer.get("tool")) and step_answer.get("action", "tool") == "tool"
@@ -704,6 +708,8 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                 args = step_answer.get("args") if isinstance(step_answer.get("args"), dict) else {}
                 redirect = ""
                 try:
+                    if asking and name.startswith("propose_"):
+                        raise ToolError("Владелец спрашивает, а не меняет: ответьте по данным, карточку не предлагайте.")
                     invented_code(name, args, history)
                     invented_number(name, args, history)
                     args = price_meant(db, name, args, history)
@@ -729,6 +735,10 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                 # «Почему не узнал» (scan_problems) уже содержит и товары, и советы: живая qwen3-vl-4b (2026-11-17) после него
                 # «перепроверяла» его же данные find_products/products_missing и по-узбекски отвечала уже о другом.
                 answer_now = ok and getattr(assistant_tools.get_tool(name), "answer_next", False)
+                priced = ok and asks_price and isinstance(result, dict) and (
+                    result.get("found") is True or (name == "find_products" and result.get("total") == 1))
+                if priced:
+                    answer_now = True       # цена найденного товара уже в данных — дальше только ответ (§10.16)
                 if ok and name == "scan_problems" and isinstance(result, dict):
                     scanned = result
                 named = named_categories(db, name, args, history) if ok and can_propose else []
@@ -742,7 +752,9 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                 # Данные — по-русски, и по-узбекски модель после них отвечала кириллицей (2026-11-17, scan_problems): язык ответа
                 # напоминается рядом с данными, а не только в начале разговора.
                 convo.append({"role": "user", "content": _result_text(name, result)
-                              + (f"\nОтвет — на {LANGS[lang]} языке." if lang != "ru" else "")})
+                              + (f"\nОтвет — на {LANGS[lang]} языке." if lang != "ru" else "")
+                              # «qancha turadi» живая модель поняла как «сколько весит» («Nutella 400 gramli», 3 из 3)
+                              + ("\nВладелец спрашивает цену (price): назови её." if priced else "")})
                 if redirect:
                     convo.append({"role": "user", "content": redirect})
                 if named:

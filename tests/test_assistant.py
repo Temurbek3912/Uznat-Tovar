@@ -279,7 +279,7 @@ def test_uzbek_apostrophe_is_the_one_the_pages_use():
 def test_model_calls_a_tool_then_answers_from_the_data(Session):
     model = FakeModel({"action": "tool", "tool": "catalog_overview", "args": {}, "text": ""},
                       {"action": "answer", "tool": "", "args": {}, "text": "Без фото 4 товара."})
-    reply = _ask(Session, model)
+    reply = _ask(Session, model, "Покажи сводку каталога")          # не вопрос — в схеме и propose_* (§10.16)
     assert reply.text == "Без фото 4 товара." and reply.tools == [{"name": "catalog_overview", "ok": True}]
     url, first = model.calls[0]
     assert url == "http://127.0.0.1:8090/v1/chat/completions" and first["model"] == "qwen3-vl-4b"
@@ -637,11 +637,12 @@ def test_done_without_a_card_is_caught(Session):
     assert reply.proposal["kind"] == "status" and not reply.no_card
     assert "карточки нет" in model.calls[1][1]["messages"][-1]["content"]
 
-    stubborn = _ask(Session, FakeModel({"tool": "", "text": "Товар добавлен."}, {"tool": "", "text": "Товар добавлен."}))
+    stubborn = _ask(Session, FakeModel({"tool": "", "text": "Товар добавлен."}, {"tool": "", "text": "Товар добавлен."}),
+                    "Добавь товар Сок")
     assert stubborn.proposal is None and stubborn.no_card
 
     failed = _ask(Session, FakeModel({"tool": "propose_update", "args": {"product": "COLA", "field": "price", "value": "-5"}},
-                                     {"tool": "", "text": "Нажмите «Сделать»."}))
+                                     {"tool": "", "text": "Нажмите «Сделать»."}), "Поставь кока-коле цену -5")
     assert failed.proposal is None and "Цена" in failed.proposal_error and not failed.no_card
 
     plain = _ask(Session, FakeModel({"tool": "", "text": "В архиве 1 товар."}))       # обычный ответ — без повторов
@@ -1218,3 +1219,36 @@ def test_chat_about_staff_answers_from_the_list_and_changes_nothing(Session):
     assert second["response_format"]["json_schema"]["schema"]["properties"]["tool"]["enum"] == [""]     # итог полный — только ответ
     sent = json.dumps(second["messages"], ensure_ascii=False)
     assert "dilnoza" in sent and PASSWORD not in sent and "Temp-pass-12345" not in sent
+
+
+def test_price_question_is_not_a_change(Session):
+    """«Nutella qancha turadi?» («сколько стоит»): вопрос без глагола изменения — карточки нет, propose_* модели не даются;
+    найден один товар — его цена уже в данных, дальше только ответ с пометкой «спрашивает цену» (§10.16)."""
+    from app.services import price_words as P
+    for text in ("Nutella qancha turadi?", "Fanta narxi qancha?", "Сколько стоит Нутелла?", "Какая цена у Фанты?",
+                 "Почём Фанта?", "Цена Фанты?", "Нутелла қанча туради?", "Fanta necha pul?", "How much is Fanta?"):
+        assert P.asks_only(text) and P.asks_price(text), text
+    assert P.asks_only("Сколько товаров без фото?") and not P.asks_price("Сколько товаров без фото?")
+    for text in ("Fanta narxini 9500 qiling", "Поставь Фанте цену 9500", "Сколько стоит Фанта? Поставь 9500",
+                 "Fantaning narxini 1000 soʻmga oshiring", "Убери Фанту в архив", "Fanta narxi 9500", "Qancha qilay?"):
+        assert not P.asks_only(text), text
+    _add_declension_products(Session)
+    model = FakeModel({"tool": "find_products", "args": {"query": "Nutella"}}, {"tool": "", "text": "Nutella 45000 soʻm."})
+    reply = _ask(Session, model, "Nutella qancha turadi?", lang="uz")
+    assert reply.text == "Nutella 45000 soʻm." and reply.proposal is None
+    first = model.calls[0][1]["response_format"]["json_schema"]["schema"]
+    offered = {b["properties"]["tool"]["enum"][0] for b in first["anyOf"]}
+    assert "find_products" in offered and not any(n.startswith("propose_") for n in offered)
+    second = model.calls[1][1]
+    assert second["response_format"]["json_schema"]["schema"]["properties"]["tool"]["enum"] == [""]   # только ответ
+    assert second["messages"][-1]["content"].endswith("Владелец спрашивает цену (price): назови её.")
+    # модель всё же зовёт propose_* (схема не дала бы) — карточки нет, ошибка уходит ей же
+    stubborn = FakeModel({"tool": "propose_update", "args": {"product": "NUT", "field": "in_stock", "value": True}},
+                         {"tool": "", "text": "Нутелла стоит 45 000 сум."})
+    reply = _ask(Session, stubborn, "Сколько стоит Нутелла?")
+    assert reply.proposal is None and reply.text == "Нутелла стоит 45 000 сум."
+    assert reply.tools == [{"name": "propose_update", "ok": False}]
+    # просьба изменить — как раньше: propose_* в схеме, карточка есть
+    change = FakeModel({"tool": "propose_update", "args": {"product": "FANTA", "field": "price", "value": 9500}})
+    card = _ask(Session, change, "Fanta narxini 9500 qiling", lang="uz").proposal
+    assert card["sku"] == "FANTA" and card["changes"] == {"price": 9500.0}

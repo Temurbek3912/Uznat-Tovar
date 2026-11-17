@@ -68,3 +68,32 @@ def meant(said: str, value) -> tuple[str, float] | None:
     if direction:
         return "price_add", direction * number
     return "price_set", number
+
+
+# Вопрос, а не изменение (§10.16). Живая qwen3-vl-4b (2026-11-17) на «Nutella qancha turadi?», «Fanta narxi qancha?» и даже
+# «Сколько стоит Нутелла?» звала find_products → product_details, а третьим шагом — propose_update(in_stock=true): карточка
+# «в наличии» вместо цены (7 из 7 по-узбекски). Поэтому что это вопрос, решает программа по словам владельца.
+_ASK = re.compile(r"\b(?:qancha|necha|nechta|nechi|skolko|kakaya|kakoy|kakie|kakov\w*|pochem|pochom|how\s+much|how\s+many|"
+                  r"what)\b")
+_PRICE = re.compile(r"\b(?:narh\w*|qancha|necha\s*pul|sto(?:it|yat|imost)\w*|pochem|pochom|tsen\w*|how\s+much|price\w*|"
+                    r"cost\w*)")
+# Глагол изменения (и «в архив», «удалить», «новый товар»): есть он — это просьба изменить, хоть и со словом «сколько».
+_CHANGE = ("qil", "qoy", "ozgartir", "almashtir", "otkaz", "belgila", "yoz", "ochir", "olib", "arhiv", "qosh", "oshir",
+           "kotar", "tushir", "kamaytir", "pasaytir", "arzonlashtir", "qimmatlashtir", "yangila",
+           "postav", "sdela", "izmen", "smen", "pomen", "zamen", "ustanov", "ukazh", "ukaz", "napish", "naznach", "zada",
+           "ispra", "uber", "ubra", "udal", "dobav", "podnim", "povys", "sniz", "umensh", "verni", "vern",
+           "set", "change", "make", "raise", "lower", "remove", "delete", "add", "archive", "put")
+
+
+def asks_only(said: str) -> bool:
+    """Последняя реплика владельца — вопрос («Nutella qancha turadi?», «Сколько стоит Нутелла?», «Fanta narxi qancha?»,
+    «Цена Фанты?») без глагола изменения: предлагать изменения тут нечего."""
+    text = latin(said or "")
+    if not (_ASK.search(text) or (_PRICE.search(text) and "?" in text)):
+        return False
+    return not any(w.startswith(_CHANGE) for w in re.findall(r"[a-z]+", text))
+
+
+def asks_price(said: str) -> bool:
+    """Вопрос о цене: найден один товар — его цена уже в данных, дальше модель только отвечает."""
+    return asks_only(said) and bool(_PRICE.search(latin(said or "")))

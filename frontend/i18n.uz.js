@@ -889,7 +889,27 @@
     "assistant.no_card": "Hech narsa oʻzgarmadi: oʻzgarishlar faqat kartadagi «Bajarish» tugmasi bilan qilinadi, karta esa yoʻq. Yana bir bor soʻrang va mahsulotni aniqroq ayting.",
     "assistant.proposal_not_made": "Oʻzgarishni taklif qilib boʻlmadi.",
     "assistant.example_scans": "Qaysi tovarlar yomon taniladi va nima qilish kerak?",
-    "assistant.tool.scan_problems": "xaridorlar skanlarini"
+    "assistant.tool.scan_problems": "xaridorlar skanlarini",
+    "assistant.scans_title": "Xaridorlarda tovarlar qanday taniladi",
+    "assistant.scans_days": "Necha kunlik",
+    "assistant.scans_period": "{n} kun",
+    "assistant.scans_line": "{days} kunda skanlar: {scans}. Ishonch bilan tanidi — {matched}, ishonchsiz — {uncertain}; tovar katalogda yoʻq — {missing}; suratda nima borligini tushunmadi — {unknown}.",
+    "assistant.scans_none": "Bu kunlarda xaridorlar hech narsa skanerlamadi.",
+    "assistant.scans_not_started": "Xaridorlar skanlari hali yoʻq: dastur ularni shu yangilanishdan boshlab hisoblaydi. Xulosa birinchi skanlardan keyin chiqadi.",
+    "assistant.scans_all_good": "Katalog tovarlari yaxshi taniladi — surat qoʻshish shart emas.",
+    "assistant.scans_weak": "Yomon taniladi — tovarlar: {n}",
+    "assistant.scans_weak_row": "«{name}» (artikul {sku}): skanlar {scans}, shundan ishonchsiz {unsure}; surat — {photos}",
+    "assistant.scans_missing": "Skanerlashdi, lekin katalogda yoʻq: {n}",
+    "assistant.scans_missing_row": "{name} — marta: {times}",
+    "assistant.scans_missing_tip": "Agar bu sizda sotilsa — tovarni «Tovarlar» sahifasida surat bilan qoʻshing.",
+    "assistant.scans_no_name": "nomsiz ({kind})",
+    "assistant.scans_many_unknown": "Koʻp skanlar umuman tushunilmadi: xaridorlardan yaqinroqdan, yaxshi yorugʻlikda, shtrix-kodni kameraga qaratib suratga olishni soʻrang.",
+    "assistant.scans_more": "{total} tadan birinchi {shown} tasi koʻrsatilgan.",
+    "assistant.scans_error": "Skanlar xulosasini yuklab boʻlmadi.",
+    "assistant.tip_code.no_photo": "surati yoʻq: koʻrinishidan tanilmaydi — turli tomondan 2–3 ta surat qoʻshing",
+    "assistant.tip_code.more_photos": "turli tomondan yana 2–3 ta surat qoʻshing",
+    "assistant.tip_code.check_photos": "suratlarni tekshiring (hammasida tovarning oʻzimi) va yorliqning yirik suratini qoʻshing",
+    "assistant.tip_code.add_barcode": "shtrix-kod qoʻshing — u bilan darhol taniladi"
   };
   if (root.I18N) root.I18N.add("uz", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

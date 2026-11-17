@@ -126,10 +126,24 @@ def test_scan_problems_shows_weak_products_missing_ones_and_advice(Session, monk
         assert {"name": "номсиз (Ичимлик)", "times": 1} in T.run_tool(db, OWNER, "scan_problems", {}, lang="uz-Cyrl")["missing"]
         forged = T.run_tool(db, OWNER, "scan_problems", {"_lang": "uz"})
         assert {"name": "без названия (Напиток)", "times": 1} in forged["missing"]
+        # сводка для страницы — те же числа, но кодами (подписи — на языке страницы), без готовых фраз
+        rep = T.scan_report(db, 30)
+        assert rep["scans"] == 11 and rep["started"] is True and rep["many_unknown"] is False
+        assert rep["counts"] == {"matched": 5, "uncertain": 2, "not_in_catalog": 3, "unknown": 1}
+        assert [(w["sku"], w["tips"]) for w in rep["weak"]] == [("COLA", ["check_photos"]), ("BREAD", ["more_photos"])]
+        assert rep["missing"] == [{"name": "Pepsi 1 л", "kind": None, "times": 2}, {"name": None, "kind": "drink", "times": 1}]
+        assert rep["weak_total"] == 2 and rep["missing_total"] == 2 and T.scan_report(db, 500)["days"] == 90
         db.add(ScanEventORM(at=now - timedelta(days=scan_log.KEEP_DAYS + 1), status="unknown"))
         db.commit()
         assert scan_log.purge_old(db) == 1
         db.commit()
+
+
+def test_scan_tips_codes():
+    assert T._tips(0, 0, False) == ["no_photo"]
+    assert T._tips(2, 1, False) == ["more_photos", "add_barcode"]
+    assert T._tips(1, 5, True) == ["check_photos"] and T._tips(0, 5, True) == []
+    assert set(T._TIP_TEXT) == set(T.TIPS)
 
 
 def test_scan_log_records_only_the_outcome_and_never_breaks_the_answer(Session, monkeypatch):
@@ -421,6 +435,26 @@ def test_routes_are_for_the_owner_only(client, monkeypatch):
     monkeypatch.setattr(A, "chat", real_chat)
     empty = client.post("/api/v1/assistant/chat", json={"messages": [], "lang": "ru"}, headers=client.owner)
     assert empty.status_code == 422 and empty.json()["code"] == "assistant_empty"
+
+
+def test_scan_summary_route_needs_no_model_and_is_for_the_owner(client, Session, monkeypatch):
+    """Сводка сканов сверху страницы: считает программа — работает и там, где модели нет (помощник выключен)."""
+    from app.core.security import utcnow
+    from app.db.models import ScanEventORM
+
+    assert client.get("/api/v1/assistant/scans").status_code == 401
+    assert client.get("/api/v1/assistant/scans", headers=client.analyst).status_code == 403
+    empty = client.get("/api/v1/assistant/scans", headers=client.owner).json()
+    assert empty["scans"] == 0 and empty["started"] is False and empty["days"] == 30
+    with Session() as db:
+        db.add(ScanEventORM(at=utcnow(), status="unknown"))
+        db.commit()
+    from app.api import routes_assistant
+    monkeypatch.setattr(routes_assistant, "get_settings", lambda: types.SimpleNamespace(assistant_enabled=False))
+    assert client.get("/api/v1/assistant/status", headers=client.owner).json()["available"] is False
+    res = client.get("/api/v1/assistant/scans?days=7", headers=client.owner).json()
+    assert res["days"] == 7 and res["counts"]["unknown"] == 1 and res["many_unknown"] is True
+    assert client.get("/api/v1/assistant/scans?days=0", headers=client.owner).status_code == 422
 
 
 # --- этап A2: предложения, «Сделать», «Отменить» -------------------------------------------------------------------------------

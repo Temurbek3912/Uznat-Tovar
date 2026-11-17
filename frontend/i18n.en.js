@@ -889,7 +889,27 @@
     "assistant.no_card": "Nothing changed: changes are made only with the “Do it” button on a card, and there is no card. Ask again and name the product more precisely.",
     "assistant.proposal_not_made": "Could not propose the change.",
     "assistant.example_scans": "Which products are recognized poorly and what should I do?",
-    "assistant.tool.scan_problems": "customer scans"
+    "assistant.tool.scan_problems": "customer scans",
+    "assistant.scans_title": "How customers' scans go",
+    "assistant.scans_days": "Period",
+    "assistant.scans_period": "{n} days",
+    "assistant.scans_line": "Scans in {days} days: {scans}. Recognized surely — {matched}, unsurely — {uncertain}; not in the catalog — {missing}; not understood — {unknown}.",
+    "assistant.scans_none": "Customers scanned nothing in these days.",
+    "assistant.scans_not_started": "No customer scans yet: the program counts them since this update. The summary will appear after the first scans.",
+    "assistant.scans_all_good": "Catalog products are recognized well — no photos needed.",
+    "assistant.scans_weak": "Recognized poorly — products: {n}",
+    "assistant.scans_weak_row": "“{name}” (SKU {sku}): {scans} scans, {unsure} unsure; photos — {photos}",
+    "assistant.scans_missing": "Scanned but not in the catalog: {n}",
+    "assistant.scans_missing_row": "{name} — times: {times}",
+    "assistant.scans_missing_tip": "If you sell it, add the product with photos on the Products page.",
+    "assistant.scans_no_name": "no name ({kind})",
+    "assistant.scans_many_unknown": "Many scans were not understood at all: ask customers to shoot closer, in good light, barcode to the camera.",
+    "assistant.scans_more": "First {shown} of {total} shown.",
+    "assistant.scans_error": "Could not load the scan summary.",
+    "assistant.tip_code.no_photo": "no photos: cannot be recognized by look — add 2–3 photos from different sides",
+    "assistant.tip_code.more_photos": "add 2–3 more photos from different sides",
+    "assistant.tip_code.check_photos": "check the photos (is it the product on all of them) and add a close-up of the label",
+    "assistant.tip_code.add_barcode": "add the barcode — it is recognized instantly by it"
   };
   if (root.I18N) root.I18N.add("en", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

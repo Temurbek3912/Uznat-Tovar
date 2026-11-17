@@ -889,7 +889,27 @@
     "assistant.no_card": "Ничего не изменилось: изменения делаются только кнопкой «Сделать» в карточке, а карточки нет. Попросите ещё раз и назовите товар точнее.",
     "assistant.proposal_not_made": "Не получилось предложить изменение.",
     "assistant.example_scans": "Какие товары плохо узнаются и что с ними сделать?",
-    "assistant.tool.scan_problems": "сканы покупателей"
+    "assistant.tool.scan_problems": "сканы покупателей",
+    "assistant.scans_title": "Как узнаются товары у покупателей",
+    "assistant.scans_days": "За сколько дней",
+    "assistant.scans_period": "{n} дн.",
+    "assistant.scans_line": "Сканов за {days} дн.: {scans}. Узнал уверенно — {matched}, неуверенно — {uncertain}; товара нет в каталоге — {missing}; не понял, что на фото, — {unknown}.",
+    "assistant.scans_none": "За эти дни покупатели ничего не сканировали.",
+    "assistant.scans_not_started": "Сканов покупателей ещё нет: программа считает их с этого обновления. Сводка появится после первых сканов.",
+    "assistant.scans_all_good": "Товары каталога узнаются хорошо — добавлять фото не нужно.",
+    "assistant.scans_weak": "Узнаются плохо — товаров: {n}",
+    "assistant.scans_weak_row": "«{name}» (артикул {sku}): сканов {scans}, из них неуверенно {unsure}; фото — {photos}",
+    "assistant.scans_missing": "Сканировали, а в каталоге нет: {n}",
+    "assistant.scans_missing_row": "{name} — раз: {times}",
+    "assistant.scans_missing_tip": "Если это продаётся у вас — добавьте товар с фото на странице «Товары».",
+    "assistant.scans_no_name": "без названия ({kind})",
+    "assistant.scans_many_unknown": "Много сканов не поняли совсем: попросите покупателей снимать ближе, при хорошем свете, штрихкодом к камере.",
+    "assistant.scans_more": "Показаны первые {shown} из {total}.",
+    "assistant.scans_error": "Сводку сканов не удалось загрузить.",
+    "assistant.tip_code.no_photo": "нет фото: по виду не узнаётся — добавьте 2–3 фото с разных сторон",
+    "assistant.tip_code.more_photos": "добавьте ещё 2–3 фото с разных сторон",
+    "assistant.tip_code.check_photos": "проверьте фото (на всех ли сам товар) и добавьте крупное фото этикетки",
+    "assistant.tip_code.add_barcode": "добавьте штрихкод — по нему узнаётся сразу"
   };
   if (root.I18N) root.I18N.add("ru", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

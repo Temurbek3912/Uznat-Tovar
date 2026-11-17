@@ -359,6 +359,15 @@ button.rail__item { width: 100%; background: none; border: 0; font: inherit; fon
 .assistant-tip__title { display: flex; align-items: center; gap: var(--sp-2); }
 .assistant-tip__busy { font-weight: var(--fw-bold); }
 .assistant-tip--busy { box-shadow: inset 4px 0 0 var(--danger); }
+/* сводка «Как узнаются товары у покупателей» сверху страницы помощника — считает программа, без модели */
+.scan-summary { margin-bottom: var(--sp-3); }
+.scan-summary p, .scan-summary ul { margin: 0; }
+.scan-summary__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.scan-summary__title { margin: 0; font-size: var(--fs-s); }
+.scan-summary__days { width: auto; }
+.scan-summary__group { margin-top: var(--sp-2); font-weight: var(--fw-bold); }
+.scan-summary__list { padding-left: var(--sp-4); overflow-wrap: anywhere; }
+.scan-summary__tip { color: var(--ink-muted); }
 /* карточка «Помощник предлагает: … [Сделать] [Отмена]» */
 .chat__card { margin-top: var(--sp-3); padding: var(--sp-3); border: 1px solid var(--line); border-radius: var(--r-m); background: var(--surface-2); display: flex; flex-direction: column; gap: var(--sp-2); }
 .chat__card-title { font-weight: var(--fw-bold); }

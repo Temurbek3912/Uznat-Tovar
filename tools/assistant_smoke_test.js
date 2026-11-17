@@ -119,4 +119,29 @@ test("предупреждения «ничего не изменилось» и
   tr("assistant.no_card"); tr("assistant.proposal_failed", { why: "x" }); tr("assistant.proposal_not_made");
 });
 
+test("сводка сканов сверху страницы: числа и советы на языке страницы, без модели; пусто и «ещё не считали» — словами", () => {
+  const rep = {
+    days: 30, scans: 30, started: true, counts: { matched: 13, uncertain: 7, not_in_catalog: 6, unknown: 4 },
+    weak_total: 9, weak: [{ sku: "COLA", name: "Кока-кола", scans: 5, unsure: 3, photos: 1, tips: ["more_photos", "add_barcode", "hack"] }],
+    missing_total: 2, missing: [{ name: "Pepsi 1 л", kind: null, times: 2 }, { name: null, kind: "drink", times: 1 }],
+    many_unknown: false,
+  };
+  const sum = Assistant.scanSummary(rep, tr);
+  assert.strictEqual(sum.line, "Сканов за 30 дн.: 30. Узнал уверенно — 13, неуверенно — 7; товара нет в каталоге — 6; не понял, что на фото, — 4.");
+  assert.strictEqual(sum.weak.title, "Узнаются плохо — товаров: 9");
+  assert.strictEqual(sum.weak.more, "Показаны первые 1 из 9.");
+  assert.strictEqual(sum.weak.rows[0].text, "«Кока-кола» (артикул COLA): сканов 5, из них неуверенно 3; фото — 1");
+  assert.deepStrictEqual(sum.weak.rows[0].tips, [tr("assistant.tip_code.more_photos"), tr("assistant.tip_code.add_barcode")]);
+  assert.deepStrictEqual(sum.missing.rows.map((r) => r.text), ["Pepsi 1 л — раз: 2", "без названия (Напиток) — раз: 1"]);
+  assert.strictEqual(sum.missing.more, "");
+  assert.deepStrictEqual(sum.notes, []);
+  const good = Assistant.scanSummary({ ...rep, weak: [], weak_total: 0, missing: [], many_unknown: true }, tr);
+  assert.deepStrictEqual(good.notes, [tr("assistant.scans_all_good"), tr("assistant.scans_many_unknown")]);
+  assert.deepStrictEqual(Assistant.scanSummary({ started: false, scans: 0 }, tr).notes, [tr("assistant.scans_not_started")]);
+  assert.deepStrictEqual(Assistant.scanSummary({ started: true, scans: 0, days: 7 }, tr).notes, [tr("assistant.scans_none")]);
+  assert.strictEqual(Assistant.scanSummary(null, tr).line, "");
+  ["no_photo", "check_photos"].forEach((k) => tr("assistant.tip_code." + k));
+  ["title", "days", "period", "missing_tip", "error"].forEach((k) => tr("assistant.scans_" + k, { n: 1 }));
+});
+
 console.log(`\n${passed} passed`);

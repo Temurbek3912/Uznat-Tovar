@@ -2,6 +2,7 @@
 ИИ-помощник владельца (документ 16): текстовый чат по данным каталога. Этап A1 — смотрит; этап A2 — предлагает изменения.
 
   GET  /api/v1/assistant/status   работает ли помощник, заняты ли покупатели распознаванием     — assistant:use (только владелец)
+  GET  /api/v1/assistant/scans    ?days=30 — сводка сканов покупателей числами, без модели       — + catalog:read
   POST /api/v1/assistant/chat     {messages: [{role, content}], lang} -> {reply, tools, seconds, proposal, ui}
   POST /api/v1/assistant/act      {action: предложение} — владелец нажал «Сделать» (или «Отменить»)  — + catalog:write
   POST /api/v1/assistant/act/add  форма: name, price, brand, category, barcode, files — новый товар    — + catalog:write
@@ -12,7 +13,7 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -56,6 +57,18 @@ def assistant_status(user: CurrentUser = Depends(require_permission(Permission.A
     return {"available": available, "mode": "change" if can_change else "read",
             "reason": None if available else "disabled", "memory": assistant.memory_limits(),
             "customers_busy": model_gate.identify_recent()}
+
+
+@router.get("/scans")
+def assistant_scans(
+    days: int = Query(30, ge=1, le=90),
+    db: Session = Depends(get_db),
+    _assistant: CurrentUser = Depends(require_permission(Permission.ASSISTANT_USE)),
+    _reader: CurrentUser = Depends(require_permission(Permission.CATALOG_READ)),
+) -> dict:
+    """Сводка «Почему не узнал» сверху страницы помощника — считает программа, модель не нужна (цифры всегда верные, видны и
+    там, где модели нет). Те же числа получает модель через scan_problems (документ 16, §10.5)."""
+    return assistant_tools.scan_report(db, days)
 
 
 @router.post("/chat")

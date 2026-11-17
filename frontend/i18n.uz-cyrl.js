@@ -890,7 +890,27 @@
     "assistant.no_card": "Ҳеч нарса ўзгармади: ўзгаришлар фақат картадаги «Бажариш» тугмаси билан қилинади, карта эса йўқ. Яна бир бор сўранг ва маҳсулотни аниқроқ айтинг.",
     "assistant.proposal_not_made": "Ўзгаришни таклиф қилиб бўлмади.",
     "assistant.example_scans": "Қайси товарлар ёмон танилади ва нима қилиш керак?",
-    "assistant.tool.scan_problems": "харидорлар сканларини"
+    "assistant.tool.scan_problems": "харидорлар сканларини",
+    "assistant.scans_title": "Харидорларда товарлар қандай танилади",
+    "assistant.scans_days": "Неча кунлик",
+    "assistant.scans_period": "{n} кун",
+    "assistant.scans_line": "{days} кунда сканлар: {scans}. Ишонч билан таниди — {matched}, ишончсиз — {uncertain}; товар каталогда йўқ — {missing}; суратда нима борлигини тушунмади — {unknown}.",
+    "assistant.scans_none": "Бу кунларда харидорлар ҳеч нарса сканерламади.",
+    "assistant.scans_not_started": "Харидорлар сканлари ҳали йўқ: дастур уларни шу янгиланишдан бошлаб ҳисоблайди. Хулоса биринчи сканлардан кейин чиқади.",
+    "assistant.scans_all_good": "Каталог товарлари яхши танилади — сурат қўшиш шарт эмас.",
+    "assistant.scans_weak": "Ёмон танилади — товарлар: {n}",
+    "assistant.scans_weak_row": "«{name}» (артикул {sku}): сканлар {scans}, шундан ишончсиз {unsure}; сурат — {photos}",
+    "assistant.scans_missing": "Сканерлашди, лекин каталогда йўқ: {n}",
+    "assistant.scans_missing_row": "{name} — марта: {times}",
+    "assistant.scans_missing_tip": "Агар бу сизда сотилса — товарни «Товарлар» саҳифасида сурат билан қўшинг.",
+    "assistant.scans_no_name": "номсиз ({kind})",
+    "assistant.scans_many_unknown": "Кўп сканлар умуман тушунилмади: харидорлардан яқинроқдан, яхши ёруғликда, штрих-кодни камерага қаратиб суратга олишни сўранг.",
+    "assistant.scans_more": "{total} тадан биринчи {shown} таси кўрсатилган.",
+    "assistant.scans_error": "Сканлар хулосасини юклаб бўлмади.",
+    "assistant.tip_code.no_photo": "сурати йўқ: кўринишидан танилмайди — турли томондан 2–3 та сурат қўшинг",
+    "assistant.tip_code.more_photos": "турли томондан яна 2–3 та сурат қўшинг",
+    "assistant.tip_code.check_photos": "суратларни текширинг (ҳаммасида товарнинг ўзими) ва ёрлиқнинг йирик суратини қўшинг",
+    "assistant.tip_code.add_barcode": "штрих-код қўшинг — у билан дарҳол танилади"
   };
   if (typeof module === "object" && module.exports) module.exports = dict;
   if (root.I18N) root.I18N.add("uz-Cyrl", dict);

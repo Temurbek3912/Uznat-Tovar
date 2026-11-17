@@ -22,6 +22,9 @@
   var KINDS = ["update", "status", "add"];
   // инструменты-действия: в строке «Смотрел: …» не показываются (их видно по карточке и по строке «Сделано»)
   var ACTION_TOOLS = ["propose_update", "propose_archive", "propose_add", "set_language", "set_theme"];
+  var SCAN_DAYS = [7, 30, 90];          // сводка сканов: за сколько дней (сервер хранит сканы 90 дней)
+  var SCAN_DAYS_KEY = "assistant_scan_days";
+  var TIPS = ["no_photo", "more_photos", "check_photos", "add_barcode"];
 
   function isObj(x) { return !!x && typeof x === "object" && !Array.isArray(x); }
 
@@ -118,6 +121,51 @@
     return lines;
   }
 
+  function num(x) { return typeof x === "number" && isFinite(x) ? x : 0; }
+
+  /** Сводка сканов покупателей (GET /assistant/scans) -> строки на языке страницы. Считает программа, модель не нужна.
+      Возвращает {line, weak: {title, rows: [{text, tips}], more} | null, missing: {title, rows, more, tip} | null, notes: []}. */
+  function scanSummary(rep, t) {
+    var out = { line: "", weak: null, missing: null, notes: [] };
+    if (!isObj(rep)) return out;
+    var c = isObj(rep.counts) ? rep.counts : {}, scans = num(rep.scans);
+    if (!rep.started) { out.notes.push(t("assistant.scans_not_started")); return out; }
+    if (!scans) { out.notes.push(t("assistant.scans_none")); return out; }
+    out.line = t("assistant.scans_line", { days: num(rep.days), scans: scans, matched: num(c.matched), uncertain: num(c.uncertain),
+                                           missing: num(c.not_in_catalog), unknown: num(c.unknown) });
+    var more = function (shown, total) { return total > shown ? t("assistant.scans_more", { shown: shown, total: total }) : ""; };
+    var weak = Array.isArray(rep.weak) ? rep.weak.filter(isObj) : [];
+    if (weak.length) {
+      out.weak = {
+        title: t("assistant.scans_weak", { n: Math.max(num(rep.weak_total), weak.length) }),
+        more: more(weak.length, num(rep.weak_total)),
+        rows: weak.map(function (w) {
+          return {
+            text: t("assistant.scans_weak_row", { name: String(w.name || ""), sku: String(w.sku || ""), scans: num(w.scans),
+                                                  unsure: num(w.unsure), photos: num(w.photos) }),
+            tips: (Array.isArray(w.tips) ? w.tips : []).filter(function (x) { return TIPS.indexOf(x) !== -1; })
+              .map(function (x) { return t("assistant.tip_code." + x); })
+          };
+        })
+      };
+    } else if (num(c.matched) + num(c.uncertain) > 0) {
+      out.notes.push(t("assistant.scans_all_good"));
+    }
+    var missing = Array.isArray(rep.missing) ? rep.missing.filter(isObj) : [];
+    if (missing.length) {
+      out.missing = {
+        title: t("assistant.scans_missing", { n: Math.max(num(rep.missing_total), missing.length) }),
+        more: more(missing.length, num(rep.missing_total)), tip: t("assistant.scans_missing_tip"),
+        rows: missing.map(function (m) {
+          var name = m.name ? String(m.name) : t("assistant.scans_no_name", { kind: m.kind ? t("kind." + m.kind) : "?" });
+          return { text: t("assistant.scans_missing_row", { name: name, times: num(m.times) }), tips: [] };
+        })
+      };
+    }
+    if (rep.many_unknown) out.notes.push(t("assistant.scans_many_unknown"));
+    return out;
+  }
+
   function start(win) {
     var doc = win.document, I18N = win.I18N, Auth = win.Auth, Icons = win.Icons, Theme = win.Theme;
     var $ = function (id) { return doc.getElementById(id); };
@@ -125,6 +173,7 @@
     var auth = Auth.create(win);
     var log = [], busy = false, status = null, limits = null;      // status: {key, params} | {text} — строка под перепиской
     var customersBusy = false, pollTimer = null;
+    var scanRep = null, scanFailed = false, scanDays = 30;
 
     function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
     function setHidden(el, hidden) { if (hidden) el.setAttribute("hidden", ""); else el.removeAttribute("hidden"); }
@@ -142,6 +191,56 @@
       b.setAttribute("type", "button");
       b.addEventListener("click", onClick);
       return b;
+    }
+
+    // --- сводка сканов покупателей (сверху страницы; видна и без модели) ------------------------------------------------------
+
+    function renderScans() {
+      var host = $("scanBody"), sel = $("scanDays");
+      clear(host);
+      clear(sel);
+      SCAN_DAYS.forEach(function (d) {
+        var o = el("option", "", t("assistant.scans_period", { n: d }));
+        o.value = String(d);
+        if (d === scanDays) o.selected = true;
+        sel.appendChild(o);
+      });
+      if (scanFailed) { host.appendChild(el("p", "scan-summary__tip", t("assistant.scans_error"))); return; }
+      if (!scanRep) return;
+      var sum = scanSummary(scanRep, t);
+      if (sum.line) host.appendChild(el("p", "", sum.line));
+      [sum.weak, sum.missing].forEach(function (group) {
+        if (!group) return;
+        host.appendChild(el("p", "scan-summary__group", group.title));
+        var list = el("ul", "scan-summary__list");
+        group.rows.forEach(function (row) {
+          list.appendChild(el("li", "", row.text + (row.tips.length ? " — " + row.tips.join("; ") : "")));
+        });
+        host.appendChild(list);
+        if (group.more) host.appendChild(el("p", "scan-summary__tip", group.more));
+        if (group.tip) host.appendChild(el("p", "scan-summary__tip", group.tip));
+      });
+      sum.notes.forEach(function (n) { host.appendChild(el("p", "", n)); });
+    }
+
+    function loadScans() {
+      return Promise.resolve().then(function () {
+        return win.fetch(auth.apiBase() + "/api/v1/assistant/scans?days=" + scanDays, { headers: auth.authHeaders() });
+      }).then(function (res) {
+        if (res.status === 403) { setHidden($("scans"), true); return; }      // нет права смотреть каталог — сводки нет
+        if (!res.ok) { scanFailed = true; return; }
+        return res.json().then(function (data) { scanRep = data; scanFailed = false; });
+      }, function () { scanFailed = true; }).then(renderScans);
+    }
+
+    function showScans() {
+      try {
+        var d = parseInt(win.localStorage.getItem(SCAN_DAYS_KEY), 10);
+        if (SCAN_DAYS.indexOf(d) !== -1) scanDays = d;
+      } catch (e) { /* по умолчанию 30 дней */ }
+      setHidden($("scans"), false);
+      renderScans();
+      return loadScans();
     }
 
     function note(key) { var n = $("note"); n.textContent = t(key); setHidden(n, false); setHidden($("chatArea"), true); }
@@ -380,11 +479,13 @@
         if (res.status === 403) { note("assistant.no_access"); return; }
         if (!res.ok) { note("error.generic"); return; }
         return res.json().then(function (data) {
-          if (!data.available) { note("server.assistant_disabled"); return; }
+          var scans = showScans();                  // сводку считает программа: она видна и там, где модели нет
+          if (!data.available) { note("server.assistant_disabled"); return scans; }
           limits = data.memory && typeof data.memory === "object" ? data.memory : null;
           customersBusy = !!data.customers_busy;
           setHidden($("chatArea"), false); load(); render();
           if (win.setInterval) pollTimer = win.setInterval(poll, BUSY_POLL_MS);
+          return scans;
         });
       }, function () { note("error.network"); });
     }
@@ -392,7 +493,14 @@
     I18N.mountSwitcher($("langHost"));
     I18N.apply();
     relabel();
-    I18N.onChange(function () { relabel(); render(); });
+    I18N.onChange(function () { relabel(); render(); renderScans(); });
+    $("scanDays").addEventListener("change", function () {
+      var d = parseInt($("scanDays").value, 10);
+      if (SCAN_DAYS.indexOf(d) === -1) return;
+      scanDays = d;
+      try { win.localStorage.setItem(SCAN_DAYS_KEY, String(d)); } catch (e) { /* без запоминания */ }
+      loadScans();
+    });
     $("themeBtn").addEventListener("click", function () { Theme.next(); relabel(); });
     $("form").addEventListener("submit", function (e) { e.preventDefault(); send(); });
     $("question").addEventListener("keydown", function (e) {            // Enter — отправить, Shift+Enter — новая строка
@@ -407,6 +515,6 @@
     return { ready: init(), send: send, poll: poll, stop: function () { if (pollTimer) win.clearInterval(pollTimer); } };
   }
 
-  return { start: start, cleanLog: cleanLog, toSend: toSend, memory: memory, describe: describe, fmtValue: fmtValue,
+  return { start: start, scanSummary: scanSummary, cleanLog: cleanLog, toSend: toSend, memory: memory, describe: describe, fmtValue: fmtValue,
            QUESTION_RESERVE: QUESTION_RESERVE, STORE_KEY: STORE_KEY };
 });

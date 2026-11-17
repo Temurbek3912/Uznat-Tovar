@@ -252,38 +252,37 @@ def _days(args: dict) -> int:
     return max(1, min(value, scan_log.KEEP_DAYS))
 
 
-def _advice(scans: int, unsure: int, photos: int, has_code: bool) -> str:
+TIPS = ("no_photo", "more_photos", "check_photos", "add_barcode")     # советы по товару: коды для страницы (i18n) и для модели
+_TIP_TEXT = {"no_photo": "нет фото: по виду не узнаётся — добавьте 2–3 фото с разных сторон",
+             "more_photos": "добавьте ещё 2–3 фото с разных сторон",
+             "check_photos": "проверьте фото товара (на всех ли он сам) и добавьте крупное фото этикетки",
+             "add_barcode": "добавьте штрихкод — по нему узнаётся сразу"}
+
+
+def _tips(unsure: int, photos: int, has_code: bool) -> list[str]:
     if not photos:
-        return "нет фото: по виду не узнаётся — добавьте 2–3 фото с разных сторон"
+        return ["no_photo"]
     tips = []
     if photos <= FEW_PHOTOS:
-        tips.append("добавьте ещё 2–3 фото с разных сторон")
+        tips.append("more_photos")
     elif unsure:
-        tips.append("проверьте фото товара (на всех ли он сам) и добавьте крупное фото этикетки")
+        tips.append("check_photos")
     if unsure and not has_code:
-        tips.append("добавьте штрихкод — по нему узнаётся сразу")
-    return "; ".join(tips)
+        tips.append("add_barcode")
+    return tips
 
 
-def scan_problems(db, args: dict) -> dict:
-    """«Почему не узнал» (документ 16, §10.5): по сканам покупателей за N дней (app/services/scan_log.py) — товары, которые
-    узнавались неуверенно или часто сканируются при 1–2 фото; что сканировали, а в каталоге этого нет; сколько не поняли совсем."""
-    days = _days(args)
-    lang = args.get(LANG_ARG) if args.get(LANG_ARG) in _NO_NAME else "ru"
+def scan_report(db, days: int) -> dict:
+    """Итог сканов покупателей за days дней (app/services/scan_log.py) — числами, без готовых фраз. Его показывает страница
+    помощника сразу, без модели (GET /assistant/scans, решение владельца 2026-11-17), и из него же собирается scan_problems.
+      counts   — сканов по итогу: matched, uncertain, not_in_catalog, unknown;
+      weak     — товары, которые узнавались неуверенно или часто сканируются при 1–2 фото (tips — коды советов, TIPS);
+      missing  — что сканировали, а в каталоге нет: name (как назвала программа) или kind (вид), times;
+      started  — были ли сканы вообще (False — программа ещё не начала их считать)."""
+    days = max(1, min(int(days), scan_log.KEEP_DAYS))
     since = utcnow() - timedelta(days=days)
-    rows = db.query(ScanEventORM.status, ScanEventORM.product_id, ScanEventORM.guess_name, ScanEventORM.guess_kind) \
-        .filter(ScanEventORM.at >= since).all()
-    first = db.query(func.min(ScanEventORM.at)).scalar()
+    rows = db.query(ScanEventORM.status, ScanEventORM.product_id, ScanEventORM.guess_name, ScanEventORM.guess_kind)         .filter(ScanEventORM.at >= since).all()
     counts = Counter(r.status for r in rows)
-    # Счёт — сканов, а не товаров: с полями «unsure: 7» модель писала «7 товаров не распознаются». Готовая фраза summary
-    # переписывается моделью без ошибок.
-    # «Программа узнала» — с подлежащим: с «узнано …» модель писала «покупатели не узнают товары».
-    out = {"days": days, "scans": len(rows), "summary": (
-        f"За {days} дн. покупатели сделали {len(rows)} сканов. Из этих сканов программа узнала товар уверенно — "
-        f"{counts['matched']}, неуверенно — {counts['uncertain']}; товара не было в каталоге — {counts['not_in_catalog']}; "
-        f"не поняла, что на фото, — {counts['unknown']}.")}
-    if first is None:
-        out["note"] = "Сканов покупателей ещё нет: программа начала их считать с этого обновления."
     per: dict[str, list[int]] = {}
     for r in rows:
         if r.product_id:
@@ -298,23 +297,48 @@ def scan_problems(db, args: dict) -> dict:
         if p is None or not (unsure or (scans >= OFTEN and photos.get(pid, 0) <= FEW_PHOTOS)):
             continue
         weak.append({"sku": p.sku, "name": _cut(p.name, 60), "scans": scans, "unsure": unsure, "photos": photos.get(pid, 0),
-                     "advice": _advice(scans, unsure, photos.get(pid, 0), pid in codes)})
+                     "tips": _tips(unsure, photos.get(pid, 0), pid in codes)})
     weak.sort(key=lambda w: (-w["unsure"], -w["scans"], w["sku"]))
-    out["weak_total"], out["weak"] = len(weak), weak[:SHOW_ROWS]
-    names: Counter = Counter()
-    shown: dict[str, str] = {}
+    missing: dict[tuple, dict] = {}
     for r in rows:
-        if r.status == "not_in_catalog":
-            label = (r.guess_name or "").strip() or (f"{_NO_NAME[lang]} ({_kind_label(r.guess_kind, lang)})"
-                                                     if r.guess_kind else "")
-            if label:
-                key = " ".join(text_search.normalize(label).split())
-                names[key] += 1
-                shown.setdefault(key, label)
-    out["missing"] = [{"name": _cut(shown[k], 60), "times": n} for k, n in names.most_common(SHOW_ROWS)]
+        if r.status != "not_in_catalog":
+            continue
+        name = (r.guess_name or "").strip()
+        if not name and not r.guess_kind:
+            continue
+        key = (" ".join(text_search.normalize(name).split()), "") if name else ("", r.guess_kind)
+        item = missing.setdefault(key, {"name": _cut(name, 60) or None, "kind": None if name else r.guess_kind, "times": 0})
+        item["times"] += 1
+    return {"days": days, "scans": len(rows), "started": db.query(func.min(ScanEventORM.at)).scalar() is not None,
+            "counts": {s: counts[s] for s in scan_log.STATUSES}, "weak_total": len(weak), "weak": weak[:SHOW_ROWS],
+            "missing_total": len(missing),
+            "missing": sorted(missing.values(), key=lambda m: -m["times"])[:SHOW_ROWS],
+            "many_unknown": bool(rows) and counts["unknown"] * 4 >= len(rows)}
+
+
+def scan_problems(db, args: dict) -> dict:
+    """«Почему не узнал» (документ 16, §10.5): по сканам покупателей за N дней — товары, которые узнавались неуверенно или
+    часто сканируются при 1–2 фото; что сканировали, а в каталоге этого нет; сколько не поняли совсем. Числа — scan_report."""
+    lang = args.get(LANG_ARG) if args.get(LANG_ARG) in _NO_NAME else "ru"
+    rep = scan_report(db, _days(args))
+    days, counts = rep["days"], rep["counts"]
+    # Счёт — сканов, а не товаров: с полями «unsure: 7» модель писала «7 товаров не распознаются». Готовая фраза summary
+    # переписывается моделью без ошибок.
+    # «Программа узнала» — с подлежащим: с «узнано …» модель писала «покупатели не узнают товары».
+    out = {"days": days, "scans": rep["scans"], "summary": (
+        f"За {days} дн. покупатели сделали {rep['scans']} сканов. Из этих сканов программа узнала товар уверенно — "
+        f"{counts['matched']}, неуверенно — {counts['uncertain']}; товара не было в каталоге — {counts['not_in_catalog']}; "
+        f"не поняла, что на фото, — {counts['unknown']}.")}
+    if not rep["started"]:
+        out["note"] = "Сканов покупателей ещё нет: программа начала их считать с этого обновления."
+    out["weak_total"] = rep["weak_total"]
+    out["weak"] = [{k: w[k] for k in ("sku", "name", "scans", "unsure", "photos")} | {"advice": "; ".join(_TIP_TEXT[t] for t in w["tips"])}
+                   for w in rep["weak"]]
+    out["missing"] = [{"name": m["name"] or f"{_NO_NAME[lang]} ({_kind_label(m['kind'], lang)})", "times": m["times"]}
+                      for m in rep["missing"]]
     if out["missing"]:
         out["missing_advice"] = "этих товаров нет в каталоге (уже проверено, искать не нужно): если они продаются — добавьте их с фото"
-    if rows and counts["unknown"] * 4 >= len(rows):
+    if rep["many_unknown"]:
         out["not_understood_advice"] = "много сканов не поняли совсем: попросите снимать ближе, при хорошем свете, штрихкодом к камере"
     return out
 

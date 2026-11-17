@@ -929,7 +929,20 @@
     "assistant.bulk_where.category": "Категориясида «{query}» бўлган маҳсулотлар танланди.",
     "assistant.bulk_where.brand": "Брендида «{query}» бўлган маҳсулотлар танланди.",
     "assistant.bulk_where.name": "Номида «{query}» бўлган маҳсулотлар танланди.",
-    "assistant.bulk_where.categories": "Категориялар маҳсулотлари танланди: {list} («{query}» сўзи бўйича)."
+    "assistant.bulk_where.categories": "Категориялар маҳсулотлари танланди: {list} («{query}» сўзи бўйича).",
+    "assistant.list_hint": "Янги нархларни рўйхат қилиб юбориш мумкин: ҳар бир қаторда маҳсулот ва нарх, масалан «Фанта 0,5 — 9500». Ёрдамчи нима ўзгаришини кўрсатади, «Бажариш» босилгач ўзгартиради.",
+    "assistant.bulk.price_list": "рўйхатингиз бўйича нархлар",
+    "assistant.card_list_nothing": "Рўйхатингиз бўйича каталогда ўзгартирадиган нарса йўқ.",
+    "assistant.list_new": "Каталогда йўқ ({n}): {list}. Янги маҳсулот расм билан қўшилади: «… маҳсулотини қўш, нархи …» деб ёзинг ёки уни «Маҳсулотлар» саҳифасида қўшинг.",
+    "assistant.list_error.no_price": "«{line}» қатори: нарх топилмади — қатор охирига сон ёзинг, масалан «— 9500».",
+    "assistant.list_error.bad_price": "«{line}» қатори: нарх нолдан катта ва ортиқча нолларсиз бўлиши керак.",
+    "assistant.list_error.many": "«{line}» қатори: бир нечта маҳсулот мос келади ({list}) — номини аниқроқ ёки артикулини ёзинг.",
+    "assistant.list_error.archived": "«{line}» қатори: «{list}» маҳсулоти архивда — аввал уни каталогга қайтаринг.",
+    "assistant.list_error.repeat": "«{line}» қатори: «{list}» маҳсулоти рўйхатда олдин ҳам бор эди — қатор битта бўлмагунча нархи ўзгармайди.",
+    "assistant.list_more": "ва яна {n} та",
+    "assistant.list_cut": "Рўйхатда {max} тадан кўп қатор бор: биринчи {max} таси олинди, қолганини ({n}) кейинги хабарда юборинг.",
+    "assistant.list_same": "Нархи аллақачон шундай: {n} та.",
+    "assistant.list_reply": "Рўйхатингиз бўйича натижа."
   };
   if (typeof module === "object" && module.exports) module.exports = dict;
   if (root.I18N) root.I18N.add("uz-Cyrl", dict);

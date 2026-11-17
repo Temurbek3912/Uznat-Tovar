@@ -928,7 +928,20 @@
     "assistant.bulk_where.category": "Выбраны товары, у которых в категории есть «{query}».",
     "assistant.bulk_where.brand": "Выбраны товары, у которых в бренде есть «{query}».",
     "assistant.bulk_where.name": "Выбраны товары, у которых в названии есть «{query}».",
-    "assistant.bulk_where.categories": "Выбраны товары категорий: {list} (по слову «{query}»)."
+    "assistant.bulk_where.categories": "Выбраны товары категорий: {list} (по слову «{query}»).",
+    "assistant.list_hint": "Новые цены можно прислать списком: каждая строка — товар и цена, например «Fanta 0,5 — 9500». Помощник покажет, что изменится, а изменит после «Сделать».",
+    "assistant.bulk.price_list": "цены по вашему списку",
+    "assistant.card_list_nothing": "По вашему списку менять в каталоге нечего.",
+    "assistant.list_new": "Нет в каталоге ({n}): {list}. Новый товар добавляется с фото: напишите «Добавь товар …, цена …» или добавьте его на странице «Товары».",
+    "assistant.list_error.no_price": "Строка «{line}»: не нашёл цену — напишите в конце строки число, например «— 9500».",
+    "assistant.list_error.bad_price": "Строка «{line}»: цена должна быть больше нуля и без лишних нулей.",
+    "assistant.list_error.many": "Строка «{line}»: подходит несколько товаров ({list}) — напишите название точнее или артикул.",
+    "assistant.list_error.archived": "Строка «{line}»: товар «{list}» в архиве — сначала верните его в каталог.",
+    "assistant.list_error.repeat": "Строка «{line}»: товар «{list}» в списке уже был — его цена не меняется, пока строка не одна.",
+    "assistant.list_more": "и ещё {n}",
+    "assistant.list_cut": "В списке больше {max} строк: взяты первые {max}, остальные ({n}) пришлите следующим сообщением.",
+    "assistant.list_same": "Цена уже такая: {n}.",
+    "assistant.list_reply": "Вот что вышло по вашему списку."
   };
   if (root.I18N) root.I18N.add("ru", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

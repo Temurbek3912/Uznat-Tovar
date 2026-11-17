@@ -172,4 +172,22 @@ test("категория по-узбекски: карточка называе�
   assert.strictEqual(Assistant.describeBulk({ ...action, where: "brand" }, tr).notes[0], "Выбраны товары, у которых в бренде есть «gazak».");
 });
 
+test("список «товар — цена»: строки «было → станет», нет в каталоге, ошибки по строкам; менять нечего — свой заголовок", () => {
+  const action = { kind: "bulk", field: "price", change: "price_list", value: null, where: "list", query: "", skipped: 1, cut: 3,
+                   rows: [{ sku: "F", name: "Fanta", before: 9000, after: 9500 }],
+                   new: [{ line: "Sprite — 9000", name: "Sprite" }, "мусор"],
+                   errors: [{ line: "Печенье 12000", code: "many", names: ["Oreo", "Prince"], more: 2 }, { line: "Хлеб", code: "rm -rf" }] };
+  const lines = Assistant.describe(action, tr);
+  assert.deepStrictEqual(lines, ["Изменить сразу несколько товаров (1): цены по вашему списку", "«Fanta» (F): 9000 → 9500"]);
+  assert.deepStrictEqual(Assistant.describeBulk(action, tr).notes, [
+    tr("assistant.list_new", { n: 1, list: "Sprite" }),
+    "Строка «Печенье 12000»: подходит несколько товаров (Oreo, Prince, и ещё 2) — напишите название точнее или артикул.",
+    tr("assistant.list_error.no_price", { line: "Хлеб" }),               // неизвестный код — как «нет цены»
+    "Цена уже такая: 1.", tr("assistant.list_cut", { n: 3, max: 50 })]);
+  assert.ok(!Assistant.describeBulk(action, tr).notes.includes(tr("assistant.bulk_skipped", { n: 1 })));
+  assert.strictEqual(Assistant.describe({ ...action, rows: [] }, tr)[0], "По вашему списку менять в каталоге нечего.");
+  ["bad_price", "archived", "repeat"].forEach((k) => tr("assistant.list_error." + k, { line: "x", list: "y" }));
+  tr("assistant.list_hint");
+});
+
 console.log(`\n${passed} passed`);

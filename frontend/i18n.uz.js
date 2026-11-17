@@ -928,7 +928,20 @@
     "assistant.bulk_where.category": "Kategoriyasida «{query}» boʻlgan mahsulotlar tanlandi.",
     "assistant.bulk_where.brand": "Brendida «{query}» boʻlgan mahsulotlar tanlandi.",
     "assistant.bulk_where.name": "Nomida «{query}» boʻlgan mahsulotlar tanlandi.",
-    "assistant.bulk_where.categories": "Kategoriyalar mahsulotlari tanlandi: {list} («{query}» soʻzi boʻyicha)."
+    "assistant.bulk_where.categories": "Kategoriyalar mahsulotlari tanlandi: {list} («{query}» soʻzi boʻyicha).",
+    "assistant.list_hint": "Yangi narxlarni roʻyxat qilib yuborish mumkin: har bir qatorda mahsulot va narx, masalan «Fanta 0,5 — 9500». Yordamchi nima oʻzgarishini koʻrsatadi, «Bajarish» bosilgach oʻzgartiradi.",
+    "assistant.bulk.price_list": "roʻyxatingiz boʻyicha narxlar",
+    "assistant.card_list_nothing": "Roʻyxatingiz boʻyicha katalogda oʻzgartiradigan narsa yoʻq.",
+    "assistant.list_new": "Katalogda yoʻq ({n}): {list}. Yangi mahsulot rasm bilan qoʻshiladi: «… mahsulotini qoʻsh, narxi …» deb yozing yoki uni «Mahsulotlar» sahifasida qoʻshing.",
+    "assistant.list_error.no_price": "«{line}» qatori: narx topilmadi — qator oxiriga son yozing, masalan «— 9500».",
+    "assistant.list_error.bad_price": "«{line}» qatori: narx noldan katta va ortiqcha nollarsiz boʻlishi kerak.",
+    "assistant.list_error.many": "«{line}» qatori: bir nechta mahsulot mos keladi ({list}) — nomini aniqroq yoki artikulini yozing.",
+    "assistant.list_error.archived": "«{line}» qatori: «{list}» mahsuloti arxivda — avval uni katalogga qaytaring.",
+    "assistant.list_error.repeat": "«{line}» qatori: «{list}» mahsuloti roʻyxatda oldin ham bor edi — qator bitta boʻlmaguncha narxi oʻzgarmaydi.",
+    "assistant.list_more": "va yana {n} ta",
+    "assistant.list_cut": "Roʻyxatda {max} tadan koʻp qator bor: birinchi {max} tasi olindi, qolganini ({n}) keyingi xabarda yuboring.",
+    "assistant.list_same": "Narxi allaqachon shunday: {n} ta.",
+    "assistant.list_reply": "Roʻyxatingiz boʻyicha natija."
   };
   if (root.I18N) root.I18N.add("uz", dict);
   else if (typeof module === "object" && module.exports) module.exports = dict;

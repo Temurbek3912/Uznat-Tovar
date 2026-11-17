@@ -20,11 +20,13 @@
   var EXAMPLES = ["assistant.example_scans", "assistant.example_photo", "assistant.example_dupes", "assistant.example_price", "assistant.example_theme"];
   var CARD_STATES = ["ask", "working", "done", "cancelled", "undone", "error"];
   var KINDS = ["update", "status", "add", "bulk"];
-  var BULK_CHANGES = ["price_percent", "price_add", "price_set", "category", "brand", "in_stock", "archive", "restore"];
+  var BULK_CHANGES = ["price_percent", "price_add", "price_set", "category", "brand", "in_stock", "archive", "restore", "price_list"];
   // инструменты-действия: в строке «Смотрел: …» не показываются (их видно по карточке и по строке «Сделано»)
-  var ACTION_TOOLS = ["propose_update", "propose_archive", "propose_add", "propose_bulk", "set_language", "set_theme"];
+  var ACTION_TOOLS = ["propose_update", "propose_archive", "propose_add", "propose_bulk", "set_language", "set_theme", "price_list"];
   var SCAN_DAYS = [7, 30, 90];          // сводка сканов: за сколько дней (сервер хранит сканы 90 дней)
   var SCAN_DAYS_KEY = "assistant_scan_days";
+  var ERROR_CODES = ["no_price", "bad_price", "many", "archived", "repeat"];   // ошибки строк списка «товар — цена»
+  var LIST_MAX = 50;
   var TIPS = ["no_photo", "more_photos", "check_photos", "add_barcode"];
 
   function isObj(x) { return !!x && typeof x === "object" && !Array.isArray(x); }
@@ -133,7 +135,8 @@
     if ((change === "price_percent" || change === "price_add") && typeof value === "number" && value > 0) value = "+" + value;
     var what = change ? t("assistant.bulk." + change, { value: fmtValue(value, t) }) : "";
     var status = action.field === "status";
-    var lines = [t("assistant.card_bulk", { n: rows.length, what: what })];
+    var list = change === "price_list";
+    var lines = [list && !rows.length ? t("assistant.card_list_nothing") : t("assistant.card_bulk", { n: rows.length, what: what })];
     rows.forEach(function (r) {
       var p = { name: String(r.name || ""), sku: String(r.sku || "") };
       if (status) lines.push(t("assistant.bulk_row_status", p));
@@ -148,9 +151,26 @@
     } else if (["category", "brand", "name"].indexOf(action.where) !== -1 && action.query) {
       notes.push(t("assistant.bulk_where." + action.where, { query: String(action.query) }));
     }
-    if (num(action.skipped) > 0) notes.push(t("assistant.bulk_skipped", { n: num(action.skipped) }));
+    if (list) notes = notes.concat(listNotes(action, t));
+    else if (num(action.skipped) > 0) notes.push(t("assistant.bulk_skipped", { n: num(action.skipped) }));
     if (rows.length > 1 && !action.undo) notes.push(t("assistant.bulk_together"));
     return { lines: lines, notes: notes };
+  }
+
+  /** Список «товар — цена» (сервер разобрал его по строкам): чего нет в каталоге, ошибки по строкам, сколько уже с такой ценой. */
+  function listNotes(action, t) {
+    var notes = [], str = function (x) { return typeof x === "string" ? x : ""; };
+    var fresh = (Array.isArray(action["new"]) ? action["new"] : []).filter(isObj).map(function (r) { return str(r.name) || str(r.line); });
+    if (fresh.length) notes.push(t("assistant.list_new", { n: fresh.length, list: fresh.join(", ") }));
+    (Array.isArray(action.errors) ? action.errors : []).filter(isObj).forEach(function (e) {
+      var code = ERROR_CODES.indexOf(e.code) !== -1 ? e.code : "no_price";
+      var names = (Array.isArray(e.names) ? e.names : []).map(str).filter(Boolean);
+      if (num(e.more) > 0) names.push(t("assistant.list_more", { n: num(e.more) }));
+      notes.push(t("assistant.list_error." + code, { line: str(e.line), list: names.join(", ") }));
+    });
+    if (num(action.skipped) > 0) notes.push(t("assistant.list_same", { n: num(action.skipped) }));
+    if (num(action.cut) > 0) notes.push(t("assistant.list_cut", { n: num(action.cut), max: LIST_MAX }));
+    return notes;
   }
 
   function num(x) { return typeof x === "number" && isFinite(x) ? x : 0; }
@@ -378,7 +398,8 @@
         box.appendChild(lab);
       }
       var row = el("div", "chat__actions");
-      if (card.state === "ask" || card.state === "error") {
+      var nothing = bulk && !(Array.isArray(card.action.rows) && card.action.rows.length);    // список, где менять нечего
+      if ((card.state === "ask" || card.state === "error") && !nothing) {
         row.appendChild(button("btn--primary", "assistant.do", function () {
           if (files && (!files.files || !files.files.length)) { card.state = "error"; card.error = t("assistant.add_need_photo"); render(); return; }
           confirm(card, files && files.files);
@@ -470,7 +491,8 @@
           var card = isObj(data.proposal) ? cleanCard({ action: data.proposal, state: "ask" }) : null;
           var ui = cleanUi(data.ui);
           var reply = String(data.reply || "").trim() ||
-                      t(card ? "assistant.proposal_default" : ui.length ? "assistant.ui_default" :
+                      t(card && card.action.kind === "bulk" && !(Array.isArray(card.action.rows) && card.action.rows.length)
+                        ? "assistant.list_reply" : card ? "assistant.proposal_default" : ui.length ? "assistant.ui_default" :
                         data.proposal_error ? "assistant.proposal_not_made" : "assistant.empty_reply");
           var msg = { role: "assistant", content: reply,
                       tools: (Array.isArray(data.tools) ? data.tools : []).map(function (x) { return x && x.name; }).filter(Boolean) };

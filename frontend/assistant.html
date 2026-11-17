@@ -47,13 +47,14 @@
         <form class="chat__form" id="form">
           <label class="field">
             <span class="field__label" data-i18n="assistant.your_question">Ваш вопрос</span>
-            <textarea class="input" id="question" rows="2" maxlength="1500" data-i18n-attr="placeholder:assistant.placeholder"></textarea>
+            <textarea class="input" id="question" rows="2" maxlength="3000" data-i18n-attr="placeholder:assistant.placeholder"></textarea>
           </label>
           <div class="chat__actions">
             <button type="submit" class="btn btn--primary" id="sendBtn" data-i18n="assistant.send">Отправить</button>
             <button type="button" class="btn btn--secondary" id="newBtn" data-i18n="assistant.new_chat">Очистить историю</button>
           </div>
         </form>
+        <p class="hint" data-i18n="assistant.list_hint">Новые цены можно прислать списком: каждая строка — товар и цена, например «Fanta 0,5 — 9500». Помощник покажет, что изменится, а изменит после «Сделать».</p>
         <p class="hint" data-i18n="assistant.caution">Это ответ ИИ: важное проверьте на странице «Товары».</p>
       </section>
     </div>

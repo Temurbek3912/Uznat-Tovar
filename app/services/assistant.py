@@ -181,6 +181,31 @@ _CLAIM = re.compile(r"(?i)(«?сделать»|убран\w* в архив|до�
                     r"bajarish|arxivga|qoʻshildi|oʻzgartirildi|oʻchirildi|do it|archived|been added|been changed|been removed)")
 
 
+# Маленькая модель в ответе по-узбекски (латиница) пишет слова из двух алфавитов («нарxi», «arтикул»), а иногда вставляет
+# китайские слова («生效»). Слово с кириллицей и латиницей сразу всегда ошибка — для узбекской латиницы оно переводится в латиницу
+# целиком; иероглифы убираются на любом языке. Слова только кириллицей (название товара «Печенье») не трогаются.
+_UZ_LAT = dict(zip("абвгдезийклмнопрстуфхцчшъыьэюяёжқғҳўщ",
+                   ["a", "b", "v", "g", "d", "e", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u", "f", "x",
+                    "ts", "ch", "sh", "ʼ", "i", "", "e", "yu", "ya", "yo", "j", "q", "gʻ", "h", "oʻ", "sh"]))
+_MIXED = re.compile(r"\w*(?:[а-яёқғҳў]\w*[a-z]|[a-z]\w*[а-яёқғҳў])\w*", re.I)
+_CJK = re.compile(r"[　-〿぀-ヿ㐀-䶿一-鿿가-힯＀-￯]+")
+
+
+def _to_latin(word: str) -> str:
+    out = []
+    for ch in word:
+        lat = _UZ_LAT.get(ch.lower())
+        out.append(ch if lat is None else (lat.capitalize() if ch.isupper() else lat))
+    return "".join(out)
+
+
+def tidy_text(text: str, lang: str) -> str:
+    text = _CJK.sub("", text)
+    if lang == "uz":
+        text = _MIXED.sub(lambda m: _to_latin(m.group(0)), text)
+    return re.sub(r"[ \t]{2,}", " ", text).strip()
+
+
 def claims_change(text: str) -> bool:
     return bool(_CLAIM.search(text or ""))
 
@@ -251,13 +276,13 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
     try:
         with model_gate.assistant_slot(WAIT_FOR_SLOT):
             for step in range(MAX_STEPS + 1):
-                final = step == MAX_STEPS or bool(proposals.items)    # карточка готова — дальше только ответ владельцу
+                final = step == MAX_STEPS
                 step_answer = _ask_model(post, url, model, convo, answer_schema(tools, final=final))
                 if step_answer is None:
                     break
                 is_tool = bool(step_answer.get("tool")) and step_answer.get("action", "tool") == "tool"
                 if not is_tool or final:
-                    text = str(step_answer.get("text") or "").strip()
+                    text = tidy_text(str(step_answer.get("text") or ""), lang)
                     if (text and not final and not nudged and can_propose and not proposals.items and not failed["error"]
                             and claims_change(text)):
                         nudged = True           # один раз: «карточки нет — вызови инструмент»
@@ -287,6 +312,12 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                 logger.info("ИИ-помощник: инструмент %s (%s)", name if name in names else "?", "ok" if ok else "ошибка")
                 convo.append({"role": "assistant", "content": json.dumps({"tool": name, "args": args}, ensure_ascii=False)})
                 convo.append({"role": "user", "content": _result_text(name, result)})
+                if proposals.items:
+                    # Карточка готова — модель больше не спрашиваем: живая qwen3-vl-4b (2026-11-17) после карточки писала
+                    # «цена установлена», «товар добавлен» ещё до «Сделать», мешала кириллицу с латиницей в узбекском и даже
+                    # вставляла китайские слова. Что меняется, показывает сама карточка; страница пишет свой точный текст
+                    # (assistant.proposal_default) на языке владельца. И ответ на один вызов модели быстрее.
+                    return done("")
     except LookupError as exc:
         raise AssistantBusy() from exc
     if proposals.items or ui or failed["error"]:   # модель не договорила: карточку, язык/тему и ошибку страница покажет сама

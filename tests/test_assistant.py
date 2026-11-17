@@ -69,6 +69,11 @@ def test_find_missing_duplicates_and_details(Session):
     with Session() as db:
         found = T.find_products(db, {"query": "кола", "limit": 99})
         assert found["total"] == 2 and {i["sku"] for i in found["items"]} == {"COLA", "COLA2"}
+        with pytest.raises(T.ToolError, match="уже есть"):    # «0,5 l» латиницей — тот же товар, дубль не предлагается
+            T.run_tool(db, OWNER, "propose_add", {"name": "Кока-кола 0,5 l", "price": "9000"}, None, [])
+        loose = T.find_products(db, {"query": "Кока-кола 0,5 l"})     # латинская l: целиком не нашлось — ищем по слову
+        assert loose["total"] == 2 and "Кока-кола" in loose["note"]
+        assert "note" not in found
         by_code = T.find_products(db, {"query": "4780001234562"})
         assert by_code["items"][0]["sku"] == "COLA" and by_code["items"][0]["barcodes"] == ["4780001234562"]
         assert T.products_missing(db, {"field": "price"})["items"] == [{"sku": "COLA2", "name": "кока-кола  0,5 Л"}]
@@ -345,12 +350,12 @@ def test_system_prompt_stays_short_for_the_small_engine():
 def test_chat_returns_the_proposal_and_page_actions(Session):
     model = FakeModel({"tool": "set_theme", "args": {"theme": "dark"}},
                       {"tool": "propose_update", "args": {"product": "Кока-кола 0,5 л", "field": "price", "value": 15000}},
-                      {"tool": "", "text": "Предлагаю цену 15 000 — нажмите «Сделать»."})
+                      {"tool": "", "text": "Цена установлена."})
     reply = _ask(Session, model, "Поставь коле цену 15000 и тёмный фон")
     assert reply.proposal["changes"] == {"price": 15000.0} and reply.ui == [{"kind": "theme", "value": "dark"}]
     assert reply.proposal["sku"] == "COLA" and not reply.no_card and reply.proposal_error == ""      # нашёлся и по названию
-    after = model.calls[2][1]["response_format"]["json_schema"]["schema"]
-    assert "anyOf" not in after                                        # карточка готова — дальше только ответ
+    # карточка готова — модель больше не спрашивают («цена установлена» до «Сделать»); текст пишет страница
+    assert len(model.calls) == 2 and reply.text == ""
     with Session() as db:
         assert db.query(Product).filter_by(sku="COLA").one().expected_price == 9000     # пока не нажали — не изменилось
     broken = _ask(Session, FakeModel({"action": "tool", "tool": "set_language", "args": {"lang": "en"}, "text": ""}, "не JSON"))

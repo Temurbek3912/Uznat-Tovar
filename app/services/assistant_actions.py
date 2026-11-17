@@ -79,10 +79,23 @@ def _check_name(db, name: str, product_id: str | None) -> str:
     rows = db.query(Product.id, Product.name)
     if product_id:
         rows = rows.filter(Product.id != product_id)
-    duplicate = find_duplicate(clean, [(r.id, r.name) for r in rows.all()])
+    named = [(r.id, r.name) for r in rows.all()]
+    duplicate = find_duplicate(clean, named)
+    if duplicate is None:
+        # Модель пишет латиницей то, что в каталоге кириллицей: «Coca-Cola 0,33 l» при товаре «Coca-Cola 0,33 л» (2026-11-17
+        # на узбекском она так предложила добавить дубль вместо новой цены). Похожие буквы сравниваются как одна.
+        key = _lookalike(clean)
+        duplicate = next((row for row in named if _lookalike(row[1] or "") == key), None)
     if duplicate:
-        raise ActionError(f"Товар с таким названием уже есть: «{duplicate[1]}».")
+        raise ActionError(f"Товар с таким названием уже есть: «{duplicate[1]}». Чтобы его изменить — propose_update.")
     return clean
+
+
+_LOOKALIKE = str.maketrans("авеклмнорстухгё", "abeklmhopctyxge")
+
+
+def _lookalike(name: str) -> str:
+    return " ".join(name.lower().replace("ʻ", "'").translate(_LOOKALIKE).split())
 
 
 def _in_stock(value) -> bool | None:

@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -124,12 +125,26 @@ def find_products(db, args: dict) -> dict:
     if not query:
         raise ToolError("Нужен аргумент query: что искать (название, бренд, артикул или штрихкод).")
     q, exact = apply_search(db, _active(db), query)
+    total, by_word = q.count(), ""
+    if not total:
+        # Поиск ищет фразу целиком, а модель пишет её по-своему: «Coca-Cola 0,33 l» (латинская l) при товаре «0,33 л» не
+        # находилось ничего. Тогда — по самому длинному слову фразы, и модель видит, по какому слову нашлось.
+        for word in sorted({w for w in re.split(r"[\s,.;:()«»\"']+", query) if len(w) >= 3}, key=lambda w: (-len(w), w)):
+            if word == query:
+                continue
+            q, exact = apply_search(db, _active(db), word)
+            total = q.count()
+            if total:
+                by_word = word
+                break
     order = (exact.desc(), Product.sku) if exact is not None else (Product.sku,)
-    total = q.count()
     products = q.order_by(*order).limit(_limit(args)).all()
     ids = [p.id for p in products]
     codes, photos = _codes_of(db, ids), _photo_counts(db, ids)
-    return {"query": query, "total": total, "items": [_row(p, codes, photos) for p in products]}
+    out = {"query": query, "total": total, "items": [_row(p, codes, photos) for p in products]}
+    if by_word:
+        out["note"] = f"Точного совпадения нет; найдено по слову «{by_word}» — проверь, тот ли это товар."
+    return out
 
 
 def products_missing(db, args: dict) -> dict:
@@ -243,10 +258,7 @@ def run_tool(db, user: CurrentUser, name: str, args, proposals: actions.Proposal
     clean = {k: v for k, v in (args if isinstance(args, dict) else {}).items() if k in tool.args}
     try:
         if tool.kind == "propose":
-            out = tool.run(db, clean, proposals if proposals is not None else actions.Proposals())
-            if out.get("proposed"):
-                out["next"] = "Скажи владельцу, что предлагаешь, и что изменится только после кнопки «Сделать»."
-            return out
+            return tool.run(db, clean, proposals if proposals is not None else actions.Proposals())
         if tool.kind == "ui":
             act = tool.run(clean)
             if ui is not None:

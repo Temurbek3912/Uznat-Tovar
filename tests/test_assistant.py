@@ -112,15 +112,20 @@ def test_scan_problems_shows_weak_products_missing_ones_and_advice(Session, monk
         db.commit()
         monkeypatch.setattr(T, "_photo_counts", lambda _db, pids: {ids["COLA"]: 4, ids["BREAD"]: 1, ids["COLA2"]: 1})
         out = T.run_tool(db, OWNER, "scan_problems", {"days": "30"})
-        assert out["scans"] == 11 and "узнано 5, неуверенно 2, товара нет в каталоге 3, не понято 1" in out["summary"]
+        assert out["scans"] == 11 and "уверенно — 5, неуверенно — 2; товара не было в каталоге — 3; не поняла, что на фото, — 1" in out["summary"]
         assert [w["sku"] for w in out["weak"]] == ["COLA", "BREAD"]           # COLA2: 1 скан и уверенно — не в списке
         cola, bread = out["weak"]
         assert cola["unsure"] == 2 and "этикетки" in cola["advice"] and "штрихкод" not in cola["advice"]   # код у COLA есть
         assert bread["scans"] == 3 and "2–3 фото" in bread["advice"]
         assert out["missing"][0] == {"name": "Pepsi 1 л", "times": 2} and {"name": "без названия (Напиток)", "times": 1} in out["missing"]
         assert "добавьте" in out["missing_advice"] and "not_understood_advice" not in out and "note" not in out
-        assert "неуверенно 3" in T.scan_problems(db, {"days": 90})["summary"] and T.scan_problems(db, {"days": 999})["days"] == 90
+        assert "неуверенно — 3" in T.scan_problems(db, {"days": 90})["summary"] and T.scan_problems(db, {"days": 999})["days"] == 90
         assert len(json.dumps(out, ensure_ascii=False)) < A.MAX_RESULT_CHARS
+        # «без названия (вид)» — на языке владельца (модель это не переводит); язык даёт сервер, модель подставить не может
+        assert {"name": "nomsiz (Ichimlik)", "times": 1} in T.run_tool(db, OWNER, "scan_problems", {}, lang="uz")["missing"]
+        assert {"name": "номсиз (Ичимлик)", "times": 1} in T.run_tool(db, OWNER, "scan_problems", {}, lang="uz-Cyrl")["missing"]
+        forged = T.run_tool(db, OWNER, "scan_problems", {"_lang": "uz"})
+        assert {"name": "без названия (Напиток)", "times": 1} in forged["missing"]
         db.add(ScanEventORM(at=now - timedelta(days=scan_log.KEEP_DAYS + 1), status="unknown"))
         db.commit()
         assert scan_log.purge_old(db) == 1
@@ -210,6 +215,51 @@ def test_after_scan_problems_the_model_may_only_answer(Session):
     uz = FakeModel({"tool": "scan_problems", "args": {}}, {"tool": "", "text": "Skanlar yoʻq."})
     _ask(Session, uz, "Qaysi tovarlar yomon taniladi?", lang="uz")
     assert uz.calls[1][1]["messages"][-1]["content"].endswith("Ответ — на узбекском (латиница, апостроф ʻ) языке.")
+
+
+def test_count_of_missing_is_answered_at_once(Session):
+    """«Сколько товаров без штрихкода?» — живая модель брала первый товар списка, открывала его и предлагала ему выдуманный
+    штрихкод. Теперь у итога готовая фраза с числом, и после него модель только отвечает."""
+    with Session() as db:
+        out = T.products_missing(db, {"field": "barcode"})
+        assert out["summary"] == "Товаров без штрихкода: 3 из 4." and out["total"] == 3
+        assert "первые 1" in T.products_missing(db, {"field": "barcode", "limit": 1})["summary"]
+    model = FakeModel({"tool": "products_missing", "args": {"field": "barcode"}},
+                      {"tool": "", "text": "Без штрихкода 3 товара."})
+    reply = _ask(Session, model, "Сколько товаров без штрихкода?")
+    assert reply.text == "Без штрихкода 3 товара." and reply.tools == [{"name": "products_missing", "ok": True}]
+    second = model.calls[1][1]["response_format"]["json_schema"]["schema"]
+    assert "anyOf" not in second and second["properties"]["tool"]["enum"] == [""]
+
+
+def test_assistant_never_invents_a_barcode(Session):
+    """Штрихкод — только из слов владельца: выдуманный код не даёт карточку, владелец видит, почему."""
+    code = "4780001234579"
+    made_up = FakeModel({"tool": "propose_update", "args": {"product": "BREAD", "field": "add_barcode", "value": code}},
+                        {"tool": "", "text": "Не вышло."})
+    reply = _ask(Session, made_up, "Добавь хлебу штрихкод")
+    assert reply.proposal is None and "не придумывает" in reply.proposal_error
+    assert reply.tools == [{"name": "propose_update", "ok": False}]
+    said = FakeModel({"tool": "propose_update", "args": {"product": "BREAD", "field": "add_barcode", "value": code}})
+    reply = _ask(Session, said, "Добавь хлебу штрихкод 478 0001 234579")         # с пробелами — тот же код
+    assert reply.proposal and reply.proposal["sku"] == "BREAD" and reply.proposal_error == ""
+    price = FakeModel({"tool": "propose_update", "args": {"product": "BREAD", "field": "price", "value": 5000}})
+    assert _ask(Session, price, "Подними цену хлеба на 1000").proposal["changes"] == {"price": 5000.0}  # цену можно посчитать
+
+
+def test_every_tool_has_a_label_on_the_page():
+    """Под ответом страница пишет «Смотрел: …» — без подписи владелец видел имя «scan_problems»."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "frontend"
+    for name in ("i18n.ru.js", "i18n.uz.js", "i18n.uz-cyrl.js", "i18n.en.js"):
+        text = (root / name).read_text(encoding="utf-8")
+        assert [t.name for t in T.TOOLS if f'"assistant.tool.{t.name}":' not in text] == [], name
+
+
+def test_uzbek_apostrophe_is_the_one_the_pages_use():
+    assert A.tidy_text("qo'shing, yo’q, g'alla, ma'lumot, 'Pepsi'", "uz") == "qoʻshing, yoʻq, gʻalla, ma'lumot, 'Pepsi'"
+    assert A.tidy_text("Hot dog's", "ru") == "Hot dog's"
 
 
 def test_model_calls_a_tool_then_answers_from_the_data(Session):

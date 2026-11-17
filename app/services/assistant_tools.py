@@ -34,6 +34,8 @@ from app.services.product_search import apply_search
 MAX_ROWS = 20                   # больше строк модель всё равно не прочитает внимательно, а память разговора маленькая
 MAX_TEXT = 120                  # длинное описание и состав — обрезаются
 MISSING_FIELDS = ("photo", "barcode", "price", "brand", "category")
+MISSING_LABELS = {"photo": "без фото", "barcode": "без штрихкода", "price": "без цены", "brand": "без бренда",
+                  "category": "без категории"}
 
 
 class ToolError(ValueError):
@@ -51,6 +53,10 @@ class Tool:
     required: tuple = ()        # обязательные аргументы — модель не сможет их пропустить (своя JSON-схема у каждого инструмента)
     choices: dict = field(default_factory=dict)     # {аргумент: [допустимые значения]}
     answer_next: bool = False   # после успешного вызова модель только отвечает: итог уже полный (иначе она «перепроверяет»)
+    wants_lang: bool = False    # инструмент получает язык владельца (args[LANG_ARG]) — от сервера, не от модели
+
+
+LANG_ARG = "_lang"              # не в args инструмента: модель его не видит и подставить не может
 
 
 def _cut(value, limit: int = MAX_TEXT):
@@ -169,7 +175,13 @@ def products_missing(db, args: dict) -> dict:
     }[field]
     found = [p for p in products if test(p)]
     limit = _limit(args)
-    return {"field": field, "total": len(found), "items": [{"sku": p.sku, "name": _cut(p.name)} for p in found[:limit]]}
+    # Готовая фраза с числом: живая qwen3-vl-4b (2026-11-17) на «Сколько товаров без штрихкода?» брала первый товар списка,
+    # смотрела его карточку и предлагала ему выдуманный штрихкод — вместо ответа числом.
+    summary = f"Товаров {MISSING_LABELS[field]}: {len(found)} из {len(products)}."
+    if len(found) > limit:
+        summary += f" Ниже первые {limit}; весь список — на странице «Товары»."
+    return {"field": field, "total": len(found), "summary": summary,
+            "items": [{"sku": p.sku, "name": _cut(p.name)} for p in found[:limit]]}
 
 
 def similar_names(db, args: dict) -> dict:
@@ -211,20 +223,25 @@ OFTEN = 3                       # «часто сканируют» — от с�
 SHOW_ROWS = 8                   # строк в каждом списке: итог для модели — до 2000 знаков
 
 
-_KINDS: dict[str, str] | None = None
+_KINDS: dict[str, dict[str, str]] = {}
+_I18N_FILES = {"ru": "i18n.ru.js", "uz": "i18n.uz.js", "uz-Cyrl": "i18n.uz-cyrl.js", "en": "i18n.en.js"}
+# «без названия (вид)» — сразу на языке владельца: живая qwen3-vl-4b (2026-11-17) в узбекском ответе оставляла
+# «без названия (Молочный продукт)» по-русски — то, что похоже на название товара, она не переводит.
+_NO_NAME = {"ru": "без названия", "uz": "nomsiz", "uz-Cyrl": "номсиз", "en": "no name"}
 
 
-def _kind_label(code: str) -> str:
-    """Код вида (drink) -> подпись по-русски из словаря страниц (frontend/i18n.ru.js, kind.<код>); модель переведёт сама.
-    Код без подписи — как есть: «dairy» модель печатала владельцу прямо так."""
-    global _KINDS
-    if _KINDS is None:
+def _kind_label(code: str, lang: str = "ru") -> str:
+    """Код вида (drink) -> подпись на языке владельца из словаря страниц (frontend/i18n.<язык>.js, kind.<код>).
+    Нет подписи на этом языке — по-русски; нет и её — код как есть («dairy» модель печатала владельцу прямо так)."""
+    lang = lang if lang in _I18N_FILES else "ru"
+    if lang not in _KINDS:
         try:
-            text = (Path(__file__).resolve().parents[2] / "frontend" / "i18n.ru.js").read_text(encoding="utf-8")
-            _KINDS = dict(re.findall(r'"kind\.(\w+)":\s*"([^"]+)"', text))
+            text = (Path(__file__).resolve().parents[2] / "frontend" / _I18N_FILES[lang]).read_text(encoding="utf-8")
+            _KINDS[lang] = dict(re.findall(r'"kind\.(\w+)":\s*"([^"]+)"', text))
         except OSError:
-            _KINDS = {}
-    return _KINDS.get(code, code)
+            _KINDS[lang] = {}
+    label = _KINDS[lang].get(code)
+    return label if label else (code if lang == "ru" else _kind_label(code, "ru"))
 
 
 def _days(args: dict) -> int:
@@ -252,6 +269,7 @@ def scan_problems(db, args: dict) -> dict:
     """«Почему не узнал» (документ 16, §10.5): по сканам покупателей за N дней (app/services/scan_log.py) — товары, которые
     узнавались неуверенно или часто сканируются при 1–2 фото; что сканировали, а в каталоге этого нет; сколько не поняли совсем."""
     days = _days(args)
+    lang = args.get(LANG_ARG) if args.get(LANG_ARG) in _NO_NAME else "ru"
     since = utcnow() - timedelta(days=days)
     rows = db.query(ScanEventORM.status, ScanEventORM.product_id, ScanEventORM.guess_name, ScanEventORM.guess_kind) \
         .filter(ScanEventORM.at >= since).all()
@@ -259,8 +277,11 @@ def scan_problems(db, args: dict) -> dict:
     counts = Counter(r.status for r in rows)
     # Счёт — сканов, а не товаров: с полями «unsure: 7» модель писала «7 товаров не распознаются». Готовая фраза summary
     # переписывается моделью без ошибок.
-    out = {"days": days, "scans": len(rows), "summary": (f"За {days} дн. покупатели сделали {len(rows)} сканов: узнано {counts['matched']}, неуверенно "
-                       f"{counts['uncertain']}, товара нет в каталоге {counts['not_in_catalog']}, не понято {counts['unknown']}.")}
+    # «Программа узнала» — с подлежащим: с «узнано …» модель писала «покупатели не узнают товары».
+    out = {"days": days, "scans": len(rows), "summary": (
+        f"За {days} дн. покупатели сделали {len(rows)} сканов. Из этих сканов программа узнала товар уверенно — "
+        f"{counts['matched']}, неуверенно — {counts['uncertain']}; товара не было в каталоге — {counts['not_in_catalog']}; "
+        f"не поняла, что на фото, — {counts['unknown']}.")}
     if first is None:
         out["note"] = "Сканов покупателей ещё нет: программа начала их считать с этого обновления."
     per: dict[str, list[int]] = {}
@@ -284,7 +305,8 @@ def scan_problems(db, args: dict) -> dict:
     shown: dict[str, str] = {}
     for r in rows:
         if r.status == "not_in_catalog":
-            label = (r.guess_name or "").strip() or (f"без названия ({_kind_label(r.guess_kind)})" if r.guess_kind else "")
+            label = (r.guess_name or "").strip() or (f"{_NO_NAME[lang]} ({_kind_label(r.guess_kind, lang)})"
+                                                     if r.guess_kind else "")
             if label:
                 key = " ".join(text_search.normalize(label).split())
                 names[key] += 1
@@ -307,7 +329,7 @@ TOOLS: tuple[Tool, ...] = (
     Tool("products_missing", Permission.CATALOG_READ,
          "Товары, у которых нет фото, штрихкода, цены, бренда или категории.",
          {"field": "|".join(MISSING_FIELDS), "limit": "до 20"}, products_missing,
-         required=("field",), choices={"field": list(MISSING_FIELDS)}),
+         required=("field",), choices={"field": list(MISSING_FIELDS)}, answer_next=True),
     Tool("similar_names", Permission.CATALOG_READ,
          "Возможные дубли: товары с одинаковым названием.",
          {"limit": "до 20"}, similar_names),
@@ -316,7 +338,7 @@ TOOLS: tuple[Tool, ...] = (
          {"product": "артикул или штрихкод"}, product_details, required=("product",)),
     Tool("scan_problems", Permission.CATALOG_READ,
          "Почему не узнаёт: сканы покупателей за days дней — что узнаётся плохо, кому нужно больше фото, чего нет в каталоге.",
-         {"days": "1–90, обычно 30"}, scan_problems, answer_next=True),
+         {"days": "1–90, обычно 30"}, scan_problems, answer_next=True, wants_lang=True),
 )
 TOOLS += (
     Tool("propose_update", Permission.CATALOG_WRITE,
@@ -349,13 +371,15 @@ def allowed_tools(user: CurrentUser) -> list[Tool]:
 
 
 def run_tool(db, user: CurrentUser, name: str, args, proposals: actions.Proposals | None = None,
-             ui: list | None = None) -> dict:
+             ui: list | None = None, lang: str = "ru") -> dict:
     """Вызов от имени пользователя: инструмент должен существовать И быть разрешён ему; лишние аргументы отбрасываются.
     Предложения складываются в proposals (база не меняется), действия страницы — в ui."""
     tool = _BY_NAME.get(name)
     if tool is None or not user.has_permission(tool.permission):
         raise ToolError(f"Инструмента «{_cut(str(name), 40)}» нет или он вам недоступен.")
     clean = {k: v for k, v in (args if isinstance(args, dict) else {}).items() if k in tool.args}
+    if tool.wants_lang:
+        clean[LANG_ARG] = lang
     try:
         if tool.kind == "propose":
             return tool.run(db, clean, proposals if proposals is not None else actions.Proposals())

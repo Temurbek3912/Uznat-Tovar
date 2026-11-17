@@ -188,6 +188,7 @@ _UZ_LAT = dict(zip("абвгдезийклмнопрстуфхцчшъыьэюя
                    ["a", "b", "v", "g", "d", "e", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u", "f", "x",
                     "ts", "ch", "sh", "ʼ", "i", "", "e", "yu", "ya", "yo", "j", "q", "gʻ", "h", "oʻ", "sh"]))
 _MIXED = re.compile(r"\w*(?:[а-яёқғҳў]\w*[a-z]|[a-z]\w*[а-яёқғҳў])\w*", re.I)
+_UZ_APOS = re.compile(r"([oOgG])['’‘`](?=[a-zA-Z])")
 _CJK = re.compile(r"[　-〿぀-ヿ㐀-䶿一-鿿가-힯＀-￯]+")
 
 
@@ -203,7 +204,21 @@ def tidy_text(text: str, lang: str) -> str:
     text = _CJK.sub("", text)
     if lang == "uz":
         text = _MIXED.sub(lambda m: _to_latin(m.group(0)), text)
+        # oʻ и gʻ — с ʻ (U+02BB), как на страницах; модель пишет «qo'shing», «yo'q» обычным апострофом.
+        text = _UZ_APOS.sub(lambda m: m.group(1) + "ʻ", text)
     return re.sub(r"[ \t]{2,}", " ", text).strip()
+
+
+def invented_code(name: str, args: dict, history: list[dict]) -> None:
+    """Штрихкод берётся только из слов владельца. Живая qwen3-vl-4b (2026-11-17) на «Сколько товаров без штрихкода?»
+    предложила товару код «1234567890123» — придумала сама (спасла только контрольная цифра). Цифры кода должны быть в одной
+    из реплик владельца (пробелы и дефисы между цифрами не важны). Иначе — ToolError: текст увидят и модель, и владелец."""
+    if name != "propose_update" or not isinstance(args, dict) or args.get("field") != "add_barcode":
+        return
+    code = re.sub(r"\D", "", str(args.get("value") or ""))
+    said = [re.sub(r"\D", "", m["content"]) for m in history if m.get("role") == "user"]
+    if not code or not any(code in digits for digits in said):
+        raise ToolError("Штрихкод помощник не придумывает: напишите цифры кода с упаковки.")
 
 
 def claims_change(text: str) -> bool:
@@ -299,7 +314,8 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                 name = str(step_answer.get("tool") or "")
                 args = step_answer.get("args") if isinstance(step_answer.get("args"), dict) else {}
                 try:
-                    result, ok = assistant_tools.run_tool(db, user, name, args, proposals, ui), True
+                    invented_code(name, args, history)
+                    result, ok = assistant_tools.run_tool(db, user, name, args, proposals, ui, lang), True
                 except ToolError as exc:
                     result, ok = {"error": str(exc)}, False
                     if name.startswith("propose_"):

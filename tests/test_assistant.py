@@ -752,3 +752,85 @@ def test_missing_category_tool_is_redirected_when_the_owner_names_a_category(Ses
     plain = FakeModel({"tool": "products_missing", "args": {"field": "category"}}, {"tool": "", "text": "Один: Хлеб."})
     reply = _ask(Session, plain, "Сколько товаров без категории?")    # «Без категории» — не названная категория
     assert reply.text == "Один: Хлеб." and not any("ПРОВЕРКА" in m["content"] for m in plain.calls[1][1]["messages"])
+
+
+def test_price_words_tell_raise_by_from_set_to():
+    """«Поднять на 1000» ≠ «поставить 1000»: вид изменения цены — по словам владельца, а не по выбору модели."""
+    from app.services.price_words import meant
+    cases = {
+        ("Gazli ichimliklar narxini 1000 soʻmga oshiring", 1000): ("price_add", 1000),
+        ("Подними цену Fanta на 1000", 1000): ("price_add", 1000),
+        ("Fanta narxini 1000 ga arzonlashtiring", 1000): ("price_add", -1000),
+        ("Снизь цену на 2 тысячи", 2000): ("price_add", -2000),
+        ("Снизь цены на сладости на 10%", 10): ("price_percent", -10),
+        ("Shirinliklar narxini 5 foiz tushiring", 5): ("price_percent", -5),
+        ("Подними цену до 10 000", 10000): ("price_set", 10000),
+        ("Fanta narxini 10 000 soʻmgacha koʻtaring", 10000): ("price_set", 10000),
+        ("Сделай всем напиткам цену 8000", 8000): ("price_set", 8000),
+        ("Barcha ichimliklar narxini 8000 qiling", 8000): ("price_set", 8000),
+        ("Подними цену", 500): None,                               # числа нет в словах — решает не программа
+        ("Цены на 10% выше или ниже?", 10): None,                  # и вверх, и вниз — непонятно
+    }
+    for (said, value), expected in cases.items():
+        assert meant(said, value) == expected, said
+
+
+def test_raise_by_an_amount_is_not_a_new_price(Session):
+    """Живая модель на «… narxini 1000 soʻmga oshiring» звала price_set (9000 → 1000), а для одного товара —
+    propose_update(price=1000). Программа исправляет вид изменения; новую цену одного товара считает сама."""
+    bulk = FakeModel({"tool": "propose_bulk", "args": {"where": "category", "query": "Напитки", "change": "price_set",
+                                                       "value": 1000}})
+    card = _ask(Session, bulk, "Ichimliklar narxini 1000 soʻmga oshiring", lang="uz").proposal
+    assert card["change"] == "price_add" and [r["after"] for r in card["rows"]] == [10000.0]   # у COLA2 нет цены — пропущен
+    one = FakeModel({"tool": "propose_update", "args": {"product": "COLA", "field": "price", "value": 1000}})
+    assert _ask(Session, one, "Kola narxini 1000 soʻmga oshiring", lang="uz").proposal["changes"] == {"price": 10000.0}
+    down = FakeModel({"tool": "propose_update", "args": {"product": "BREAD", "field": "price", "value": 500}})
+    assert _ask(Session, down, "Снизь цену хлеба на 500").proposal["changes"] == {"price": 3500.0}
+    same = FakeModel({"tool": "propose_update", "args": {"product": "BREAD", "field": "price", "value": 5000}})
+    assert _ask(Session, same, "Поставь хлебу цену 5000").proposal["changes"] == {"price": 5000.0}
+    no_price = FakeModel({"tool": "propose_update", "args": {"product": "COLA2", "field": "price", "value": 1000}},
+                         {"tool": "", "text": "Не вышло."})
+    reply = _ask(Session, no_price, "Подними цену COLA2 на 1000")
+    assert reply.proposal is None and "нет цены" in reply.proposal_error
+
+
+def test_uzbek_category_change_of_one_product_is_done_by_the_program(Session):
+    """«Fanta kategoriyasini gazaklar qiling»: живая модель звала «в архив», «новый товар», «товары без категории» (а та
+    уводила в «все снеки — в архив») или выдумывала категорию. Фразу разбирает программа и сама готовит карточку."""
+    for first in ({"tool": "propose_archive", "args": {"product": "BREAD", "status": "archived"}},
+                  {"tool": "catalog_overview", "args": {}},
+                  {"tool": "products_missing", "args": {"field": "category"}},
+                  {"tool": "propose_update", "args": {"product": "BREAD", "field": "category", "value": "Разное"}}):
+        model = FakeModel(first)
+        reply = _ask(Session, model, "Хлеб kategoriyasini ichimliklar qiling", lang="uz")
+        assert reply.proposal["kind"] == "update" and reply.proposal["changes"] == {"category": "Напитки"}, first
+        assert len(model.calls) == 1 and reply.tools == [{"name": "propose_update", "ok": True}]
+    cyr = FakeModel({"tool": "products_missing", "args": {"field": "category"}})
+    reply = _ask(Session, cyr, "Хлеб категориясини ичимликлар қилинг", lang="uz")
+    assert reply.proposal["kind"] == "update" and reply.proposal["changes"] == {"category": "Напитки"}  # не «все — в архив»
+    new = FakeModel({"tool": "propose_update", "args": {"product": "BREAD", "field": "category", "value": "Напитки"}})
+    assert _ask(Session, new, "Хлеб kategoriyasini Yozgi qiling", lang="uz").proposal["changes"] == {"category": "Yozgi"}
+    every = FakeModel({"tool": "catalog_overview", "args": {}})
+    card = _ask(Session, every, "Barcha ichimliklar kategoriyasini Desertlarga oʻtkazing", lang="uz").proposal
+    assert card["kind"] == "bulk" and card["value"] == "Desertlar" and sorted(r["sku"] for r in card["rows"]) == ["COLA", "COLA2"]
+
+
+def test_wrong_tool_for_a_category_change_is_sent_back(Session):
+    """По-русски: не тот инструмент (архив, новый товар) — если товар и категория по словарю понятны, карточку готовит
+    программа, иначе реплика программы просит propose_update. Категорию, которую владелец не называл, помощник не предлагает.
+    Новый товар с категорией — как раньше."""
+    known = FakeModel({"tool": "propose_archive", "args": {"product": "BREAD", "status": "archived"}})
+    reply = _ask(Session, known, "Перенеси хлеб в категорию напитки")
+    assert reply.proposal["kind"] == "update" and reply.proposal["changes"] == {"category": "Напитки"}
+    model = FakeModel({"tool": "propose_archive", "args": {"product": "BREAD", "status": "archived"}},
+                      {"tool": "propose_update", "args": {"product": "BREAD", "field": "category", "value": "Летние"}})
+    reply = _ask(Session, model, "Перенеси хлеб в категорию Летние")
+    assert reply.proposal["kind"] == "update" and reply.proposal["changes"] == {"category": "Летние"}
+    sent = [m["content"] for m in model.calls[1][1]["messages"]]
+    assert any("ПРОВЕРКА ПРОГРАММЫ" in m and "product=BREAD" in m and "field=category" in m for m in sent)
+    invented = FakeModel({"tool": "propose_update", "args": {"product": "BREAD", "field": "category", "value": "Разное"}},
+                         {"tool": "", "text": "Не вышло."})
+    reply = _ask(Session, invented, "Перенеси хлеб в категорию напитки")
+    assert reply.proposal is None and "не называл" in reply.proposal_error
+    add = FakeModel({"tool": "propose_add", "args": {"name": "Спрайт 0,5 л", "price": 8000, "category": "Напитки"}})
+    assert _ask(Session, add, "Добавь товар Спрайт 0,5 л, цена 8000, категория напитки").proposal["kind"] == "add"

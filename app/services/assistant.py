@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 
 from app.core.security import CurrentUser
 from app.db.models import PRODUCT_ACTIVE, Product
-from app.services import assistant_actions, assistant_tools, category_words, model_gate
+from app.services import assistant_actions, assistant_tools, category_words, model_gate, price_words
 from app.services.assistant_tools import ToolError
 from app.services.catalog_upload import DEFAULT_CATEGORY
 
@@ -259,6 +259,25 @@ def invented_number(name: str, args: dict, history: list[dict]) -> None:
         raise ToolError("Число для цены помощник не придумывает: напишите его (например, «на 10%» или «цена 8000»).")
 
 
+def invented_category(name: str, args: dict, history: list[dict]) -> None:
+    """Новая категория — из слов владельца (или то же понятие по словарю category_words). Живая qwen3-vl-4b (2026-11-17) на
+    «Fanta kategoriyasini Yozgi qiling» предложила категорию «Напитки» — придумала сама."""
+    if not isinstance(args, dict):
+        return
+    is_single = name == "propose_update" and str(args.get("field") or "").lower() == "category"
+    if not (is_single or (name == "propose_bulk" and str(args.get("change") or "").lower() == "category")):
+        return
+    value = str(args.get("value") or "")
+    said = " ".join(str(m.get("content") or "") for m in history if m.get("role") == "user")
+    words = re.findall(r"[a-z0-9]+", category_words.latin(said))
+    own = [w for w in re.findall(r"[a-z0-9]+", category_words.latin(value)) if len(w) >= 3]
+    if not own or all(any(w.startswith(v[:5]) for w in words) for v in own):
+        return
+    if set(category_words.groups_of(value)) & set(category_words.groups_of(said)):
+        return
+    raise ToolError(f"Категорию «{value}» владелец не называл: возьмите её из его слов, как он написал.")
+
+
 def named_categories(db, name: str, args: dict, history: list[dict]) -> list[str]:
     """Категории каталога, названные в последней реплике владельца, — если модель вместо них ищет «товары без категории».
     Живая qwen3-vl-4b (2026-11-17) на «Убери в архив все газированные напитки» (и по-узбекски «Barcha gazli ichimliklarni
@@ -266,11 +285,108 @@ def named_categories(db, name: str, args: dict, history: list[dict]) -> list[str
     if name != "products_missing" or str(args.get("field") or "").lower() not in ("category", "brand"):
         return []
     said = next((m["content"] for m in reversed(history) if m.get("role") == "user"), "")
+    if _uz_category(said):          # «Фанта категориясини газаклар қилинг» — смена категории, а не «все снеки в архив»
+        return []
     cats = [c for (c,) in db.query(Product.category).filter(Product.status == PRODUCT_ACTIVE).distinct().all()
             if c and c != DEFAULT_CATEGORY]
     text = category_words.latin(said)
     direct = [c for c in cats if category_words.latin(c) in text]
     return sorted(set(direct) | set(category_words.matching_categories(said, cats)))[:5]
+
+
+def _last_said(history: list[dict]) -> str:
+    return next((str(m.get("content") or "") for m in reversed(history) if m.get("role") == "user"), "")
+
+
+def price_meant(db, name: str, args: dict, history: list[dict]) -> dict:
+    """«Поднять на 1000» ≠ «поставить 1000»: вид изменения цены — по словам владельца (app/services/price_words.py).
+    Живая qwen3-vl-4b (2026-11-17) на «… narxini 1000 soʻmga oshiring» и «Подними цену Fanta на 1000» звала price_set
+    (массово) или propose_update(price=1000) (один товар) — карточка 9000 → 1000. Возвращает исправленные args."""
+    if not isinstance(args, dict):
+        return args
+    if name == "propose_bulk" and str(args.get("change") or "").lower() in ("price_percent", "price_add", "price_set"):
+        found = price_words.meant(_last_said(history), args.get("value"))
+        if found:
+            return {**args, "change": found[0], "value": found[1]}
+        return args
+    if name != "propose_update" or str(args.get("field") or "").lower() != "price":
+        return args
+    found = price_words.meant(_last_said(history), args.get("value"))
+    product = assistant_actions.find_product(db, str(args.get("product") or "")) if found else None
+    if not found or found[0] == "price_set" or product is None:
+        return args
+    if product.expected_price is None:
+        raise ToolError(f"У товара «{product.name}» нет цены — поднять или снизить её нельзя. Напишите новую цену.")
+    try:
+        new = assistant_actions._bulk_after(found[0], found[1], product)     # та же арифметика, что у массового изменения
+    except assistant_actions.ActionError as exc:
+        raise ToolError(str(exc)) from exc
+    return {**args, "value": new}
+
+
+_CATEGORY_CHANGE = re.compile(r"kategori")
+_NOT_CATEGORY_CHANGE = re.compile(r"arhiv|ochir|udal|ubra|uber|dobav|qosh|yangi|nov(?:yy|yi|ogo)")
+_A = "[ʻ'’`]?"
+# «Fanta kategoriyasini gazaklar qiling», «Fanta kategoriyasini Snekilarga oʻtkazing» (и кириллицей): товар, категория, глагол
+_UZ_CATEGORY = re.compile(
+    r"^\s*(?P<product>.+?)\s+(?:kategoriya|категория)(?:si|си)?(?:ni|ни)?\s+(?P<cat>.+?)\s+"
+    rf"(?P<verb>(?:qil|qo{_A}y|o{_A}tkaz|o{_A}zgartir|almashtir|қил|қўй|ўтказ|ўзгартир|алмаштир)\w*)\s*[.!]?\s*$", re.I)
+
+
+def _uz_category(said: str) -> tuple[str, str] | None:
+    """Узбекская фраза «X kategoriyasini Y qiling» → (X, Y как сказал владелец) или None."""
+    match = _UZ_CATEGORY.match(said or "")
+    if not match:
+        return None
+    cat = re.sub(r"\s+(?:qilib|қилиб)$", "", match.group("cat").strip(" «»\"'"), flags=re.I)
+    if not match.group("verb").lower().startswith(("qil", "қил", "qo", "қўй")):       # «…ga oʻtkazing» — без «-ga»
+        cat = re.sub(r"(?:ga|ka|qa|га|ка|қа)$", "", cat, flags=re.I) or cat
+    return match.group("product").strip(" «»\"'"), cat
+
+
+_ALL = re.compile(r"^(?:barcha|hamma|butun)\s+(.+)$")
+
+
+def category_meant(db, name: str, args: dict, history: list[dict]) -> tuple[str, dict | None, str]:
+    """Владелец меняет категорию, а модель зовёт не тот инструмент. Живая qwen3-vl-4b (2026-11-17) на «Fanta kategoriyasini
+    gazaklar qiling» звала propose_archive (карточка «в архив»), propose_add или products_missing(category) (а та уводила в
+    «все снеки — в архив»), на «Fanta kategoriyasini Yozgi qiling» — propose_update с выдуманной категорией «Напитки», после
+    реплики «ПРОВЕРКА ПРОГРАММЫ» отвечала текстом без карточки.
+
+    Поэтому узбекскую фразу «X kategoriyasini Y qiling» разбирает программа и сама зовёт propose_update (один товар) или
+    propose_bulk («Barcha shirinliklar …») — какой бы инструмент ни выбрала модель. Ответ: (инструмент, args, "") — позвать его;
+    ("", None, реплика «ПРОВЕРКА ПРОГРАММЫ») — модель взяла архив/новый товар вместо смены категории; ("", None, "") — не то."""
+    if not isinstance(args, dict) or name in ("set_language", "set_theme"):
+        return "", None, ""
+    said = _last_said(history)
+    text = category_words.latin(said)
+    if not _CATEGORY_CHANGE.search(text) or _NOT_CATEGORY_CHANGE.search(text):
+        return "", None, ""
+    phrase = _uz_category(said)
+    product = None
+    if phrase:
+        every = _ALL.match(category_words.latin(phrase[0]))
+        if every:
+            return "propose_bulk", {"where": "category", "query": every.group(1), "change": "category",
+                                    "value": phrase[1]}, ""
+        product = (assistant_actions.find_product(db, phrase[0])
+                   or assistant_actions.find_product(db, category_words.latin(phrase[0])))   # «Фанта» → «fanta»
+    elif name not in ("propose_archive", "propose_add"):
+        return "", None, ""
+    product = product or assistant_actions.find_product(db, str(args.get("product") or args.get("name") or ""))
+    current = product.category if product is not None else None
+    cats = [c for (c,) in db.query(Product.category).filter(Product.status == PRODUCT_ACTIVE).distinct().all()
+            if c and c != DEFAULT_CATEGORY and c != current]
+    named = category_words.matching_categories(phrase[1] if phrase else said, cats)
+    value = named[0] if len(named) == 1 else (phrase[1] if phrase else "")
+    if product is not None and value:
+        return "propose_update", {"product": product.sku, "field": "category", "value": value}, ""
+    if name not in ("propose_archive", "propose_add"):
+        return "", None, ""
+    return "", None, (f"ПРОВЕРКА ПРОГРАММЫ: владелец меняет категорию товара, а не "
+                      f"{'архив' if name == 'propose_archive' else 'новый товар'}. Вызови propose_update(product="
+                      f"{product.sku if product is not None else 'артикул из find_products'}, field=category, "
+                      f"value={value or 'новая категория из слов владельца'}).")
 
 
 def claims_change(text: str) -> bool:
@@ -332,6 +448,7 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
     failed = {"error": ""}                  # последняя ошибка инструмента propose_*
     can_propose = any(t.kind == "propose" for t in tools)
     nudged = False
+    redirected = False                      # «ПРОВЕРКА ПРОГРАММЫ» о смене категории — не больше одного раза
     answer_now = False                      # инструмент дал полный итог (Tool.answer_next) — следующий шаг только ответ
     started = clock()
 
@@ -365,10 +482,20 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                     break
                 name = str(step_answer.get("tool") or "")
                 args = step_answer.get("args") if isinstance(step_answer.get("args"), dict) else {}
+                redirect = ""
                 try:
                     invented_code(name, args, history)
                     invented_number(name, args, history)
-                    result, ok = assistant_tools.run_tool(db, user, name, args, proposals, ui, lang), True
+                    args = price_meant(db, name, args, history)
+                    other, instead, redirect = category_meant(db, name, args, history) if not redirected else ("", None, "")
+                    if instead:                 # что нужно — понятно: карточку смены категории готовит программа
+                        name, args, redirected = other, instead, True
+                    invented_category(name, args, history)
+                    if redirect:                # не тот инструмент: карточку не создаём, просим нужный (один раз)
+                        redirected = True
+                        result, ok = {"error": "Не тот инструмент: владелец меняет категорию товара."}, False
+                    else:
+                        result, ok = assistant_tools.run_tool(db, user, name, args, proposals, ui, lang), True
                 except ToolError as exc:
                     result, ok = {"error": str(exc)}, False
                     if name.startswith("propose_"):
@@ -394,6 +521,8 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                 # напоминается рядом с данными, а не только в начале разговора.
                 convo.append({"role": "user", "content": _result_text(name, result)
                               + (f"\nОтвет — на {LANGS[lang]} языке." if lang != "ru" else "")})
+                if redirect:
+                    convo.append({"role": "user", "content": redirect})
                 if named:
                     # Отдельной репликой программы: подсказку внутри данных инструмента модель читает как «не указания».
                     convo.append({"role": "user", "content": f"ПРОВЕРКА ПРОГРАММЫ: все товары категории {named[0]} меняются "

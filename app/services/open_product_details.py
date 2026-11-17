@@ -132,8 +132,28 @@ def manufacturer_of(p: dict) -> str:
     return ""
 
 
+# Товары с ограничением возраста. В Узбекистане алкоголь и табак (и устройства для курения) продают только с 21 года (закон
+# 2023 г.; владелец просил «18+», но по закону 21 — docs/CATALOG_SOURCES.md). Категория так и называется, чтобы продавец видел.
+ALCOHOL_CATEGORY = "Алкоголь (21+)"
+TOBACCO_CATEGORY = "Табак (21+)"
+ADULT_CATEGORIES = (ALCOHOL_CATEGORY, TOBACCO_CATEGORY)
+
+
+def is_adult_category(category: str | None) -> bool:
+    """Категория с ограничением возраста: новые названия и старые «Алкоголь»/«Табак» (как в каталогах до 2026-11-17)."""
+    low = (category or "").strip().lower()
+    return low.startswith("алкоголь") or low.startswith("табак")
+
+
 # Слова в названии -> категория (русские названия категорий — как в scripts/fetch_open_catalog.RU_KINDS). Первое совпадение.
+# Алкоголь и табак — первыми: «шоколадный ликёр» — не сладости, «пиво» — не просто напиток.
 _NAME_RULES: tuple[tuple[str, str], ...] = (
+    (r"\bпиво\b|\bpivo\b|(?<!ginger )(?<!root )(?<!имбирное )\bbeer\b|\blager\b|\bale\b|\bводка|vodka|\baroq\b|\bвино\b|\bвина\b|\bwine\b|\bvino\b|коньяк|cognac|"
+     r"brandy|бренди|виски|whisk|\bром\b|\brum\b|джин\b|\bgin\b|ликёр|ликер|liqueur|шампанск|champagne|игрист|sparkling wine|"
+     r"текила|tequila|сидр|\bcider|\bbaltika|балтика|\bsarbast|tuborg|heineken|\bbud\b|corona extra|\balc\.? ?\d|\d ?% ?(?:об|vol)",
+     ALCOHOL_CATEGORY),
+    (r"сигарет|cigarette|сигар|cigar|табак|tobacco|tamaki|marlboro|winston|\bkent\b|parliament|\bvape|\biqos|heets|"
+     r"электронн.* сигарет|\bglo\b|кальян|hookah", TOBACCO_CATEGORY),
     (r"подгузн|diaper|pampers|детск|bolalar|\bbaby\b|малыш", "Детские товары"),
     (r"мороженое|ice ?cream|muzqaymoq|пломбир|заморож|пельмен|frozen", "Заморозка"),
     (r"шампун|shampoo|гель для душа|shower|мыло|\bsoap\b|sovun|зубн|tooth|\bкрем\b|\bcream\b|дезодорант|deodor|лосьон|lotion|"
@@ -146,7 +166,7 @@ _NAME_RULES: tuple[tuple[str, str], ...] = (
     (r"молок|\bmilk\b|\bsut\b|кефир|kefir|йогурт|yog(?:h)?urt|творог|\bсыр\b|сырок|cheese|pishloq|сметан|ряженк|qatiq|айран|"
      r"сливк|масло сливоч|butter", "Молочные продукты"),
     (r"\bвода\b|\bwater\b|\bsuv\b|\bсок\b|juice|\bsharbat|лимонад|lemonade|\bcola\b|\bкола\b|coca|pepsi|fanta|sprite|напиток|"
-     r"\bdrink|ichimlik|энергет|energy|\bквас|компот|nektar|нектар|\bпиво\b|\bbeer\b|tonic|тоник|mineral|минерал", "Напитки"),
+     r"\bdrink|ichimlik|энергет|energy|\bквас|компот|nektar|нектар|tonic|тоник|mineral|минерал", "Напитки"),
     (r"чипс|chips|сухарик|crouton|кириешк|\bорех|\bnuts?\b|арахис|peanut|семечк|seeds|попкорн|popcorn|крекер|cracker|снек|"
      r"snack|pringles|\blays\b|кукурузн.* палоч", "Снеки"),
     (r"кетчуп|ketchup|майонез|mayo|соус|sauce|горчиц|mustard|специ|spice|приправ|seasoning|ziravor|уксус|vinegar|"
@@ -163,7 +183,6 @@ _NAME_RULES: tuple[tuple[str, str], ...] = (
      "Овощи и фрукты"),
     (r"таблет|tablet|капсул|capsule|сироп от|лекарств|витамин|vitamin|аптечн|pharm|\d ?mg\b|\d ?мг\b|\bbint\b|бинт|пластыр",
      "Лекарства"),
-    (r"сигарет|cigarette|табак|tobacco|marlboro|winston|\bkent\b|parliament|\bvape", "Табак"),
     (r"корм для|pet food|для кошек|для собак|whiskas|pedigree|friskies|kitekat", "Товары для животных"),
     (r"батарейк|battery|зарядк|charger|кабель|\bcable|наушник|earphone|\bлампа|\blamp\b", "Электроника"),
     (r"ручка|\bpen\b|тетрад|notebook|карандаш|pencil|\bклей|\bglue\b|блокнот", "Канцтовары"),
@@ -185,8 +204,9 @@ _DEMO_PRICES: dict[str, tuple[int, int, int]] = {
     "Соусы и специи": (45_000, 16_000, 4_000), "Консервы": (55_000, 22_000, 8_000), "Хлеб и выпечка": (14_000, 5_000, 3_000),
     "Мясо и рыба": (95_000, 45_000, 10_000), "Овощи и фрукты": (15_000, 12_000, 3_000), "Заморозка": (60_000, 25_000, 5_000),
     "Детские товары": (160_000, 60_000, 12_000), "Лекарства": (0, 28_000, 8_000), "Косметика и гигиена": (130_000, 32_000, 9_000),
-    "Бытовая химия": (38_000, 30_000, 10_000), "Табак": (0, 26_000, 15_000), "Товары для дома": (0, 40_000, 10_000),
-    "Товары для животных": (35_000, 25_000, 6_000), "Алкоголь": (260_000, 150_000, 25_000),
+    "Бытовая химия": (38_000, 30_000, 10_000), TOBACCO_CATEGORY: (0, 26_000, 15_000), "Товары для дома": (0, 40_000, 10_000),
+    "Товары для животных": (35_000, 25_000, 6_000), ALCOHOL_CATEGORY: (260_000, 150_000, 25_000),
+    "Табак": (0, 26_000, 15_000), "Алкоголь": (260_000, 150_000, 25_000),        # старые названия (каталоги до 2026-11-17)
     "Спортивное питание": (260_000, 200_000, 60_000),
 }
 _DEFAULT_PRICE = (60_000, 25_000, 5_000)

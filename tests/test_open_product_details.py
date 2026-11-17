@@ -80,3 +80,16 @@ def test_pick_varied_round_robin_with_cap():
     picked = foc.pick_varied(cands, total=6, per_kind=2)
     assert [c for c, _ in picked] == ["A", "B", "C", "A", "C"]          # B кончился, у A и C не больше 2
     assert len(foc.pick_varied(cands, total=3, per_kind=5)) == 3
+
+
+def test_alcohol_and_tobacco_are_separate_21_plus_categories():
+    from app.services.open_product_details import category_from_name, is_adult_category
+    assert category_from_name("Пиво Baltika №7 0,45 л") == "Алкоголь (21+)"
+    assert category_from_name("Sarbast Original 1,5 L") == "Алкоголь (21+)"
+    assert category_from_name("Водка Хортиця 0,5 л") == "Алкоголь (21+)"
+    assert category_from_name("Шоколадный ликёр 0,5 л") == "Алкоголь (21+)"
+    assert category_from_name("Сигареты Marlboro Red") == "Табак (21+)"
+    assert category_from_name("Pepsi 1,5 л") == "Напитки"
+    assert category_from_name("Pringles Ginger Beer 130 g") == "Снеки"          # вкус чипсов, не пиво
+    assert category_from_name("Виноградный сок 1 л") == "Напитки"
+    assert is_adult_category("Алкоголь (21+)") and is_adult_category("Табак") and not is_adult_category("Напитки")

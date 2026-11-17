@@ -6,6 +6,8 @@
     python -m scripts.import_catalog --dir data/test-catalog-uz
     python -m scripts.fetch_open_catalog --link-barcodes --out data/test-catalog-uz      # штрихкоды -> товары в базе
     python -m scripts.fetch_open_catalog --more russia,kazakhstan,turkey --total 200 --out data/test-catalog-more  # ещё, разных видов
+    python -m scripts.fetch_open_catalog --rich pepsi,coca-cola,fanta --alcohol --min-photos 6 --total 20 --out D:/uznat_tovar/catalog-sets/rich
+                                                                    # пробный набор «много фото»: до 15 фото на товар
 
 Только для проверки: фото в открытых базах сняты покупателями, по 1–5 на товар, 400 px. Цен в открытых базах почти нет — цена пустая.
 Артикул каждого товара — «UZ-<штрихкод>» (по приставке тестовые товары легко найти и убрать). Повторный запуск докачивает недостающее.
@@ -22,6 +24,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from app.services.open_product_details import ALCOHOL_CATEGORY, TOBACCO_CATEGORY
+
 USER_AGENT = "UznatTovar/1.0 (store product lookup)"
 SEARCH = "https://search.openfoodfacts.org/search"          # поиск по всей Open Food Facts (обычный /api/v2/search бывает недоступен)
 OTHER_BASES = ("https://world.openbeautyfacts.org", "https://world.openproductsfacts.org")
@@ -31,6 +35,14 @@ IMAGE_HOSTS = {
 }
 FIELDS = "code,product_name,product_name_ru,product_name_uz,product_name_en,brands,quantity,categories_tags,images"
 MAX_PHOTOS = 5
+RICH_MAX_PHOTOS = 15            # --rich: сколько фото брать у товара, где их много (цель владельца — 10–15 на товар)
+ALCOHOL_TAGS = ("en:alcoholic-beverages", "en:beers", "en:wines", "en:spirits", "en:vodkas", "en:ciders", "en:liqueurs")
+
+
+def is_alcohol_tags(tags) -> bool:
+    """Метки открытой базы говорят «алкоголь» (безалкогольное пиво там помечено en:non-alcoholic-beverages — не считаем)."""
+    tags = [str(t) for t in tags or []]
+    return any(t in ALCOHOL_TAGS for t in tags) and "en:non-alcoholic-beverages" not in tags and "en:alcohol-free-beers" not in tags
 LANG_ORDER = ("ru", "uz", "en", "")
 
 
@@ -51,7 +63,7 @@ def _image_dir(code: str) -> str:
     return "/".join([code[0:3], code[3:6], code[6:9], code[9:]]) if len(code) > 8 else code
 
 
-def photo_ids(images: dict) -> list[str]:
+def photo_ids(images: dict, limit: int = MAX_PHOTOS) -> list[str]:
     """Номера фото товара: сначала выбранные «лицевая сторона», затем остальные загруженные (по порядку), без повторов."""
     images = images or {}
     first = [str(v.get("imgid")) for k, v in images.items() if k.startswith("front") and isinstance(v, dict) and v.get("imgid")]
@@ -60,7 +72,7 @@ def photo_ids(images: dict) -> list[str]:
     for i in first + rest:
         if i not in out and i in images:
             out.append(i)
-    return out[:MAX_PHOTOS]
+    return out[:limit]
 
 
 def _text(value) -> str:
@@ -90,8 +102,11 @@ def brand_of(p: dict) -> str:
 
 
 def category_of(p: dict, first_photo: Path | None = None) -> str:
-    """Категория из открытой базы; её нет — вид по первому фото малой моделью (app/pipeline/kind_classifier.py, порог из настроек)."""
+    """Категория из открытой базы; её нет — вид по первому фото малой моделью (app/pipeline/kind_classifier.py, порог из настроек).
+    Алкоголь по меткам открытой базы — отдельная категория 21+ (иначе пиво попало бы в «Напитки»)."""
     from app.services.product_kinds import kind_for_categories  # noqa: PLC0415
+    if is_alcohol_tags(p.get("categories_tags") or []):
+        return ALCOHOL_CATEGORY
     kind = kind_for_categories(list(p.get("categories_tags") or []))
     if not kind and first_photo is not None:
         kind = _photo_kind(first_photo)
@@ -122,7 +137,7 @@ RU_KINDS = {
     "grocery": "Бакалея", "sauce": "Соусы и специи", "canned": "Консервы", "bakery": "Хлеб и выпечка",
     "meat_fish": "Мясо и рыба", "fruit_veg": "Овощи и фрукты", "frozen": "Заморозка", "baby": "Детские товары",
     "medicine": "Лекарства", "cosmetics": "Косметика и гигиена", "cleaning": "Бытовая химия", "home": "Товары для дома",
-    "pet": "Товары для животных", "tobacco": "Табак", "clothing": "Одежда", "footwear": "Обувь", "bags": "Сумки",
+    "pet": "Товары для животных", "tobacco": TOBACCO_CATEGORY, "clothing": "Одежда", "footwear": "Обувь", "bags": "Сумки",
     "accessories": "Аксессуары", "electronics": "Электроника", "stationery": "Канцтовары", "toy": "Игрушки",
 }
 
@@ -186,10 +201,10 @@ def download(url: str, path: Path) -> bool:
     return True
 
 
-def _download_product(out: Path, p: dict, category: str | None = None) -> tuple[dict | None, int]:
+def _download_product(out: Path, p: dict, category: str | None = None, limit: int = MAX_PHOTOS) -> tuple[dict | None, int]:
     """Фото товара в папку out/UZ-<код>; строка для products.csv (или None — ни одного фото) и число фото."""
     code, name = str(p["code"]), product_name(p)
-    ids = photo_ids(p.get("images") or {})
+    ids = photo_ids(p.get("images") or {}, limit)
     if not name or not ids:
         return None, 0
     sku = f"UZ-{code}"
@@ -284,6 +299,54 @@ def fetch_more(out: Path, countries: list[str], total: int, per_kind: int, skip_
     print(f"Готово: {len(rows)} товаров, {photos} фото -> {out}")
 
 
+def rich_queries(brands: list[str], countries: list[str], alcohol: bool) -> list[str]:
+    """Запросы --rich: каждая марка в каждой стране; с alcohol — ещё пиво, водка, вино этих стран (категория 21+)."""
+    out = [f'brands_tags:"{b}" AND countries_tags:"en:{c}"' for b in brands for c in countries]
+    if alcohol:
+        out += [f'categories_tags:"{t}" AND countries_tags:"en:{c}"' for c in countries for t in ("en:beers", "en:vodkas", "en:wines")]
+    return out
+
+
+def pick_rich(found: list[dict], min_photos: int, total: int) -> list[dict]:
+    """Товары, у которых в открытой базе не меньше min_photos фото, — сначала те, где фото больше; не больше total."""
+    ok = [p for p in found if product_name(p) and len(photo_ids(p.get("images") or {}, 10_000)) >= min_photos]
+    ok.sort(key=lambda p: -len(photo_ids(p.get("images") or {}, 10_000)))
+    return ok[:total]
+
+
+def fetch_rich(out: Path, brands: list[str], countries: list[str], min_photos: int, total: int, alcohol: bool,
+               skip_codes: set[str]) -> None:
+    """Пробный набор «много фото на товар»: известные в Узбекистане марки (и алкоголь 21+), у которых в открытой базе
+    не меньше min_photos фото; у каждого — до RICH_MAX_PHOTOS фото. Честно: таких товаров мало (docs/CATALOG_SOURCES.md)."""
+    out.mkdir(parents=True, exist_ok=True)
+    found: dict[str, dict] = {}
+    for q in rich_queries(brands, countries, alcohol):
+        try:
+            batch = search_off(q)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  запрос не прошёл ({type(exc).__name__}): {q}")
+            continue
+        for p in batch:
+            code = str(p.get("code") or "").strip()
+            norm = "0" + code if len(code) == 12 else code
+            if code.isdigit() and len(code) in (8, 12, 13) and norm not in skip_codes and code not in found:
+                found[code] = p
+    picked = pick_rich(list(found.values()), min_photos, total)
+    print(f"Кандидатов {len(found)}, с {min_photos}+ фото беру {len(picked)}")
+    rows, photos = [], 0
+    for p in picked:
+        row, got = _download_product(out, p, None, RICH_MAX_PHOTOS)
+        if row:
+            if not row["category"]:
+                from app.services.open_product_details import category_from_name  # noqa: PLC0415
+                row["category"] = category_from_name(row["name"]) or "Без категории"
+            rows.append(row)
+            photos += got
+            print(f"  {row['sku']}: {got} фото — {row['name']} [{row['category']}]")
+    _write_lists(out, rows)
+    print(f"Готово: {len(rows)} товаров, {photos} фото -> {out}")
+
+
 def fetch(out: Path, country: str, prefix: str) -> None:
     out.mkdir(parents=True, exist_ok=True)
     print(f"Ищу товары: страна {country}" + (f", штрихкоды {prefix}…" if prefix else ""))
@@ -334,8 +397,16 @@ def main() -> None:
                                                "составом и проверенными фото, разных категорий; уже загруженные пропускаются")
     ap.add_argument("--total", type=int, default=200, help="--more: сколько товаров взять")
     ap.add_argument("--per-category", type=int, default=20, help="--more: не больше стольких товаров одной категории")
+    ap.add_argument("--rich", default="", help="марки через запятую (pepsi,coca-cola,…): только товары с --min-photos+ фото, "
+                                               "у каждого до 15 фото; страны — --countries")
+    ap.add_argument("--countries", default="uzbekistan,russia,kazakhstan", help="--rich: страны продажи")
+    ap.add_argument("--min-photos", type=int, default=6, help="--rich: не меньше стольких фото в открытой базе")
+    ap.add_argument("--alcohol", action="store_true", help="--rich: ещё пиво, водка, вино этих стран (категория «Алкоголь (21+)»)")
     args = ap.parse_args()
-    if args.link_barcodes:
+    if args.rich:
+        fetch_rich(Path(args.out), [b.strip() for b in args.rich.split(",") if b.strip()],
+                   [c.strip() for c in args.countries.split(",") if c.strip()], args.min_photos, args.total, args.alcohol, set())
+    elif args.link_barcodes:
         link_barcodes(Path(args.out))
     elif args.more:
         from app.db.models import ProductBarcodeORM  # noqa: PLC0415

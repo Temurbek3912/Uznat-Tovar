@@ -815,6 +815,10 @@ def add_outside_name(result: dict, jpeg: bytes | None, codes: list[str], lang: s
     status = result.get("status")
     if result.get("demo_mode"):
         return result
+    if status in ("matched", "uncertain") and result.get("by") == "look":
+        sized = _check_size(result, jpeg, lang)
+        if sized is not None:
+            return sized
     if status == "matched" and result.get("by") == "look":
         return _check_label(result, jpeg, lang)
     if status not in ("unknown", "empty_catalog", "uncertain"):
@@ -842,6 +846,38 @@ def _gap(result: dict) -> float:
     first = result.get("product") or {}
     rivals = [c.get("score") or 0.0 for c in (result.get("candidates") or []) if c and c.get("id") != first.get("id")]
     return float(first.get("score", result.get("score")) or 0.0) - max(rivals) if rivals else 1.0
+
+
+# Размеры одного товара (Pepsi 0,5 л и 1,5 л) по виду почти не различаются: на снимке вблизи масштаба нет. Другой размер,
+# который по счёту ближе этого запаса к первому, считается «тем же товаром, размер не ясен» (замер — docs/CATALOG_SOURCES.md §5).
+SIZE_CHECK_MAX_GAP = 0.15
+
+
+def _check_size(result: dict, jpeg: bytes | None, lang: str) -> dict | None:
+    """Найдено по виду, а среди близких кандидатов — другой размер того же товара (app/services/product_size.py):
+      - размер прочитан на этикетке (модель уверена) -> этот размер первым, статус как был; size = "label";
+      - не прочитан -> «похоже» со всеми размерами первыми: выбирает человек; size = "choose".
+    Других размеров рядом нет -> None (обычная проверка)."""
+    from app.services.product_size import same_size, size_of, size_variants     # noqa: PLC0415
+    first = result.get("product") or {}
+    others = list(result.get("candidates") or [])
+    top = float(first.get("score", result.get("score")) or 0.0)
+    variants = [c for c in size_variants(first, others) if float(c.get("score") or 0.0) >= top - SIZE_CHECK_MAX_GAP]
+    if not variants:
+        return None
+    sizes = [first, *variants]
+    rest = [c for c in others if c and c.get("id") not in {s.get("id") for s in sizes}]
+    from app.services.product_namer import names_overlap, read_label     # noqa: PLC0415
+    guess = read_label(jpeg, lang, get_settings())
+    if guess is not None and guess.name and not names_overlap(guess, first):
+        return None                       # на этикетке другая марка — это решает обычная сверка надписи (_check_label)
+    read = size_of(guess.name) if guess is not None else None
+    chosen = next((c for c in sizes if read is not None and same_size(size_of(c.get("name", "")), read)), None)
+    if chosen is not None:
+        ordered = [chosen, *[c for c in sizes if c.get("id") != chosen.get("id")], *rest]
+        return {**result, "product": chosen, "score": chosen.get("score", result.get("score")), "candidates": ordered,
+                "size": "label"}
+    return {**result, "status": "uncertain", "product": first, "candidates": [*sizes, *rest], "size": "choose"}
 
 
 def _check_label(result: dict, jpeg: bytes | None, lang: str) -> dict:

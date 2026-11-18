@@ -8,6 +8,8 @@
     python -m scripts.fetch_open_catalog --more russia,kazakhstan,turkey --total 200 --out data/test-catalog-more  # ещё, разных видов
     python -m scripts.fetch_open_catalog --rich pepsi,coca-cola,fanta --alcohol --min-photos 6 --total 20 --out D:/uznat_tovar/catalog-sets/rich
                                                                     # пробный набор «много фото»: до 15 фото на товар
+    python -m scripts.fetch_open_catalog --popular 480 --countries uzbekistan,russia,kazakhstan --out D:/uznat_tovar/catalog-sets/popular-500
+                                                                    # каталог ~500 товаров: лицевая сторона первой, без снимков состава
 
 Только для проверки: фото в открытых базах сняты покупателями, по 1–5 на товар, 400 px. Цен в открытых базах почти нет — цена пустая.
 Артикул каждого товара — «UZ-<штрихкод>» (по приставке тестовые товары легко найти и убрать). Повторный запуск докачивает недостающее.
@@ -142,14 +144,18 @@ RU_KINDS = {
 }
 
 
-def search_off(query: str) -> list[dict]:
+def search_off(query: str, sort_by: str = "", max_pages: int = 0) -> list[dict]:
+    """Поиск по Open Food Facts; sort_by — например "-unique_scans_n" (сначала самые сканируемые = самые продаваемые);
+    max_pages — не больше стольких страниц по 100 (0 — все)."""
     out, page = [], 1
     while True:
-        url = f"{SEARCH}?{urllib.parse.urlencode({'q': query, 'page_size': 100, 'page': page, 'fields': FIELDS})}"
-        data = _get_json(url)
+        params = {"q": query, "page_size": 100, "page": page, "fields": FIELDS}
+        if sort_by:
+            params["sort_by"] = sort_by
+        data = _get_json(f"{SEARCH}?{urllib.parse.urlencode(params)}")
         hits = data.get("hits") or []
         out += [dict(h, _src="off") for h in hits]
-        if page >= int(data.get("page_count") or 1) or not hits:
+        if page >= int(data.get("page_count") or 1) or not hits or (max_pages and page >= max_pages):
             return out
         page += 1
         time.sleep(1)
@@ -223,7 +229,7 @@ def _download_product(out: Path, p: dict, category: str | None = None, limit: in
     first = folder / f"{ids[0]}.jpg"
     if category is None:
         category = category_of(p, first if first.is_file() else None)
-    return {"sku": sku, "name": name[:200], "brand": brand_of(p), "category": category, "price": "", "barcode": barcode}, got
+    return {"sku": sku, "name": name[:120].rstrip(), "brand": brand_of(p), "category": category, "price": "", "barcode": barcode}, got
 
 
 def _write_lists(out: Path, rows: list[dict]) -> None:
@@ -347,6 +353,111 @@ def fetch_rich(out: Path, brands: list[str], countries: list[str], min_photos: i
     print(f"Готово: {len(rows)} товаров, {photos} фото -> {out}")
 
 
+TEXT_PHOTO_KINDS = ("ingredients", "nutrition", "packaging")      # снимки состава, таблицы, упаковки — в поиск по виду не берём
+POPULAR_MAX_PHOTOS = 10
+
+
+def shop_photos(images: dict, limit: int = POPULAR_MAX_PHOTOS) -> list[tuple[str, str]]:
+    """Фото товара для каталога «как видит покупатель»: (имя файла, имя на сервере без «.400.jpg»).
+    Первое — выбранная в базе ЛИЦЕВАЯ сторона, обрезанная по товару (front_<язык>.<ревизия>); затем загруженные снимки, кроме
+    отмеченных в базе как состав, таблица калорий или упаковка. Замер 2026-11-18 (docs/benchmark/models_report_2026-11-18.md):
+    из 23 снимков, на которых ошиблись все модели, 15 — состав, таблица или штрихкод; такие фото каталога только мешают.
+    Без выбранной лицевой стороны — пусто (товар не берётся)."""
+    images = images or {}
+    fronts = sorted(k for k, v in images.items() if k.startswith("front_") and isinstance(v, dict) and v.get("imgid"))
+    if not fronts:
+        return []
+    key = next((k for k in ("front_ru", "front_uz", "front_en") if k in fronts), fronts[0])
+    rev = images[key].get("rev")
+    out: list[tuple[str, str]] = [(f"{key}.jpg", f"{key}.{rev}" if rev else str(images[key]["imgid"]))]
+    text_ids = {str(v.get("imgid")) for k, v in images.items()
+                if isinstance(v, dict) and k.split("_")[0] in TEXT_PHOTO_KINDS and v.get("imgid")}
+    for i in sorted((k for k in images if k.isdigit()), key=int):
+        if i not in text_ids and len(out) < limit:
+            out.append((f"{i}.jpg", i))
+    return out
+
+
+def popular_ok(p: dict) -> bool:
+    """Товар годится для каталога: есть название и лицевая сторона, не алкоголь и не табак (решение владельца 2026-11-17)."""
+    if not product_name(p) or not shop_photos(p.get("images") or {}):
+        return False
+    tags = [str(t) for t in p.get("categories_tags") or []]
+    return not is_alcohol_tags(tags) and not any("tobacco" in t or "cigar" in t for t in tags)
+
+
+def pick_popular(found: list[dict], total: int) -> list[dict]:
+    """Порядок как пришёл (страны по очереди, внутри — самые сканируемые), только подходящие, не больше total."""
+    return [p for p in found if popular_ok(p)][:total]
+
+
+def _drop_folder(folder: Path) -> None:
+    """Папка товара, которую только что создала эта же загрузка (только наши скачанные фото)."""
+    for f in folder.iterdir():
+        f.unlink()
+    folder.rmdir()
+
+
+def _download_shop(out: Path, p: dict) -> tuple[dict | None, int]:
+    code, name = str(p["code"]), product_name(p)
+    photos = shop_photos(p.get("images") or {})
+    folder = out / f"UZ-{code}"
+    folder.mkdir(exist_ok=True)
+    got = 0
+    for fname, remote in photos:
+        url = f"{IMAGE_HOSTS[p['_src']]}/images/products/{_image_dir(code)}/{remote}.400.jpg"
+        if download(url, folder / fname):
+            got += 1
+        time.sleep(0.15)
+    first = folder / photos[0][0]
+    if not got or not first.is_file():                 # без лицевой стороны товар не берём
+        _drop_folder(folder)
+        return None, 0
+    from app.services.open_product_details import category_from_name  # noqa: PLC0415
+    category = category_of(p, first) or category_from_name(name) or "Без категории"
+    if category in (ALCOHOL_CATEGORY, TOBACCO_CATEGORY):
+        _drop_folder(folder)
+        return None, 0
+    barcode = "0" + code if len(code) == 12 else code
+    return {"sku": f"UZ-{code}", "name": name[:120].rstrip(), "brand": brand_of(p), "category": category, "price": "",
+            "barcode": barcode}, got
+
+
+def fetch_popular(out: Path, countries: list[str], total: int, skip_codes: set[str], pages: int = 10) -> None:
+    """Каталог ~total товаров «как в магазине Узбекистана»: сначала все товары первой страны (Узбекистан), затем самые
+    сканируемые товары следующих (Россия, Казахстан…). Только с лицевой стороной; без алкоголя и табака; до POPULAR_MAX_PHOTOS
+    фото без снимков состава. Уже загруженные штрихкоды (skip_codes) пропускаются. Повторный запуск докачивает недостающее."""
+    out.mkdir(parents=True, exist_ok=True)
+    found: dict[str, dict] = {}
+    for country in countries:
+        try:
+            batch = search_off(f'countries_tags:"en:{country}"', sort_by="-unique_scans_n", max_pages=pages)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  {country}: запрос не прошёл ({type(exc).__name__})")
+            continue
+        for p in batch:
+            code = str(p.get("code") or "").strip()
+            norm = "0" + code if len(code) == 12 else code
+            if code.isdigit() and len(code) in (8, 12, 13) and norm not in skip_codes and code not in found:
+                found[code] = p
+        print(f"  {country}: кандидатов всего {len(found)}", flush=True)
+    picked = pick_popular(list(found.values()), int(total * 1.15) + 10)       # запас: часть отсеется при скачивании
+    print(f"Подходящих (есть лицевая сторона, не 21+) беру {len(picked)}", flush=True)
+    rows, photos = [], 0
+    for n, p in enumerate(picked, 1):
+        if len(rows) >= total:
+            break
+        row, got = _download_shop(out, p)
+        if row:
+            rows.append(row)
+            photos += got
+        if n % 25 == 0:
+            print(f"  {n}/{len(picked)}: товаров {len(rows)}, фото {photos}", flush=True)
+            _write_lists(out, rows)
+    _write_lists(out, rows)
+    print(f"Готово: {len(rows)} товаров, {photos} фото -> {out}")
+
+
 def fetch(out: Path, country: str, prefix: str) -> None:
     out.mkdir(parents=True, exist_ok=True)
     print(f"Ищу товары: страна {country}" + (f", штрихкоды {prefix}…" if prefix else ""))
@@ -401,9 +512,20 @@ def main() -> None:
                                                "у каждого до 15 фото; страны — --countries")
     ap.add_argument("--countries", default="uzbekistan,russia,kazakhstan", help="--rich: страны продажи")
     ap.add_argument("--min-photos", type=int, default=6, help="--rich: не меньше стольких фото в открытой базе")
+    ap.add_argument("--popular", type=int, default=0, help="каталог из N товаров: товары --countries по очереди, внутри — "
+                    "самые сканируемые; только с лицевой стороной, без алкоголя и табака, без снимков состава")
     ap.add_argument("--alcohol", action="store_true", help="--rich: ещё пиво, водка, вино этих стран (категория «Алкоголь (21+)»)")
     args = ap.parse_args()
-    if args.rich:
+    if args.popular:
+        from app.db.models import ProductBarcodeORM  # noqa: PLC0415
+        from app.db.session import SessionLocal  # noqa: PLC0415
+        db = SessionLocal()
+        try:
+            skip = {b for (b,) in db.query(ProductBarcodeORM.barcode).all()}
+        finally:
+            db.close()
+        fetch_popular(Path(args.out), [c.strip() for c in args.countries.split(",") if c.strip()], args.popular, skip)
+    elif args.rich:
         fetch_rich(Path(args.out), [b.strip() for b in args.rich.split(",") if b.strip()],
                    [c.strip() for c in args.countries.split(",") if c.strip()], args.min_photos, args.total, args.alcohol, set())
     elif args.link_barcodes:

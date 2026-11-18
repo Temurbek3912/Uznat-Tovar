@@ -46,3 +46,21 @@ def test_rich_queries_and_alcohol_category():
     assert not foc.is_alcohol_tags(["en:beers", "en:non-alcoholic-beverages"])
     assert foc.category_of({"categories_tags": ["en:beers", "en:alcoholic-beverages"]}) == "Алкоголь (21+)"
     assert foc.RU_KINDS["tobacco"] == "Табак (21+)"
+
+
+def test_shop_photos_front_crop_first_without_ingredients_and_nutrition():
+    images = {"1": {}, "2": {}, "3": {}, "4": {}, "front_ru": {"imgid": "3", "rev": "12"},
+              "ingredients_ru": {"imgid": "2"}, "nutrition_ru": {"imgid": "4"}}
+    assert foc.shop_photos(images) == [("front_ru.jpg", "front_ru.12"), ("1.jpg", "1"), ("3.jpg", "3")]
+    assert foc.shop_photos({"1": {}, "2": {}}) == []                  # нет лицевой стороны — товар не берём
+    many = {**{str(i): {} for i in range(1, 30)}, "front_en": {"imgid": "1", "rev": "5"}}
+    assert len(foc.shop_photos(many)) == foc.POPULAR_MAX_PHOTOS
+
+
+def test_popular_skips_alcohol_tobacco_and_products_without_front():
+    front = {"1": {}, "front_en": {"imgid": "1", "rev": "2"}}
+    ok = {"code": "1", "product_name": "Pepsi", "images": front}
+    beer = {"code": "2", "product_name": "Baltika", "images": front, "categories_tags": ["en:beers", "en:alcoholic-beverages"]}
+    cig = {"code": "3", "product_name": "Winston", "images": front, "categories_tags": ["en:tobacco"]}
+    nofront = {"code": "4", "product_name": "Fanta", "images": {"1": {}}}
+    assert [p["code"] for p in foc.pick_popular([ok, beer, cig, nofront], 10)] == ["1"]

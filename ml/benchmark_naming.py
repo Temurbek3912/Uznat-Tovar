@@ -230,24 +230,24 @@ def cmd_run(args) -> int:
         out_rows.append(result)
         print(f"[{i}/{len(manifest)}] {row['variant']:8} {row['brand'][:18]:18} -> {result['confidence']:6} "
               f"{result['answer_name'][:50]} ({result['auto']}, {seconds:.1f} с)")
-    with open(data / RESULTS, "w", encoding="utf-8", newline="") as f:
+    with open(data / getattr(args, 'results', RESULTS), "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(out_rows[0].keys()))
         w.writeheader()
         w.writerows(out_rows)
-    print(f"Готово за {time.time() - started:.0f} с -> {data / RESULTS}")
+    print(f"Готово за {time.time() - started:.0f} с -> {data / getattr(args, 'results', RESULTS)}")
     return 0
 
 
 def cmd_rescore(args) -> int:
     """Пересчитать автоматическую оценку (колонка auto) без повторного опроса модели; ручная оценка (verdict) не трогается."""
     data = Path(args.data)
-    with open(data / RESULTS, encoding="utf-8") as f:
+    with open(data / getattr(args, 'results', RESULTS), encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     for row in rows:
         answer = {"is_product": str(row.get("is_product")).lower() != "false", "name": row.get("answer_name", ""),
                   "brand": row.get("answer_brand", "")}
         row["auto"] = auto_verdict(row, answer)
-    with open(data / RESULTS, "w", encoding="utf-8", newline="") as f:
+    with open(data / getattr(args, 'results', RESULTS), "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()
         w.writerows(rows)
@@ -298,7 +298,7 @@ def summarize(rows: list[dict]) -> list[dict]:
 
 def cmd_report(args) -> int:
     data = Path(args.data)
-    with open(data / RESULTS, encoding="utf-8") as f:
+    with open(data / getattr(args, 'results', RESULTS), encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     conf = {lvl: sum(1 for r in rows if r["confidence"] == lvl) for lvl in CONFIDENCE_LEVELS}
     seconds = sorted(float(r["seconds"]) for r in rows if r["seconds"])
@@ -339,11 +339,15 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--model", default="")
     r.add_argument("--timeout", type=float, default=60.0)
     r.add_argument("--limit", type=int, default=0)
-    sub.add_parser("rescore", help="пересчитать автоматическую оценку").add_argument("--data", default="data/benchmark/naming")
+    r.add_argument("--results", default=RESULTS, help="файл ответов в папке набора (свой для каждой модели при сравнении)")
+    s = sub.add_parser("rescore", help="пересчитать автоматическую оценку")
+    s.add_argument("--data", default="data/benchmark/naming")
+    s.add_argument("--results", default=RESULTS)
     p = sub.add_parser("report", help="таблица «верно / неверно / не определил» по порогам")
     p.add_argument("--data", default="data/benchmark/naming")
     p.add_argument("--md", default="")
     p.add_argument("--header", default="")
+    p.add_argument("--results", default=RESULTS)
     args = ap.parse_args(argv)
     return {"fetch": cmd_fetch, "run": cmd_run, "rescore": cmd_rescore, "report": cmd_report}[args.cmd](args)
 

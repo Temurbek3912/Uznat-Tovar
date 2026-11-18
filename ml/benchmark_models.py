@@ -52,8 +52,20 @@ CANDIDATES = (
     Candidate("dinov2-large", "facebook/dinov2-large", "dinov2", license="Apache-2.0"),
     Candidate("siglip2-base", "google/siglip2-base-patch16-224", "siglip", license="Apache-2.0"),
     Candidate("siglip2-base-384", "google/siglip2-base-patch16-384", "siglip", license="Apache-2.0"),
+    Candidate("siglip2-large", "google/siglip2-large-patch16-256", "siglip", license="Apache-2.0"),
+    Candidate("siglip2-so400m", "google/siglip2-so400m-patch16-256", "siglip", license="Apache-2.0"),
     Candidate("clip-b32", "openai/clip-vit-base-patch32", "clip", license="MIT"),
 )
+
+
+# Веса, скачанные вручную (curl, когда Python не выходит в интернет): <папка>/<имя репозитория>/config.json + model.safetensors.
+MODELS_DIR = Path(os.environ.get("UZNAT_MODELS_DIR", "D:/AI-cache/models"))
+
+
+def source(repo: str) -> str:
+    """Откуда грузить веса: своя папка MODELS_DIR/<имя> (если там есть config.json), иначе кэш Hugging Face."""
+    local = MODELS_DIR / repo.split("/")[-1]
+    return str(local) if (local / "config.json").is_file() else repo
 
 
 def pad_square(img):
@@ -70,15 +82,16 @@ class Embedder:
         import torch
         from transformers import AutoImageProcessor, AutoModel
         self.torch, self.cand, self.device = torch, cand, device
-        self.processor = AutoImageProcessor.from_pretrained(cand.repo)
+        src = source(cand.repo)
+        self.processor = AutoImageProcessor.from_pretrained(src)
         if cand.kind == "siglip":
             from transformers import SiglipVisionModel
-            model = SiglipVisionModel.from_pretrained(cand.repo)
+            model = SiglipVisionModel.from_pretrained(src)
         elif cand.kind == "clip":
             from transformers import CLIPVisionModelWithProjection
-            model = CLIPVisionModelWithProjection.from_pretrained(cand.repo)
+            model = CLIPVisionModelWithProjection.from_pretrained(src)
         else:
-            model = AutoModel.from_pretrained(cand.repo)
+            model = AutoModel.from_pretrained(src)
         self.params = sum(p.numel() for p in model.parameters())
         self.model = model.to(device).eval()
 
@@ -185,6 +198,9 @@ def mcnemar(b: int, c: int) -> float:
 
 
 def disk_mb(repo: str) -> float:
+    src = Path(source(repo))
+    if src.is_dir():                      # своя папка: весь файл весов (у SigLIP 2 в нём и текстовая часть)
+        return sum(f.stat().st_size for f in src.glob("*.safetensors")) / 2**20
     from huggingface_hub import scan_cache_dir
     for r in scan_cache_dir().repos:
         if r.repo_id == repo:

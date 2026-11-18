@@ -112,8 +112,9 @@ def _kind_model_cached(hf_cache: Path) -> bool:
 
 
 def _hf_model_cache() -> Path:
+    from scripts.fetch_models import embedder_hub_model  # noqa: PLC0415 — модель поиска по виду из config.yaml
     base = Path(os.environ.get("HF_HOME") or (Path.home() / ".cache" / "huggingface"))
-    return base / "hub" / "models--facebook--dinov2-base"
+    return base / "hub" / ("models--" + embedder_hub_model().replace("/", "--"))
 
 
 def _probe_hw():

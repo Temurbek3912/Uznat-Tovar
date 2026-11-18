@@ -3,7 +3,7 @@
 без необходимости выкладывать фото по URL (в отличие от продового пути через
 POST /api/v1/catalog/products, который скачивает эталонные фото по сети).
 
-Использует ровно те же компоненты (DinoV2Embedder, FaissCatalogIndex,
+Использует ровно те же компоненты (эмбеддер create_embedder, FaissCatalogIndex,
 CatalogService), что и продовый путь — это не отдельная "игрушечная" логика,
 а прямой вызов того же кода в одноразовом CLI-сценарии.
 
@@ -19,7 +19,7 @@ import argparse
 from app.core.config import get_settings
 from app.core.schemas import ProductIn
 from app.db.session import SessionLocal
-from app.pipeline.embedder import DinoV2Embedder, model_signature
+from app.pipeline.embedder import create_embedder, model_signature
 from app.pipeline.imageio import load_rgb
 from app.pipeline.matcher import open_catalog_index
 from app.services.catalog_service import CatalogService
@@ -46,9 +46,7 @@ def main() -> None:
         raise SystemExit("В configs/config.yaml не заданы models.embedder / models.matcher")
 
     print("Загружаю модель эмбеддера (при первом запуске скачает веса из интернета)...")
-    embedder = DinoV2Embedder(
-        weights_path=settings.embedder.weights_path, embedding_dim=settings.embedder.embedding_dim,
-    )
+    embedder = create_embedder(settings.embedder)
     index = _load_index(settings.matcher.index_path, settings.embedder.embedding_dim, model_signature(embedder))
 
     images = [load_rgb(p) for p in args.photo]

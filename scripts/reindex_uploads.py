@@ -32,8 +32,8 @@ def _load_products() -> dict[str, str]:
 
 
 def _load_embedder(settings):
-    from app.pipeline.embedder import DinoV2Embedder  # noqa: PLC0415
-    return DinoV2Embedder(weights_path=settings.embedder.weights_path, embedding_dim=settings.embedder.embedding_dim)
+    from app.pipeline.embedder import create_embedder  # noqa: PLC0415
+    return create_embedder(settings.embedder)
 
 
 def _open_registry():

@@ -65,3 +65,50 @@ def test_worker_uses_random_embedder_only_behind_explicit_flag():
     guards = [n for n in ast.walk(make) if isinstance(n, ast.If) and "ALLOW_DEBUG_EMBEDDER_ENV" in ast.unparse(n.test)
               and any(isinstance(x, ast.Raise) for x in n.body)]
     assert guards and guards[0].lineno < calls[0].lineno, "debug_embedder() должен включаться только флагом ALLOW_DEBUG_EMBEDDER"
+
+
+# ----------------------------------------------------------------------- выбор модели по config.yaml (models.embedder.name)
+
+def test_hub_model_follows_embedder_name():
+    from app.pipeline.embedder import SIGLIP2_HUB_MODEL, embedder_family, hub_model_for
+    assert hub_model_for("dinov2-base-retail-ft") == DEFAULT_HUB_MODEL           # нынешнее имя в config.yaml — DINOv2, как было
+    assert hub_model_for("") == hub_model_for(None) == DEFAULT_HUB_MODEL
+    assert hub_model_for("siglip2-base") == SIGLIP2_HUB_MODEL
+    assert hub_model_for("facebook/dinov2-small") == "facebook/dinov2-small"     # полное имя репозитория — как есть
+    assert embedder_family("SigLIP2-base") == "siglip" and embedder_family("dinov2-base") == "dinov2"
+
+
+def test_create_embedder_picks_class_by_name(monkeypatch):
+    import types
+    from app.pipeline import embedder as E
+    made = []
+
+    def fake(kind):
+        def init(self, weights_path, embedding_dim=768, device="cuda", hub_model="", int8=False):
+            made.append((kind, weights_path, embedding_dim, device, hub_model, int8))
+        return init
+    monkeypatch.setattr(E.DinoV2Embedder, "__init__", fake("dinov2"))
+    monkeypatch.setattr(E.SiglipEmbedder, "__init__", fake("siglip"))
+    dino = E.create_embedder(types.SimpleNamespace(name="dinov2-base-retail-ft", weights_path="models/x", embedding_dim=768))
+    sig = E.create_embedder(types.SimpleNamespace(name="siglip2-base", weights_path="", embedding_dim=768), device="cpu", int8=True)
+    assert type(dino) is E.DinoV2Embedder and type(sig) is E.SiglipEmbedder
+    assert made == [("dinov2", "models/x", 768, "cuda", DEFAULT_HUB_MODEL, False),
+                    ("siglip", "", 768, "cpu", E.SIGLIP2_HUB_MODEL, True)]
+
+
+def test_siglip_signature_differs_from_dinov2():
+    # Другая модель — другой паспорт: индекс DINOv2 программа с SigLIP 2 не загрузит, нужна пересборка (а не тихая смесь).
+    from app.pipeline import embedder as E
+    assert E.SiglipEmbedder.PREPROCESS != E.DinoV2Embedder.PREPROCESS == E.DINOV2_PREPROCESS
+
+
+def test_no_direct_dinov2_construction_outside_benchmarks():
+    # Модель выбирается в одном месте (create_embedder): прямое DinoV2Embedder( — только в замерах самой DINOv2.
+    allowed = {"app/pipeline/embedder.py", "ml/benchmark_identify.py"}
+    found = []
+    for folder in ("app", "scripts", "ml"):
+        for path in (ROOT / folder).rglob("*.py"):
+            rel = path.relative_to(ROOT).as_posix()
+            if rel not in allowed and "DinoV2Embedder(" in path.read_text(encoding="utf-8"):
+                found.append(rel)
+    assert not found, found

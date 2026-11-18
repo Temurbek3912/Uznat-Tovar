@@ -314,7 +314,7 @@ def main(argv: list[str] | None = None, out=print) -> int:
         return 2
 
     from app.core.config import get_settings                         # ленивые импорты: тяжёлые зависимости нужны только здесь
-    from app.pipeline.embedder import DinoV2Embedder
+    from app.pipeline.embedder import create_embedder
     from app.pipeline.matcher import ProductMatcher
     from app.services.catalog_import import Manifest
     from scripts.add_product_from_local_file import _load_index
@@ -328,7 +328,7 @@ def main(argv: list[str] | None = None, out=print) -> int:
         out(f"Манифест {a.manifest} пуст: загрузите каталог командой python -m scripts.import_catalog (артикулы берутся из него).")
         return 2
     id_to_sku = {pid: sku for sku, pid in manifest.products.items()}
-    embedder = DinoV2Embedder(weights_path=settings.embedder.weights_path, embedding_dim=settings.embedder.embedding_dim)
+    embedder = create_embedder(settings.embedder)
     from app.pipeline.embedder import model_signature
     index = _load_index(settings.matcher.index_path, settings.embedder.embedding_dim, model_signature(embedder))
     mcfg = settings.matcher

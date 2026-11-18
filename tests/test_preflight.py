@@ -166,7 +166,7 @@ def test_everything_fine_has_no_fail_and_says_ready(tmp_path):
     (tmp_path / "models" / "embedder" / "ft").mkdir(parents=True)
     res = run_checks(_probes(project_root=tmp_path))
     assert not [r for r in res if r.status == FAIL], format_results(res)
-    assert statuses(res)["Веса эмбеддера (DINOv2)"] == OK
+    assert statuses(res)["Веса эмбеддера (поиск по виду)"] == OK
     assert "Можно запускать." in format_results(res)
 
 

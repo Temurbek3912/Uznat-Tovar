@@ -131,12 +131,12 @@ def default_factories() -> Factories:
         return HeuristicContourDetector()
 
     def embedder(cfg):
-        from app.pipeline.embedder import DinoV2Embedder
+        from app.pipeline.embedder import create_embedder
         device, threads = embedder_device(os.environ)
         if threads:
             import torch
             torch.set_num_threads(threads)
-        return DinoV2Embedder(weights_path=cfg.weights_path, embedding_dim=cfg.embedding_dim, device=device)
+        return create_embedder(cfg, device=device)
 
     def debug_embedder():
         from app.pipeline.embedder import RandomDebugEmbedder

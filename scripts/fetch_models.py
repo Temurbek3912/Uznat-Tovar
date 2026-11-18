@@ -4,7 +4,8 @@
 
     .venv\\Scripts\\python.exe -m scripts.fetch_models            # в папку models/hf программы (HF_HOME)
 
-Что скачивается: модель распознавания по виду (DINOv2-base, около 350 МБ) и малая модель «вид товара» (SigLIP 2, около 400 МБ),
+Что скачивается: модель распознавания по виду (по config.yaml models.embedder.name: DINOv2-base, около 350 МБ, или SigLIP 2)
+и малая модель «вид товара» (SigLIP 2, около 400 МБ; если поиск тоже SigLIP 2 — это одна и та же модель, скачивается один раз),
 только файлы, которые читает программа (safetensors и настройки). Уже скачанное не скачивается заново.
 Модель «зрение + текст» с её движком сюда не входит: её скачивает scripts/vision_engine.py (установщик зовёт его сам).
 """
@@ -21,9 +22,19 @@ ALLOW = ["*.json", "*.safetensors", "*.txt", "tokenizer.model"]
 
 def model_repos() -> list[str]:
     from app.core.config import Settings  # noqa: PLC0415
-    from app.pipeline.embedder import DEFAULT_HUB_MODEL  # noqa: PLC0415
     kind = os.environ.get("NAMING_KIND_MODEL", Settings.model_fields["naming_kind_model"].default) or ""
-    return [DEFAULT_HUB_MODEL] + ([kind] if kind else [])
+    return list(dict.fromkeys([embedder_hub_model()] + ([kind] if kind else [])))
+
+
+def embedder_hub_model() -> str:
+    """Публичная модель поиска по виду из configs/config.yaml (models.embedder.name); настройки не читаются — DINOv2-base."""
+    from app.pipeline.embedder import DEFAULT_HUB_MODEL, hub_model_for  # noqa: PLC0415
+    try:
+        import yaml  # noqa: PLC0415
+        cfg = yaml.safe_load((ROOT / "configs" / "config.yaml").read_text(encoding="utf-8")) or {}
+        return hub_model_for(((cfg.get("models") or {}).get("embedder") or {}).get("name"))
+    except Exception:  # noqa: BLE001 — нет файла / нет yaml: модель по умолчанию
+        return DEFAULT_HUB_MODEL
 
 
 def main(argv: list[str] | None = None) -> int:

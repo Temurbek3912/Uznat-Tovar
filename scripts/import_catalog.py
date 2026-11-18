@@ -162,7 +162,7 @@ def main(argv: list[str] | None = None, out=print) -> int:
 
     from app.core.config import get_settings                        # ленивые импорты: для --validate-only они не нужны
     from app.db.session import SessionLocal
-    from app.pipeline.embedder import DinoV2Embedder
+    from app.pipeline.embedder import create_embedder
     from scripts.add_product_from_local_file import _load_index
 
     settings = get_settings()
@@ -192,7 +192,7 @@ def main(argv: list[str] | None = None, out=print) -> int:
             out("Отменено.")
             return 1
         out("Загружаю модель эмбеддера (при первом запуске скачает веса из интернета)...")
-        embedder = DinoV2Embedder(weights_path=settings.embedder.weights_path, embedding_dim=settings.embedder.embedding_dim)
+        embedder = create_embedder(settings.embedder)
         from app.pipeline.embedder import model_signature  # noqa: PLC0415
         index = _load_index(settings.matcher.index_path, settings.embedder.embedding_dim, model_signature(embedder))
         res = run_import(plan, repo, embedder, index, index_path=settings.matcher.index_path, manifest=manifest,

@@ -136,12 +136,12 @@ def check_weights(detector_exists: bool, detector_path: str, embedder_dir_exists
         out.append(Result(WARN, "Веса детектора (YOLO)", f"нет файла {detector_path} — будет грубая эвристика на контурах",
                           "Обучите детектор (docs/training_guide.md) и положите best.pt по этому пути"))
     if embedder_dir_exists:
-        out.append(Result(OK, "Веса эмбеддера (DINOv2)", embedder_path))
+        out.append(Result(OK, "Веса эмбеддера (поиск по виду)", embedder_path))
     elif hub_cached:
-        out.append(Result(OK, "Веса эмбеддера (DINOv2)", f"дообученных нет, используется {hub_model} (уже скачана)"))
+        out.append(Result(OK, "Веса эмбеддера (поиск по виду)", f"дообученных нет, используется {hub_model} (уже скачана)"))
     else:
-        out.append(Result(WARN, "Веса эмбеддера (DINOv2)",
-                          f"дообученных нет; при первом запуске будет скачана {hub_model} (~350 МБ)",
+        out.append(Result(WARN, "Веса эмбеддера (поиск по виду)",
+                          f"дообученных нет; при первом запуске будет скачана {hub_model} (~350–400 МБ)",
                           "Нужен интернет на первом запуске. Без него воркер не стартует (ALLOW_DEBUG_EMBEDDER=1 — только для отладки)"))
     return out
 
@@ -318,13 +318,14 @@ def run_checks(pb: Probes) -> list[Result]:
         results.append(check_tesseract(pb.which, pb.get_ocr_languages))
 
     if settings is not None:
-        from app.pipeline.embedder import DEFAULT_HUB_MODEL, resolve_embedder_source   # noqa: PLC0415
+        from app.pipeline.embedder import hub_model_for, resolve_embedder_source   # noqa: PLC0415
         det = settings.detector.weights_path if settings.detector else "models/detector/sku110k_yolo11n.pt"
         emb = settings.embedder.weights_path if settings.embedder else ""
+        hub = hub_model_for(getattr(settings.embedder, "name", "") if settings.embedder else "")
         root = pb.project_root
         det_ok = pb.path_exists(det) or pb.path_exists(str(root / det))
-        _src, from_hub = resolve_embedder_source(emb, roots=[Path.cwd(), root]) if emb else (DEFAULT_HUB_MODEL, True)
-        results += check_weights(det_ok, det, not from_hub, emb or "(не задан)", DEFAULT_HUB_MODEL, pb.hub_cached(DEFAULT_HUB_MODEL))
+        _src, from_hub = resolve_embedder_source(emb, hub, roots=[Path.cwd(), root]) if emb else (hub, True)
+        results += check_weights(det_ok, det, not from_hub, emb or "(не задан)", hub, pb.hub_cached(hub))
 
         db_host, db_port = parse_host_port(settings.database_url, 5432)
         redis_host, redis_port = parse_host_port(settings.queue_broker_url, 6379)

@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 # Публичная модель по умолчанию, если дообученных весов (models.embedder.weights_path) нет на диске.
 # hidden_size = 768 — совпадает с embedding_dim из configs/config.yaml. Скачивается один раз (нужен интернет).
 DEFAULT_HUB_MODEL = "facebook/dinov2-base"
+# SigLIP 2 base 224 — та же модель, что «вид товара» (app/pipeline/kind_classifier.py): по замеру 2026-11-18 ищет товар по виду
+# точнее DINOv2-base (docs/benchmark/models_report_2026-11-18.md). Включается в config.yaml: models.embedder.name: "siglip2-base".
+SIGLIP2_HUB_MODEL = "google/siglip2-base-patch16-224"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -49,6 +52,7 @@ def resolve_embedder_source(
 
 # Как из выхода модели получается вектор. Меняется вместе с кодом embed() — тогда индекс нужно пересобрать.
 DINOV2_PREPROCESS = "hf-auto-image-processor/cls-token/v1"
+SIGLIP_PREPROCESS = "hf-auto-image-processor/siglip-pooler-output/v1"
 L2 = "l2"
 
 
@@ -91,8 +95,34 @@ class ImageEmbedder(Protocol):
         ...
 
 
+def embedder_family(name: str | None) -> str:
+    """Семейство модели по имени из config.yaml (models.embedder.name): «siglip…» — SigLIP 2, всё остальное — DINOv2."""
+    return "siglip" if "siglip" in (name or "").lower() else "dinov2"
+
+
+def hub_model_for(name: str | None) -> str:
+    """Публичная модель по имени из config.yaml: полное имя репозитория («facebook/dinov2-small») — как есть;
+    «siglip2-base» — SigLIP 2 base 224; иначе (в том числе «dinov2-base-retail-ft») — DINOv2-base."""
+    text = (name or "").strip()
+    if "/" in text:
+        return text
+    return SIGLIP2_HUB_MODEL if embedder_family(text) == "siglip" else DEFAULT_HUB_MODEL
+
+
+def create_embedder(cfg, device: str = "cuda", int8: bool = False):
+    """Эмбеддер по настройке models.embedder (name, weights_path, embedding_dim) — одно место выбора модели для программы,
+    импорта, пересборки индекса и оценки. Индекс помнит паспорт модели: после смены модели его нужно пересобрать
+    (python -m scripts.rebuild_index --compute-missing)."""
+    name = getattr(cfg, "name", "") or ""
+    cls = SiglipEmbedder if embedder_family(name) == "siglip" else DinoV2Embedder
+    return cls(weights_path=getattr(cfg, "weights_path", "") or "", embedding_dim=int(getattr(cfg, "embedding_dim", 768) or 768),
+               device=device, hub_model=hub_model_for(name), int8=int8)
+
+
 class DinoV2Embedder:
     """Продакшн-реализация поверх HuggingFace transformers (DINOv2 или дообученный чекпоинт)."""
+
+    PREPROCESS = DINOV2_PREPROCESS
 
     def __init__(self, weights_path: str, embedding_dim: int = 768, device: str = "cuda", hub_model: str = DEFAULT_HUB_MODEL,
                  int8: bool = False):
@@ -101,7 +131,7 @@ class DinoV2Embedder:
         int8 — квантование линейных слоёв для процессора (быстрее, векторы немного другие: индекс строится той же моделью)."""
         try:
             import torch
-            from transformers import AutoImageProcessor, AutoModel
+            from transformers import AutoImageProcessor
         except ImportError as exc:  # pragma: no cover
             raise RuntimeError(
                 "transformers/torch не установлены. Установите зависимости из requirements.txt."
@@ -117,7 +147,7 @@ class DinoV2Embedder:
                 "ПЕРЕСОБЕРИТЕ индекс каталога: эмбеддинги разных моделей несовместимы.", weights_path, source,
             )
         self._processor = AutoImageProcessor.from_pretrained(source)
-        self._model = AutoModel.from_pretrained(source).to(self.device).eval()
+        self._model = self._load_model(source).to(self.device).eval()
         hidden = int(getattr(self._model.config, "hidden_size", 0) or 0)
         self.embedding_dim = hidden or int(embedding_dim)      # размер вектора — по самой модели (small: 384, base: 768)
         self.int8 = bool(int8) and self.device == "cpu"
@@ -131,7 +161,16 @@ class DinoV2Embedder:
             weights = weights_fingerprint(Path(source))
         name = source if from_hub else Path(source).name
         self.model_signature = {"name": name + ("+int8" if self.int8 else ""), "weights": weights,
-                                "preprocess": DINOV2_PREPROCESS, "dim": int(self.embedding_dim), "normalization": L2}
+                                "preprocess": self.PREPROCESS, "dim": int(self.embedding_dim), "normalization": L2}
+
+    @staticmethod
+    def _load_model(source: str):
+        from transformers import AutoModel  # noqa: PLC0415
+        return AutoModel.from_pretrained(source)
+
+    @staticmethod
+    def _vectors(outputs):
+        return outputs.last_hidden_state[:, 0, :]          # CLS-токен как эмбеддинг изображения
 
     def embed(self, crops: list[np.ndarray]) -> np.ndarray:
         if not crops:
@@ -140,10 +179,29 @@ class DinoV2Embedder:
         inputs = self._processor(images=crops, return_tensors="pt").to(self.device)
         with self._torch.no_grad():
             outputs = self._model(**inputs)
-            # CLS-токен / pooled-выход как эмбеддинг изображения
-            vectors = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+            vectors = self._vectors(outputs).float().cpu().numpy()
 
         return _l2_normalize(vectors)
+
+
+class SiglipEmbedder(DinoV2Embedder):
+    """SigLIP 2: только визуальная часть модели (текстовая не нужна), вектор — pooler_output, как у «вида товара»
+    (app/pipeline/kind_classifier.py). Шкала сходства у неё другая, чем у DINOv2: пороги matcher подбираются заново."""
+
+    PREPROCESS = SIGLIP_PREPROCESS
+
+    def __init__(self, weights_path: str, embedding_dim: int = 768, device: str = "cuda", hub_model: str = SIGLIP2_HUB_MODEL,
+                 int8: bool = False):
+        super().__init__(weights_path, embedding_dim=embedding_dim, device=device, hub_model=hub_model, int8=int8)
+
+    @staticmethod
+    def _load_model(source: str):
+        from transformers import SiglipVisionModel  # noqa: PLC0415
+        return SiglipVisionModel.from_pretrained(source)
+
+    @staticmethod
+    def _vectors(outputs):
+        return outputs.pooler_output
 
 
 class RandomDebugEmbedder:

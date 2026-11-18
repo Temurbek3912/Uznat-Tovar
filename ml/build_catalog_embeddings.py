@@ -23,7 +23,7 @@ from pathlib import Path
 
 
 from app.core.config import get_settings
-from app.pipeline.embedder import DinoV2Embedder, model_signature
+from app.pipeline.embedder import create_embedder, model_signature
 from app.pipeline.imageio import load_rgb
 from app.pipeline.matcher import FaissCatalogIndex
 
@@ -72,7 +72,7 @@ def main() -> None:
     if backup:
         print(f"Копия прежнего индекса: {backup}")
 
-    embedder = DinoV2Embedder(weights_path=embedder_cfg.weights_path, embedding_dim=embedder_cfg.embedding_dim)
+    embedder = create_embedder(embedder_cfg)
     index = FaissCatalogIndex(embedding_dim=embedder_cfg.embedding_dim)
     index.model = model_signature(embedder)               # полная пересборка: все векторы — этой моделью (манифест индекса)
 

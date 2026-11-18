@@ -67,12 +67,13 @@ def bench_embedder(args) -> dict:
     import torch
     if args.threads:
         torch.set_num_threads(args.threads)
-    from app.pipeline.embedder import DinoV2Embedder
+    from types import SimpleNamespace
+    from app.pipeline.embedder import create_embedder
     from app.pipeline.imageio import load_rgb
     t_import = time.perf_counter() - t0
     t1 = time.perf_counter()
-    emb = DinoV2Embedder(weights_path="", embedding_dim=args.dim, device=args.device, hub_model=args.model,
-                         int8=args.int8)
+    emb = create_embedder(SimpleNamespace(name=args.model, weights_path="", embedding_dim=args.dim), device=args.device,
+                          int8=args.int8)          # --model google/siglip2-base-patch16-224 — SigLIP 2
     t_load = time.perf_counter() - t1
     images = [load_rgb(str(p)) for p in photos_in(Path(args.photos), args.n)]
     if not images:

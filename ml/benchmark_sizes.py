@@ -62,12 +62,12 @@ def main() -> None:
     ap.add_argument("--device", default="auto")
     a = ap.parse_args()
     from app.core.config import get_settings  # noqa: PLC0415
-    from app.pipeline.embedder import DinoV2Embedder  # noqa: PLC0415
+    from app.pipeline.embedder import create_embedder  # noqa: PLC0415
     from app.pipeline.imageio import load_rgb  # noqa: PLC0415
     folder = Path(a.dir)
     names = load_names(folder)
     cfg = get_settings().embedder
-    emb = DinoV2Embedder(weights_path=cfg.weights_path, embedding_dim=cfg.embedding_dim, device=a.device)
+    emb = create_embedder(cfg, device=a.device)
     owners, vecs = [], []
     for sku in sorted(names):
         for p in sorted((folder / sku).glob("*")):

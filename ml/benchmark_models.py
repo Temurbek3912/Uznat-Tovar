@@ -132,9 +132,10 @@ def load_images(items, shopper: bool):
     return out
 
 
-def evaluate(gal: np.ndarray, qry: np.ndarray, owners: list[str], groups: list[str]) -> dict:
+def evaluate(gal: np.ndarray, qry: np.ndarray, owners: list[str], groups: list[str], only=None) -> dict:
     """Оставить одно: снимок i против всех ДРУГИХ фото. Только товары, у которых есть хотя бы 2 фото.
-    groups — набор (папка): снимок ищется только среди товаров своего набора (как в отдельном магазине)."""
+    groups — набор (папка): снимок ищется только среди товаров своего набора (как в отдельном магазине).
+    only — номера фото, которые берутся снимками (например, только лицевые); каталог — все фото."""
     sims = qry @ gal.T
     n = len(owners)
     own = np.array(owners)
@@ -144,6 +145,8 @@ def evaluate(gal: np.ndarray, qry: np.ndarray, owners: list[str], groups: list[s
     for i in range(n):
         mask = (grp == grp[i])
         mask[i] = False
+        if only is not None and i not in only:
+            continue
         if not (mask & (own == own[i])).any():
             continue
         scores: dict[str, float] = {}
@@ -210,6 +213,10 @@ def main(argv=None) -> int:
     ap.add_argument("--models", default="")
     ap.add_argument("--allow-download", action="store_true")
     ap.add_argument("--labels", default="", help="разметка фото (photo_labels.csv): вид «лицевая» — отдельный набор")
+    ap.add_argument("--one-catalog", action="store_true",
+                    help="все папки — один каталог (как база программы), а не отдельные магазины")
+    ap.add_argument("--front-prefix", default="",
+                    help="фото с таким началом имени (front_) — лицевые: добавить вид «снимок — лицевая» (каталог — все фото)")
     a = ap.parse_args(argv)
     if not a.allow_download:
         os.environ["HF_HUB_OFFLINE"] = "1"
@@ -223,6 +230,11 @@ def main(argv=None) -> int:
         items += [(f"{o.split('/')[0]}-лицевые/{o.split('/', 1)[1]}", p) for o, p in items if str(p) in front]
     owners = [o for o, _ in items]
     groups = [o.split("/")[0] for o in owners]
+    if a.one_catalog:
+        groups = ["каталог-лицевые" if "-лицевые" in gr else "каталог" for gr in groups]
+    front_idx = {i for i, (_, p) in enumerate(items) if a.front_prefix and p.name.startswith(a.front_prefix)}
+    if a.labels:   # размеченные лицевые фото пилота — тоже лицевые снимки
+        front_idx |= {i for i, (o, p) in enumerate(items) if "-лицевые" not in o and str(p) in front}
     print(f"Фото: {len(items)}, товаров: {len(set(owners))}", flush=True)
     orig = load_images(items, shopper=False)
     shop = load_images(items, shopper=True)
@@ -244,8 +256,12 @@ def main(argv=None) -> int:
         cpu_ms = timing(emb, orig, "cpu", n=10)
         for sub in sets:
             idx = [i for i, gr in enumerate(groups) if gr == sub]
-            for variant, qv in (("как есть", g), ("как покупатель", q)):
-                res = evaluate(g[idx], qv[idx], [owners[i] for i in idx], [groups[i] for i in idx])
+            variants = [("как есть", g, None), ("как покупатель", q, None)]
+            fr = {j for j, i in enumerate(idx) if i in front_idx}
+            if fr:
+                variants += [("лицевая, как есть", g, fr), ("лицевая, как покупатель", q, fr)]
+            for variant, qv, only in variants:
+                res = evaluate(g[idx], qv[idx], [owners[i] for i in idx], [groups[i] for i in idx], only)
                 wrong = {idx[j] for j in res.pop("wrong")}
                 counted = {idx[j] for j in res.pop("counted")}
                 flags[(cand.key, sub, variant)] = {i: i not in wrong for i in counted}

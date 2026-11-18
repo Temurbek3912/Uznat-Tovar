@@ -1,0 +1,6 @@
+sku,action,old_name,new_name,old_brand,new_brand,why
+UZ-4607084351354,rename,Choco-Pie 30 г,Choco-Pie Original 30 г,Orion,,на фото — Original; рядом ещё два вкуса
+UZ-4607084352504,rename,Choco_Pie 30 gramms,Choco-Pie чёрная смородина 30 г,Orion,,на фото — вкус «Чёрная смородина»
+UZ-4607084352573,rename,Choco-pie,Choco-Pie карамель,Orion,,на фото — вкус «Карамель»
+UZ-7622201427153,rename,Alpen Gold,Alpen Gold молочный шоколад,"""Мон'дэлис Русь""",Alpen Gold,на фото — молочный шоколад; бренд был названием фирмы
+UZ-7622201448707,rename,alpen gold,Alpen Gold фундук и изюм,Alpen Gold,,на фото — «Фундук и изюм»

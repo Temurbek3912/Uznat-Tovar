@@ -353,3 +353,18 @@ def test_browsing_has_its_own_rate_limit(env):
     blocked = env.client.get("/api/v1/public/products")
     assert blocked.status_code == 429 and blocked.json()["code"] == "public_browse_limited"
     _browse_reset(env)
+
+
+def test_photo_credit_is_shown_only_for_photos_from_an_open_base(env):
+    """CC BY-SA (Open Food Facts): под фото — чьё оно; своё фото магазина — без подписи."""
+    _browse_reset(env)
+    from app.db.models import ProductImage
+
+    with env.Session() as db:
+        db.add(ProductImage(product_id=env.cola, sha256="a" * 64, storage_path="catalog-imported/cola/a.jpg",
+                            credit="Open Food Facts, CC BY-SA"))
+        db.add(ProductImage(product_id=env.fanta, sha256="b" * 64, storage_path="catalog-imported/fanta/b.jpg"))
+        db.commit()
+    items = {i["name"]: i for i in env.client.get("/api/v1/public/products").json()["items"]}
+    assert items["Кола 0,5 л"]["photo_credit"] == "Open Food Facts, CC BY-SA"
+    assert items["Фанта 0,5 л"]["has_photo"] is True and "photo_credit" not in items["Фанта 0,5 л"]

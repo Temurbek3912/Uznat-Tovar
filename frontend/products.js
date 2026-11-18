@@ -468,6 +468,10 @@
         var st = imageState(img), state = doc.createElement("span");
         state.className = st.ok ? "gph__state gph__state--ok" : "gph__state"; state.textContent = t(st.key);
         card.appendChild(state);
+        if (img.credit) {                                   // чьё фото (Open Food Facts, CC BY-SA) — как у покупателя
+          var credit = doc.createElement("span"); credit.className = "gph__credit";
+          credit.textContent = t("common.photo_credit", { src: img.credit }); card.appendChild(credit);
+        }
         imageActions(img).forEach(function (a) {
           var b = doc.createElement("button"); b.setAttribute("type", "button"); b.className = "btn btn--secondary gph__btn";
           b.textContent = t(a[0]); if (imageBusy) b.disabled = true;

@@ -15,6 +15,7 @@
     "common.retry": "Повторить",
     "common.back": "Назад",
     "common.loading": "Загрузка…",
+    "common.photo_credit": "Фото: {src}",
     "common.search": "Поиск",
     "error.generic": "Что-то пошло не так. Попробуйте ещё раз.",
     "error.network": "Нет связи с сервером. Проверьте подключение.",

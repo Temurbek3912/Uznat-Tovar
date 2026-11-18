@@ -33,12 +33,15 @@ OK, WARN, FAIL, SKIP = "OK", "WARN", "FAIL", "SKIP"
 PACKAGES: list[tuple[str, str, bool]] = [
     ("fastapi", "fastapi", True), ("uvicorn", "uvicorn[standard]", True), ("pydantic", "pydantic", True),
     ("pydantic_settings", "pydantic-settings", True), ("sqlalchemy", "sqlalchemy", True),
-    ("psycopg2", "psycopg2-binary", True), ("celery", "celery", True), ("redis", "redis", True),
+    ("psycopg", "psycopg[binary]", True), ("celery", "celery", True), ("redis", "redis", True),
     ("numpy", "numpy", True), ("cv2", "opencv-python-headless", True), ("PIL", "pillow", True),
     ("yaml", "pyyaml", True), ("httpx", "httpx", True), ("multipart", "python-multipart", True),
     ("openpyxl", "openpyxl", True), ("reportlab", "reportlab", True),
     ("torch", "torch", True), ("torchvision", "torchvision", True), ("transformers", "transformers", True),
-    ("ultralytics", "ultralytics", True),
+    # Детектор полок (аудит планограммы) необязателен: «Узнать товар» его не использует, а без весов детектора он и так не
+    # запускается (ниже — отдельная проверка «Веса детектора»). Запасной драйвер psycopg2 тоже не обязателен: программа
+    # ходит в базу через psycopg 3 (app/db/url.py).
+    ("ultralytics", "ultralytics", False), ("psycopg2", "psycopg2-binary", False),
     ("faiss", "faiss-cpu", False), ("pytesseract", "pytesseract", False), ("prometheus_client", "prometheus-client", False),
     ("qrcode", "qrcode", False),   # только для scripts/phone_url.py (QR-код с адресом для телефона)
 ]

@@ -33,12 +33,22 @@ def test_packages_missing_required_is_fail_with_pip_hint_and_optional_is_warn():
     assert res.status == OK and missing == set()
 
     def importer(name):
-        if name in ("torch", "psycopg2"):
+        if name in ("torch", "psycopg"):
             raise ImportError(name)
         return "1"
     res, missing = check_packages(importer)
-    assert res.status == FAIL and missing == {"torch", "psycopg2"}
-    assert "torch" in res.detail and "psycopg2-binary" in res.hint
+    assert res.status == FAIL and missing == {"torch", "psycopg"}
+    assert "torch" in res.detail and "psycopg[binary]" in res.hint
+
+
+def test_shelf_detector_and_spare_db_driver_are_optional():
+    """«Узнать товар» работает без детектора полок (ultralytics) и без запасного драйвера psycopg2 — не [FAIL]."""
+    def importer(name):
+        if name in ("ultralytics", "psycopg2"):
+            raise ImportError(name)
+        return "1"
+    res, missing = check_packages(importer)
+    assert res.status == WARN and missing == {"ultralytics", "psycopg2"}
 
     def importer_opt(name):
         if name == "faiss":

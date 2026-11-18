@@ -253,6 +253,7 @@ a.btn { text-decoration: none; text-align: center; }                      /* ÐºÐ
 .gph__pic { display: flex; align-items: center; justify-content: center; aspect-ratio: 1 / 1; overflow: hidden; background: var(--surface-2); border-radius: var(--r-m); color: var(--ink-muted); text-align: center; font-size: var(--fs-s); }
 .gph__pic img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .gph__state { font-size: var(--fs-s); font-weight: var(--fw-bold); }
+.gph__credit { font-size: var(--fs-s); color: var(--ink-muted); }
 .gph__state--ok { color: var(--ok); }
 .gph__btn { width: 100%; justify-content: center; }
 .progress { display: flex; align-items: center; gap: var(--sp-3); font-weight: var(--fw-bold); }

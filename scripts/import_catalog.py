@@ -34,9 +34,10 @@ MAX_LISTED = 30
 class SqlCatalogRepo:
     """Реальный репозиторий товаров на SQLAlchemy. Каждый товар фиксируется отдельным commit: сбой одного не откатывает остальные."""
 
-    def __init__(self, db, media_root=None):
+    def __init__(self, db, media_root=None, photo_credit=None):
         self.db = db
         self.media_root = media_root            # есть — фото импорта копируются в программу (data/catalog-imported)
+        self.photo_credit = photo_credit        # подпись источника у фото (--photo-credit), None — свои фото
 
     def existing_products(self) -> dict[str, ExistingProduct]:
         from app.db.models import Product
@@ -82,7 +83,8 @@ class SqlCatalogRepo:
             except OSError:
                 return None
         infos = [PhotoInfo(sha256=c.sha256, source_ref=f"import:{c.sha256}", original_name=f"{sku}/{c.path.name}",
-                           storage_path=stored(c), width=c.width or None, height=c.height or None) for c in photos]
+                           storage_path=stored(c), width=c.width or None, height=c.height or None,
+                           credit=self.photo_credit) for c in photos]
         try:
             PhotoRegistry(self.db).remember(product_id, infos, vectors, signature)
         except Exception:
@@ -153,6 +155,8 @@ def main(argv: list[str] | None = None, out=print) -> int:
     ap.add_argument("--checkpoint", type=int, default=25, help="сохранять индекс после каждых N товаров (по умолчанию 25)")
     ap.add_argument("--batch", type=int, default=16, help="сколько фото считать за один проход модели (по умолчанию 16)")
     ap.add_argument("--yes", action="store_true", help="не спрашивать подтверждения")
+    ap.add_argument("--photo-credit", default="",
+                    help="подпись источника фото, например «Open Food Facts, CC BY-SA» (показывается под фото)")
     args = ap.parse_args(argv)
 
     if args.validate_only:
@@ -174,7 +178,8 @@ def main(argv: list[str] | None = None, out=print) -> int:
     db = SessionLocal()
     try:
         from app.core.config import resolve_project_path  # noqa: PLC0415
-        repo = SqlCatalogRepo(db, media_root=resolve_project_path(settings.media_root))
+        repo = SqlCatalogRepo(db, media_root=resolve_project_path(settings.media_root),
+                              photo_credit=(args.photo_credit or "").strip()[:200] or None)
         plan = build_plan(folders, metas, manifest, checks, repo.existing_products(), require_csv=args.require_csv)
         warnings += plan.warnings
         errors += plan.errors

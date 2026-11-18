@@ -638,6 +638,7 @@ def _image_out(image: ProductImage, cover_id: str | None) -> dict:
     """Фото для страницы «Товары»: без путей на сервере и без содержимого (оно — через GET …/photo?image_id=)."""
     return {"id": image.id, "role": image.role, "active": bool(image.is_active), "in_recognition": in_recognition(image),
             "has_file": bool(image.storage_path), "is_cover": image.id == cover_id, "original_name": image.original_name,
+            "credit": image.credit,
             "width": image.width, "height": image.height, "created_at": image.created_at, "deactivated_at": image.deactivated_at}
 
 

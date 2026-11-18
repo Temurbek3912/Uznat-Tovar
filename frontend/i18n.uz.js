@@ -15,6 +15,7 @@
     "common.retry": "Qayta urinish",
     "common.back": "Orqaga",
     "common.loading": "Yuklanmoqda…",
+    "common.photo_credit": "Foto: {src}",
     "common.search": "Qidirish",
     "error.generic": "Nimadir xato ketdi. Qayta urinib koʻring.",
     "error.network": "Server bilan aloqa yoʻq. Ulanishni tekshiring.",

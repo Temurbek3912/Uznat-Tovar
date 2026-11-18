@@ -10,7 +10,7 @@ sqlalchemy>=2.0
 # Драйвер Postgres выбирается по схеме DATABASE_URL, сам код его не импортирует (app/db/url.py приводит
 # postgresql:// к postgresql+psycopg://). Ставим ОБА, чтобы любое написание URL работало без ручной правки:
 psycopg[binary]>=3.2    # основной драйвер (psycopg 3), postgresql+psycopg://
-psycopg2-binary>=2.9    # запасной: явный postgresql+psycopg2:// и scripts/preflight.py
+psycopg2-binary>=2.9    # запасной: явный postgresql+psycopg2:// (preflight — необязателен)
 alembic>=1.13           # миграции схемы (migrations/, app/db/migrate.py; применяет scripts/bootstrap.py)
 
 # --- Безопасность ---

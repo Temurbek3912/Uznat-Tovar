@@ -16,6 +16,7 @@
     "common.retry": "Қайта уриниш",
     "common.back": "Орқага",
     "common.loading": "Юкланмоқда…",
+    "common.photo_credit": "Фото: {src}",
     "common.search": "Қидириш",
     "error.generic": "Нимадир хато кетди. Қайта уриниб кўринг.",
     "error.network": "Сервер билан алоқа йўқ. Уланишни текширинг.",

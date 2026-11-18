@@ -138,6 +138,9 @@
       var photo = $("sheetPhoto");
       if (item.has_photo && item.ref) { $("sheetImg").setAttribute("src", photoUrl(item.ref)); photo.hidden = false; }
       else { $("sheetImg").removeAttribute("src"); photo.hidden = true; }
+      var credit = $("sheetCredit"), shown = Boolean(item.has_photo && item.ref && item.photo_credit);
+      credit.textContent = shown ? t("common.photo_credit", { src: item.photo_credit }) : "";   // лицензия CC BY-SA: чьё фото
+      credit.hidden = !shown;
       drawCard();
       $("sheet").hidden = false;
       doc.body.setAttribute("data-sheet", "open");

@@ -358,6 +358,7 @@ class ProductImage(Base):
     source_ref: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     storage_path: Mapped[str | None] = mapped_column(String, nullable=True)
     original_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    credit: Mapped[str | None] = mapped_column(String(200), nullable=True)   # чьё фото: «Open Food Facts, CC BY-SA» (0010)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

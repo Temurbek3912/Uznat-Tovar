@@ -2293,8 +2293,28 @@ OAuth-клиент в Google Cloud и вход через браузер с хр
 * `embedder.shared_siglip_vision`: одна копия SigLIP 2 на процесс для поиска и «вида товара» (`kind_classifier`) — важно в
   облегчённом режиме (оба в процессе API); в полном режиме они в разных процессах. Тест — `test_embedder_source.py` (+1).
 * `ml_runtime`: в таблице компонентов эмбеддер подписан своим именем (было всегда «DINOv2»).
-* Замечено, не исправлено: `scripts.preflight` в `.venv` пишет [FAIL] «нет psycopg2, ultralytics» — к переключению не
-  относится (детектор полок необязателен; база при этом отвечает).
+* Замечено: `scripts.preflight` в `.venv` пишет [FAIL] «нет psycopg2, ultralytics» — к переключению не относится;
+  исправлено в тот же день (запись ниже).
+
+### 2026-11-18. Подпись «Фото: Open Food Facts, CC BY-SA»; проверка запуска без ложного [FAIL]
+
+* **Подпись источника фото** (`docs/CATALOG_SOURCES.md` §6, п. 4; лицензия CC BY-SA требует указать, чьё фото). Новое поле
+  `product_images.credit` (миграция **0010**); `PhotoSummary.cover_credit`; список покупателя (`GET /public/products`) отдаёт
+  `photo_credit` у товаров, чьё витринное фото из открытой базы; в карточке покупателя под фото — «Фото: Open Food Facts,
+  CC BY-SA» (`shop-list.html/js`, ключ `common.photo_credit` на 4 языках); на странице «Товары» — под каждым таким фото.
+  Своё фото магазина — без подписи.
+* Уже загруженные фото: `python -m scripts.set_photo_credit --dir D:/uznat_tovar/catalog-sets/popular-500 --dir
+  D:/uznat_tovar/catalog-sets/rich-pilot --apply` — сверка по SHA-256 файла, подписаны все **1798** фото базы. Новые наборы:
+  `import_catalog --photo-credit "Open Food Facts, CC BY-SA"`. Копия базы до этого —
+  `D:\uznat_tovar\backups-photo-credit-2026-11-18\shelf_audit-before-credit.dump`.
+* Замечено: база владельца стояла на миграции **0008** — 0009 (`scan_events`) применяется сама при запуске API, а API с
+  прошлого раза не перезапускался. Сейчас применены 0009 и 0010 (`upgrade_to_head`).
+* Проверено: подпись видна в карточке покупателя (браузер, телефонный размер, сервер на базе владельца); тесты
+  `test_set_photo_credit.py` (+3), `test_public_api.py` (+1), `shoplist_smoke_test.js` (+1). Страница «Товары» в браузере не
+  открывалась (нужен вход) — проверено только тестами и статической проверкой.
+* **`scripts.preflight`**: [FAIL] «нет psycopg2, ultralytics» был ложным. Программа ходит в базу через psycopg 3
+  (`app/db/url.py`) — теперь обязателен `psycopg`, а `psycopg2` и `ultralytics` (детектор полок; «Узнать товар» его не
+  использует, без весов детектора он и так не запускается) — необязательные ([WARN]). Итог в `.venv`: «блокирующих 0».
 
 ## 5. Противоречия и открытые вопросы
 

@@ -112,6 +112,19 @@ function boot(opts) {
     assert.strictEqual(p.doc.activeElement, tile);
   });
 
+  await test("под фото из открытой базы — чьё оно (CC BY-SA); у своего фото и без фото подписи нет", async () => {
+    const items = [{ ...ITEMS[0], photo_credit: "Open Food Facts, CC BY-SA" }, { ...ITEMS[1] }, { ...ITEMS[0], ref: "r3", name: "Своё" }];
+    const p = boot({ items }); await flush();
+    const tiles = p.$("listHost").byClass("shoplist__item");
+    tiles[0].click();
+    assert.strictEqual(p.$("sheetCredit").hidden, false);
+    assert.strictEqual(p.$("sheetCredit").textContent, "Фото: Open Food Facts, CC BY-SA");
+    p.$("sheetClose").click(); tiles[1].click();
+    assert.strictEqual(p.$("sheetCredit").hidden, true);
+    p.$("sheetClose").click(); tiles[2].click();
+    assert.strictEqual(p.$("sheetCredit").hidden, true);
+  });
+
   await test("поиск (с задержкой) и категория уходят на сервер; «показать ещё» добавляет следующую часть", async () => {
     const p = boot({ paged: true }); await flush();
     assert.strictEqual(p.$("listHost").byClass("shoplist__item").length, 1);

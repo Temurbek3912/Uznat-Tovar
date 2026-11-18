@@ -15,6 +15,7 @@
     "common.retry": "Try again",
     "common.back": "Back",
     "common.loading": "Loading…",
+    "common.photo_credit": "Photo: {src}",
     "common.search": "Search",
     "error.generic": "Something went wrong. Please try again.",
     "error.network": "Can’t reach the server. Check your connection.",

@@ -225,6 +225,8 @@ def public_products(request: Request, q: str = "", category: str = "", offset: i
         summary = covers.get(p.id)
         item["ref"] = p.id
         item["has_photo"] = bool(summary.cover_id) if summary is not None else _folder_photo(p) is not None
+        if summary is not None and summary.cover_id and summary.cover_credit:
+            item["photo_credit"] = summary.cover_credit          # «Фото: Open Food Facts, CC BY-SA» под фото
         items.append(item)
     after = offset + len(page)
     return {"total": total, "items": items, "next_offset": after if after < total else None}

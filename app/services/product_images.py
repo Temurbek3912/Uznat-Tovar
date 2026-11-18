@@ -107,6 +107,7 @@ class PhotoInfo:
     width: int | None = None
     height: int | None = None
     role: str = REFERENCE
+    credit: str | None = None          # подпись источника фото (лицензия открытой базы требует указать автора)
 
 
 def upload_photo_info(uploads_root: Path, ref: str) -> PhotoInfo:
@@ -163,7 +164,7 @@ class PhotoRegistry:
 
     @staticmethod
     def _fill_missing(row, info: PhotoInfo) -> None:
-        for attr in ("source_ref", "storage_path", "original_name", "width", "height"):
+        for attr in ("source_ref", "storage_path", "original_name", "width", "height", "credit"):
             if getattr(row, attr) is None and getattr(info, attr) is not None:
                 setattr(row, attr, getattr(info, attr))
 
@@ -175,7 +176,7 @@ class PhotoRegistry:
         if row is None:
             row = ProductImage(product_id=product_id, sha256=info.sha256, role=info.role, is_active=True,
                                source_ref=info.source_ref, storage_path=info.storage_path, original_name=info.original_name,
-                               width=info.width, height=info.height, created_at=_utcnow())
+                               width=info.width, height=info.height, credit=info.credit, created_at=_utcnow())
             self.db.add(row)
             self.db.flush()
         else:
@@ -351,13 +352,15 @@ class PhotoSummary:
     display: int                   # витринные
     inactive: int                  # выведенные из эталонов
     cover_id: str | None           # фото для миниатюры (cover_image)
+    cover_credit: str | None = None  # чьё это фото (подпись под ним; None — своё фото магазина)
 
 
 def summarize(images: Sequence) -> PhotoSummary:
     cover = cover_image(images)
     return PhotoSummary(total=len(images), references=sum(1 for i in images if in_recognition(i)),
                         display=sum(1 for i in images if i.role == DISPLAY), inactive=sum(1 for i in images if not i.is_active),
-                        cover_id=cover.id if cover is not None else None)
+                        cover_id=cover.id if cover is not None else None,
+                        cover_credit=getattr(cover, "credit", None) if cover is not None else None)
 
 
 def photo_file(media_root: Path, image) -> Path | None:

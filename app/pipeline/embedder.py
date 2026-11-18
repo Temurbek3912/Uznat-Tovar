@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Protocol, Sequence
 
@@ -147,7 +148,7 @@ class DinoV2Embedder:
                 "ПЕРЕСОБЕРИТЕ индекс каталога: эмбеддинги разных моделей несовместимы.", weights_path, source,
             )
         self._processor = AutoImageProcessor.from_pretrained(source)
-        self._model = self._load_model(source).to(self.device).eval()
+        self._model = self._load_model(source, self.device).to(self.device).eval()
         hidden = int(getattr(self._model.config, "hidden_size", 0) or 0)
         self.embedding_dim = hidden or int(embedding_dim)      # размер вектора — по самой модели (small: 384, base: 768)
         self.int8 = bool(int8) and self.device == "cpu"
@@ -164,7 +165,7 @@ class DinoV2Embedder:
                                 "preprocess": self.PREPROCESS, "dim": int(self.embedding_dim), "normalization": L2}
 
     @staticmethod
-    def _load_model(source: str):
+    def _load_model(source: str, device: str):
         from transformers import AutoModel  # noqa: PLC0415
         return AutoModel.from_pretrained(source)
 
@@ -184,6 +185,30 @@ class DinoV2Embedder:
         return _l2_normalize(vectors)
 
 
+_SHARED_SIGLIP: dict[tuple[str, str], object] = {}
+_SHARED_LOCK = threading.Lock()
+
+
+def shared_siglip_vision(repo: str, device: str):
+    """Визуальная часть SigLIP 2 — одна копия на процесс для поиска по виду и «вида товара» (app/pipeline/kind_classifier.py).
+    В облегчённом режиме оба работают в одном процессе, и без этого модель лежала бы в памяти дважды (~0,4 ГБ); в полном режиме
+    поиск — в воркере, «вид товара» — в API, там общей копии нет и не нужно. Модель только читается (eval, no_grad);
+    квантование int8 делает свою копию и общую не меняет. Сначала с диска (запуск не ждёт сети), нет на диске — скачать."""
+    key = (str(repo), str(device))
+    with _SHARED_LOCK:
+        model = _SHARED_SIGLIP.get(key)
+        if model is None:
+            from transformers import SiglipVisionModel  # noqa: PLC0415
+            try:
+                model = SiglipVisionModel.from_pretrained(repo, local_files_only=True)
+            except OSError:
+                model = SiglipVisionModel.from_pretrained(repo)
+            model = model.to(device).eval()
+            _SHARED_SIGLIP[key] = model
+            logger.info("SigLIP 2 %s загружена (%s) — одна копия для поиска по виду и «вида товара»", repo, device)
+        return model
+
+
 class SiglipEmbedder(DinoV2Embedder):
     """SigLIP 2: только визуальная часть модели (текстовая не нужна), вектор — pooler_output, как у «вида товара»
     (app/pipeline/kind_classifier.py). Шкала сходства у неё другая, чем у DINOv2: пороги matcher подбираются заново."""
@@ -195,9 +220,8 @@ class SiglipEmbedder(DinoV2Embedder):
         super().__init__(weights_path, embedding_dim=embedding_dim, device=device, hub_model=hub_model, int8=int8)
 
     @staticmethod
-    def _load_model(source: str):
-        from transformers import SiglipVisionModel  # noqa: PLC0415
-        return SiglipVisionModel.from_pretrained(source)
+    def _load_model(source: str, device: str):
+        return shared_siglip_vision(source, device)
 
     @staticmethod
     def _vectors(outputs):

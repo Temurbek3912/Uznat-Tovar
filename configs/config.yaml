@@ -37,17 +37,20 @@ models:
     max_detections: 1000        # плотная полка SKU-110K — до ~700 объектов; умолчание Ultralytics (300) обрезало бы результат
   embedder:
     # Модель поиска по виду выбирается по name (app/pipeline/embedder.create_embedder): «siglip…» — SigLIP 2, иначе DINOv2.
+    # SigLIP 2 ВКЛЮЧЁН с согласия владельца 2026-11-18; копия до переключения — D:\uznat_tovar\backups-siglip-switch-2026-11-18.
+    # Вернуть DINOv2: name "dinov2-base-retail-ft", weights_path "models/embedder/dinov2_base_retail_ft", пороги 0.72 / 0.45,
+    # затем python -m scripts.rebuild_index --compute-missing --apply. Как включали (история):
     # Замер 2026-11-18 (docs/benchmark/models_report_2026-11-18.md, §6): SigLIP 2 точнее. Чтобы включить — с согласия владельца:
     #   name: "siglip2-base", weights_path: "", пороги ниже — match 0.88, unknown 0.70; затем копия базы и models/index и
     #   python -m scripts.rebuild_index --compute-missing (индекс старой модели программа не загрузит).
-    name: "dinov2-base-retail-ft"
-    weights_path: "models/embedder/dinov2_base_retail_ft"
+    name: "siglip2-base"
+    weights_path: ""
     embedding_dim: 768
   matcher:
     index_path: "models/index/catalog.faiss"
     top_k: 5
-    match_threshold: 0.72       # ниже порога -> "uncertain", в очередь на ручную проверку
-    unknown_threshold: 0.45     # ниже -> "unknown" (товар не из каталога)
+    match_threshold: 0.88       # SigLIP 2 (замер 2026-11-18, §6.3); ниже -> "uncertain", в очередь на ручную проверку
+    unknown_threshold: 0.70     # SigLIP 2; ниже -> "unknown" (товар не из каталога). У DINOv2 были 0.72 / 0.45
     margin_threshold: 0.0       # 0 = выключено; >0: при близком втором товаре -> "uncertain". Подбор: python -m ml.evaluate_matching
 
 # «Назвать любой товар» (документ 07, §10.6): если товара нет в базе — назвать его и попросить обратиться к сотруднику.

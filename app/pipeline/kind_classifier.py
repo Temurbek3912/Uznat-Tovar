@@ -115,8 +115,9 @@ class KindClassifier:
             logger.info("Вид товара: описания переведены в векторы и сохранены (%s)", path.name)
         from transformers import AutoImageProcessor  # noqa: PLC0415
         if self.family == "siglip":
-            from transformers import SiglipVisionModel  # noqa: PLC0415
-            self.vision = _load(SiglipVisionModel, repo)
+            # та же копия, что у поиска по виду, если он тоже SigLIP 2 и в этом процессе (облегчённый режим)
+            from app.pipeline.embedder import shared_siglip_vision  # noqa: PLC0415
+            self.vision = shared_siglip_vision(repo, device)
         else:
             from transformers import CLIPVisionModelWithProjection  # noqa: PLC0415
             self.vision = _load(CLIPVisionModelWithProjection, repo)

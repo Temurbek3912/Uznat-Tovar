@@ -112,3 +112,35 @@ def test_no_direct_dinov2_construction_outside_benchmarks():
             if rel not in allowed and "DinoV2Embedder(" in path.read_text(encoding="utf-8"):
                 found.append(rel)
     assert not found, found
+
+
+def test_siglip_vision_is_shared_between_search_and_kind(monkeypatch):
+    # Облегчённый режим: поиск по виду и «вид товара» — одна SigLIP 2 в памяти (не две по ~0,4 ГБ).
+    import sys
+    import types
+    from app.pipeline import embedder as E
+    loads = []
+
+    class FakeModel:
+        def to(self, device):
+            self.device = device
+            return self
+
+        def eval(self):
+            return self
+
+    class FakeSiglip:
+        @staticmethod
+        def from_pretrained(repo, **kw):
+            loads.append((repo, kw))
+            return FakeModel()
+
+    monkeypatch.setitem(sys.modules, "transformers", types.SimpleNamespace(SiglipVisionModel=FakeSiglip))
+    monkeypatch.setattr(E, "_SHARED_SIGLIP", {})
+    a = E.SiglipEmbedder._load_model(E.SIGLIP2_HUB_MODEL, "cpu")
+    b = E.shared_siglip_vision(E.SIGLIP2_HUB_MODEL, "cpu")
+    c = E.shared_siglip_vision(E.SIGLIP2_HUB_MODEL, "cuda")
+    assert a is b and a is not c
+    assert loads == [(E.SIGLIP2_HUB_MODEL, {"local_files_only": True})] * 2
+    src = (ROOT / "app/pipeline/kind_classifier.py").read_text(encoding="utf-8")
+    assert "shared_siglip_vision(repo, device)" in src

@@ -239,15 +239,15 @@ def build_runtime(settings, env: Mapping[str, str] | None = None, factories: Fac
                 raise RuntimeError("models.embedder не задан в config.yaml")
             emb = f.embedder(cfg)
             device = getattr(emb, "device", None)
-            return emb, f"DINOv2: {cfg.weights_path}" + (f" (считает: {'видеокарта' if device == 'cuda' else 'процессор'})"
+            return emb, f"{cfg.name}: {cfg.weights_path or 'публичная модель'}" + (f" (считает: {'видеокарта' if device == 'cuda' else 'процессор'})"
                                                          if isinstance(device, str) else "")
         except Exception as exc:  # noqa: BLE001
             if not _flag(env, ALLOW_DEBUG_EMBEDDER_ENV):
                 raise RuntimeError(
-                    f"DINOv2-эмбеддер недоступен ({_describe(exc)}). Проверьте интернет (первый запуск скачивает веса) или "
+                    f"Эмбеддер поиска по виду ({cfg.name if cfg else '?'}) недоступен ({_describe(exc)}). Проверьте интернет (первый запуск скачивает веса) или "
                     f"models.embedder.weights_path; для отладки без весов — {ALLOW_DEBUG_EMBEDDER_ENV}=1."
                 ) from exc
-            logger.error("DINOv2-эмбеддер недоступен (%s). %s=1: используются СЛУЧАЙНЫЕ эмбеддинги — результаты сопоставления "
+            logger.error("Эмбеддер поиска по виду недоступен (%s). %s=1: используются СЛУЧАЙНЫЕ эмбеддинги — результаты сопоставления "
                          "товаров бессмысленны, только для отладки!", _describe(exc), ALLOW_DEBUG_EMBEDDER_ENV)
             return f.debug_embedder(), f"СЛУЧАЙНЫЕ эмбеддинги ({ALLOW_DEBUG_EMBEDDER_ENV}=1; причина: {_describe(exc)})"
 

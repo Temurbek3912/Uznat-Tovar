@@ -213,9 +213,9 @@ SigLIP 2 в 384 px — на уровне 224 px (на лицевых 86 % про
 `unknown_threshold` 0,45 можно оставить. Это пороги по фото из интернета и искусственной порче — **проверить на своих фото
 магазина** (`ml.evaluate_matching`) после съёмки.
 
-В `configs/config.yaml` ничего не переключено: модель и пороги меняются вместе и только с согласия владельца.
+**Включено 2026-11-18 с согласия владельца** (§6.5): модель и пороги в `configs/config.yaml` поменяны вместе.
 
-### 6.4. Код переключения (готов, выключен)
+### 6.4. Код переключения
 
 * `app/pipeline/embedder.py`: `create_embedder(cfg)` — модель выбирается по `models.embedder.name` («siglip…» — SigLIP 2,
   иначе DINOv2; полное имя репозитория — как есть); `SiglipEmbedder` — визуальная часть, `pooler_output`, свой паспорт
@@ -229,6 +229,29 @@ SigLIP 2 в 384 px — на уровне 224 px (на лицевых 86 % про
 * Как включить: в `configs/config.yaml` — `name: "siglip2-base"`, `weights_path: ""`, `match_threshold: 0.88`,
   `unknown_threshold: 0.70`; копия базы и `models/index`; `python -m scripts.rebuild_index --compute-missing` (1812 фото —
   несколько минут на видеокарте).
+
+### 6.5. Переключение сделано (2026-11-18)
+
+Владелец ответил «да, переключить сейчас». Сделано:
+
+* **Копия до переключения:** `D:\uznat_tovar\backups-siglip-switch-2026-11-18\` — вся база (`shelf_audit-before-siglip.dump`,
+  `pg_dump -Fc`, 24 таблицы, проверено `pg_restore -l`) и папка индекса DINOv2 (`models-index\`). Ещё одна копия прежнего индекса
+  — `models/index/backup-20261118-172151-b347b0` (её делает `rebuild_index`).
+* `configs/config.yaml`: `name: "siglip2-base"`, `weights_path: ""`, `match_threshold: 0.88`, `unknown_threshold: 0.70`.
+* `python -m scripts.rebuild_index --compute-missing --apply --yes`: 1798 векторов посчитано заново (за ~1 мин на видеокарте).
+  Паспорт индекса — `google/siglip2-base-patch16-224`, `siglip-pooler-output/v1`, 768; `reconcile_index` — «Расхождений нет»;
+  `preflight` — эмбеддер и индекс в порядке.
+* Программа (`build_runtime`, как воркер) загрузила индекс и узнала 12 случайных товаров из `popular-500`: на фото как есть
+  — 12 из 12 (снимок сам есть в каталоге, сходство 1,000, «уверен»); на испорченных (поворот, мельче, размытие, темнее, сжатие)
+  — 9 из 12 верно первым, почти все — «похоже» (0,71–0,88), одна ошибка выше порога (0,890, «уверен» — не тот товар).
+  Порог 0,88 на грани: на своих фото проверить `ml.evaluate_matching`.
+* Одна копия SigLIP 2 в памяти (`embedder.shared_siglip_vision`): поиск по виду и «вид товара» в одном процессе (облегчённый
+  режим) берут одну модель — проверено на видеокарте (`kind.vision is embedder._model`, 354 МБ). В полном режиме они и раньше
+  были в разных процессах (поиск — воркер, «вид товара» — API).
+
+**Как вернуть DINOv2:** в `config.yaml` — `name: "dinov2-base-retail-ft"`, `weights_path: "models/embedder/dinov2_base_retail_ft"`,
+пороги 0.72 / 0.45 (или 0.84 / 0.45 по §6.3), затем `python -m scripts.rebuild_index --compute-missing --apply` (или вернуть
+файлы из `models-index\` копии).
 
 Повторить:
 ```

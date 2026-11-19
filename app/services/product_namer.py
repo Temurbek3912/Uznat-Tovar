@@ -110,8 +110,9 @@ def _clean(text) -> str:
 
 def _product_name(product: dict, lang: str) -> str:
     short = lang.split("-")[0]
+    from app.services.open_name_tidy import tidy_name  # noqa: PLC0415 — без состава, калорий, цены, арабского текста
     for key in (f"product_name_{short}", "product_name", "product_name_en", "product_name_ru", "generic_name"):
-        name = _clean(product.get(key))
+        name = tidy_name(_clean(product.get(key)))
         if name:
             return name
     return ""

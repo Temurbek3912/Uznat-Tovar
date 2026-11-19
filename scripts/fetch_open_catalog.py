@@ -27,6 +27,7 @@ import urllib.request
 from pathlib import Path
 
 from app.services.open_product_details import ALCOHOL_CATEGORY, TOBACCO_CATEGORY
+from app.services.open_name_tidy import name_doubts, tidy_brand, tidy_name
 
 USER_AGENT = "UznatTovar/1.0 (store product lookup)"
 SEARCH = "https://search.openfoodfacts.org/search"          # поиск по всей Open Food Facts (обычный /api/v2/search бывает недоступен)
@@ -88,7 +89,7 @@ def good_name(name: str) -> bool:
 
 def product_name(p: dict) -> str:
     for lang in LANG_ORDER:
-        name = _text(p.get(f"product_name_{lang}" if lang else "product_name"))
+        name = tidy_name(_text(p.get(f"product_name_{lang}" if lang else "product_name")))   # без состава, калорий, цены
         if good_name(name):
             qty = _text(p.get("quantity"))
             return f"{name} {qty}".strip() if qty and qty.lower() not in name.lower() else name
@@ -99,7 +100,7 @@ def brand_of(p: dict) -> str:
     brands = p.get("brands") or ""
     if isinstance(brands, list):
         brands = ", ".join(brands)
-    brand = _text(str(brands).split(",")[0])
+    brand = tidy_brand(_text(str(brands).split(",")[0]))
     return brand if good_name(brand) else ""
 
 
@@ -241,6 +242,31 @@ def _write_lists(out: Path, rows: list[dict]) -> None:
         w = csv.writer(f, delimiter=";")
         w.writerow(["sku", "barcode"])
         w.writerows([(r["sku"], r["barcode"]) for r in rows])
+    write_names_to_check(out, rows)
+
+
+def write_names_to_check(out: Path, rows: list[dict]) -> int:
+    """names_to_check.csv — названия, которые стоит проверить глазами (опечатка, набор букв, описание вместо названия).
+    Формат — как у scripts/fix_product_names.py: заполнить new_name/new_brand или action=archive и применить после одобрения."""
+    path = out / "names_to_check.csv"
+    doubtful = [(r, name_doubts(r["name"], r.get("brand") or "")) for r in rows]
+    doubtful = [(r, why) for r, why in doubtful if why]
+    if not doubtful:
+        path.unlink(missing_ok=True)
+        return 0
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["sku", "action", "old_name", "new_name", "old_brand", "new_brand", "why"])
+        w.writerows([(r["sku"], "rename", r["name"], "", r.get("brand") or "", "", "; ".join(why)) for r, why in doubtful])
+    return len(doubtful)
+
+
+def _done(out: Path, rows: list[dict], photos: int) -> None:
+    print(f"Готово: {len(rows)} товаров, {photos} фото -> {out}")
+    doubtful = write_names_to_check(out, rows)
+    if doubtful:
+        print(f"Проверить названия: {doubtful} — список {out / 'names_to_check.csv'} (исправить и применить "
+              f"scripts/fix_product_names.py после одобрения)")
 
 
 def pick_varied(candidates: list[tuple[str, dict]], total: int, per_kind: int) -> list[tuple[str, dict]]:
@@ -302,7 +328,7 @@ def fetch_more(out: Path, countries: list[str], total: int, per_kind: int, skip_
         if n % 25 == 0:
             print(f"  {n}/{len(picked)}: товаров с фото {len(rows)}, фото {photos}")
     _write_lists(out, rows)
-    print(f"Готово: {len(rows)} товаров, {photos} фото -> {out}")
+    _done(out, rows, photos)
 
 
 def rich_queries(brands: list[str], countries: list[str], alcohol: bool) -> list[str]:
@@ -350,7 +376,7 @@ def fetch_rich(out: Path, brands: list[str], countries: list[str], min_photos: i
             photos += got
             print(f"  {row['sku']}: {got} фото — {row['name']} [{row['category']}]")
     _write_lists(out, rows)
-    print(f"Готово: {len(rows)} товаров, {photos} фото -> {out}")
+    _done(out, rows, photos)
 
 
 TEXT_PHOTO_KINDS = ("ingredients", "nutrition", "packaging")      # снимки состава, таблицы, упаковки — в поиск по виду не берём
@@ -455,7 +481,7 @@ def fetch_popular(out: Path, countries: list[str], total: int, skip_codes: set[s
             print(f"  {n}/{len(picked)}: товаров {len(rows)}, фото {photos}", flush=True)
             _write_lists(out, rows)
     _write_lists(out, rows)
-    print(f"Готово: {len(rows)} товаров, {photos} фото -> {out}")
+    _done(out, rows, photos)
 
 
 def fetch(out: Path, country: str, prefix: str) -> None:
@@ -472,7 +498,7 @@ def fetch(out: Path, country: str, prefix: str) -> None:
         if n % 50 == 0:
             print(f"  {n}/{len(products)}: товаров с фото {len(rows)}, фото {photos}")
     _write_lists(out, rows)
-    print(f"Готово: {len(rows)} товаров, {photos} фото -> {out}")
+    _done(out, rows, photos)
 
 
 def link_barcodes(out: Path) -> None:

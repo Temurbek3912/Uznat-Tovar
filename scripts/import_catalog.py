@@ -15,6 +15,8 @@
 
 Повторный запуск безопасен: уже загруженные фото пропускаются (манифест по хешу файла), новые фото к существующему товару
 добавляются. Обрыв (Ctrl+C, сбой питания) не портит данные: прогресс сохраняется, следующий запуск продолжит.
+Названия из CSV поправляются сами (как из открытой базы): без состава, калорий, цены, арабского текста, ®, первая буква —
+заглавная; что проверить глазами — в предупреждениях. Не поправлять — --keep-names.
 Полная пересборка индекса: удалить файлы индекса и манифест (см. docs/catalog_guide.md) и запустить снова.
 """
 from __future__ import annotations
@@ -102,7 +104,27 @@ def _print_limited(out, title: str, items: list[str]) -> None:
         out(f"  … и ещё {len(items) - MAX_LISTED}")
 
 
-def prepare(directory: Path, csv_path: Path | None, out=print):
+def tidy_names(metas: dict[str, ProductMeta]) -> tuple[dict[str, ProductMeta], list[str]]:
+    """Названия и бренды без лишнего (состав, калории, цена, арабский текст, ®, маленькая первая буква) — как при загрузке
+    из открытой базы; что править глазами — в предупреждениях. Если от названия ничего не осталось — оставляем как было."""
+    from dataclasses import replace  # noqa: PLC0415
+    from app.services.open_name_tidy import name_doubts, tidy_brand, tidy_name  # noqa: PLC0415
+    fixed, notes = {}, []
+    for sku, meta in metas.items():
+        name = tidy_name(meta.name) or meta.name
+        brand = tidy_brand(meta.brand) or meta.brand
+        if (name, brand) != (meta.name, meta.brand):
+            notes.append(f"{sku}: название поправлено «{meta.name}» -> «{name}»" if name != meta.name
+                         else f"{sku}: бренд поправлен «{meta.brand}» -> «{brand}»")
+            meta = replace(meta, name=name, brand=brand)
+        why = name_doubts(meta.name, meta.brand)
+        if why:
+            notes.append(f"{sku}: проверить название «{meta.name}» — {'; '.join(why)}")
+        fixed[sku] = meta
+    return fixed, notes
+
+
+def prepare(directory: Path, csv_path: Path | None, out=print, tidy: bool = True):
     """Сканирование + CSV + проверка каждого фото. -> (папки, метаданные, проверки, предупреждения, ошибки)."""
     folders, warnings, errors = scan_catalog_folder(directory)
     csv_path = csv_path or (directory / "products.csv" if (directory / "products.csv").is_file() else None)
@@ -120,6 +142,9 @@ def prepare(directory: Path, csv_path: Path | None, out=print):
             if text:
                 metas, csv_errors = parse_products_csv(text)
                 errors += [f"products.csv: {e}" for e in csv_errors]
+                if tidy:
+                    metas, notes = tidy_names(metas)
+                    warnings += notes
     else:
         warnings.append("products.csv не найден — у всех товаров название = артикул, бренд и категория по умолчанию")
     total = sum(len(f.photos) for f in folders)
@@ -129,7 +154,8 @@ def prepare(directory: Path, csv_path: Path | None, out=print):
 
 
 def validate_only(args, out=print) -> int:
-    folders, metas, checks, warnings, errors = prepare(Path(args.dir), Path(args.csv) if args.csv else None, out)
+    folders, metas, checks, warnings, errors = prepare(Path(args.dir), Path(args.csv) if args.csv else None, out,
+                                                         tidy=not args.keep_names)
     plan = build_plan(folders, metas, Manifest(), checks, require_csv=args.require_csv)
     warnings += plan.warnings
     errors += plan.errors
@@ -155,6 +181,8 @@ def main(argv: list[str] | None = None, out=print) -> int:
     ap.add_argument("--checkpoint", type=int, default=25, help="сохранять индекс после каждых N товаров (по умолчанию 25)")
     ap.add_argument("--batch", type=int, default=16, help="сколько фото считать за один проход модели (по умолчанию 16)")
     ap.add_argument("--yes", action="store_true", help="не спрашивать подтверждения")
+    ap.add_argument("--keep-names", action="store_true",
+                    help="не поправлять названия (по умолчанию убираются состав, калории, цена, ®, первая буква — заглавная)")
     ap.add_argument("--photo-credit", default="",
                     help="подпись источника фото, например «Open Food Facts, CC BY-SA» (показывается под фото)")
     args = ap.parse_args(argv)
@@ -162,7 +190,8 @@ def main(argv: list[str] | None = None, out=print) -> int:
     if args.validate_only:
         return validate_only(args, out)
 
-    folders, metas, checks, warnings, errors = prepare(Path(args.dir), Path(args.csv) if args.csv else None, out)
+    folders, metas, checks, warnings, errors = prepare(Path(args.dir), Path(args.csv) if args.csv else None, out,
+                                                         tidy=not args.keep_names)
 
     from app.core.config import get_settings                        # ленивые импорты: для --validate-only они не нужны
     from app.db.session import SessionLocal
@@ -214,6 +243,11 @@ def main(argv: list[str] | None = None, out=print) -> int:
         _print_limited(out, "СБОИ (остальные товары загружены; повторный запуск догрузит эти)", res.failed)
     out("\n" + format_catalog_report(catalog_report(res.embeddings)))
     out(f"\nИндекс: {settings.matcher.index_path}   Манифест: {manifest_path}")
+    if res.created or res.extended:
+        from datetime import date  # noqa: PLC0415
+        day = date.today().isoformat()
+        out(f"Проверить новые фото на «не товар» (селфи, штрихкод крупно): python -m scripts.find_non_product_photos scan "
+            f"--since {day} --out D:/uznat_tovar/photo-check-{day}")
     return 1 if res.failed or res.interrupted else 0
 
 

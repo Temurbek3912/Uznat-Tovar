@@ -4,6 +4,7 @@
 
     python -m scripts.find_non_product_photos scan --out D:\\uznat_tovar\\photo-check-2026-11-18      # найти и показать
     python -m scripts.find_non_product_photos apply --csv docs/catalog_cleanup/photos_2026-11-18.csv        # показать, что будет
+    python -m scripts.find_non_product_photos scan --since 2026-11-19 --out D:\\uznat_tovar\\photo-check-new  # только новые фото
     python -m scripts.find_non_product_photos apply --csv docs/catalog_cleanup/photos_2026-11-18.csv --apply
 
 scan — модель «картинка + текст» SigLIP 2 (та же, что у поиска по виду, уже на диске) сравнивает каждое фото с описаниями
@@ -158,7 +159,7 @@ def write_sheet(path: Path, rows: list[dict], thumbs: dict[str, str]) -> None:
         encoding="utf-8")
 
 
-def scan(out: Path, csv_path: Path, min_not_product: float, batch: int) -> int:
+def scan(out: Path, csv_path: Path, min_not_product: float, batch: int, since: str = "") -> int:
     from app.core.config import get_settings
     from app.db.models import Product, ProductImage
     from app.db.session import SessionLocal
@@ -173,8 +174,11 @@ def scan(out: Path, csv_path: Path, min_not_product: float, batch: int) -> int:
     db = SessionLocal()
     try:
         products = {p.id: p for p in db.query(Product).all()}
-        images = (db.query(ProductImage).filter(ProductImage.is_active.is_(True))
-                  .order_by(ProductImage.product_id, ProductImage.created_at).all())
+        query = db.query(ProductImage).filter(ProductImage.is_active.is_(True))
+        if since:                                   # только фото, добавленные с этого дня (после новой загрузки)
+            from datetime import datetime  # noqa: PLC0415
+            query = query.filter(ProductImage.created_at >= datetime.fromisoformat(since))
+        images = query.order_by(ProductImage.product_id, ProductImage.created_at).all()
     finally:
         db.close()
     print(f"Фото в эталонах: {len(images)}; модель {SIGLIP2_HUB_MODEL} ({device})")
@@ -281,12 +285,14 @@ def main(argv=None) -> int:
     s.add_argument("--csv", default="docs/catalog_cleanup/photos_check.csv", help="список подозрительных")
     s.add_argument("--min-not-product", type=float, default=0.5)
     s.add_argument("--batch", type=int, default=32)
+    s.add_argument("--since", default="", help="только фото, добавленные с этого дня (ГГГГ-ММ-ДД), — проверка после загрузки; "
+                   "left тогда считается только по новым фото")
     a = sub.add_parser("apply", help="вывести из эталонов строки с decision=deactivate")
     a.add_argument("--csv", required=True)
     a.add_argument("--apply", action="store_true", help="записать в базу (иначе только показать)")
     args = ap.parse_args(argv)
     if args.cmd == "scan":
-        return scan(Path(args.out), Path(args.csv), args.min_not_product, args.batch)
+        return scan(Path(args.out), Path(args.csv), args.min_not_product, args.batch, args.since)
     path = Path(args.csv)
     if not path.is_file():
         print(f"Нет файла: {path}", file=sys.stderr)

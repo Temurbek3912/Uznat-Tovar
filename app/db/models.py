@@ -10,7 +10,7 @@ tests/test_migrations.py сверяет итог всех миграций с э
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text,
                         UniqueConstraint)
@@ -23,6 +23,11 @@ class Base(DeclarativeBase):
 
 def _uuid() -> str:
     return str(uuid.uuid4())
+
+
+def _utcnow() -> datetime:
+    """Время UTC без пояса (как раньше datetime.utcnow, но без DeprecationWarning; как app.core.security.utcnow)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class Store(Base):
@@ -71,7 +76,7 @@ class Product(Base):
     category: Mapped[str] = mapped_column(String)
     expected_price: Mapped[float | None] = mapped_column(Float, nullable=True)  # для сверки с ценником (F11)
     embedding_index_ref: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     # Миграция 0006 (документ 06, §4.1): товар в архиве не распознаётся и не виден покупателю, но не удаляется — его можно вернуть.
     status: Mapped[str] = mapped_column(String(16), default=PRODUCT_ACTIVE, server_default=PRODUCT_ACTIVE, index=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -94,7 +99,7 @@ class ProductBarcodeORM(Base):
 
     barcode: Mapped[str] = mapped_column(String, primary_key=True)
     product_id: Mapped[str] = mapped_column(String, ForeignKey("products.id", ondelete="CASCADE"), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 class PlanogramSlotORM(Base):
@@ -116,7 +121,7 @@ class ShelfSnapshot(Base):
     shelf_id: Mapped[str] = mapped_column(String, index=True)
     image_path: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, default="queued")  # queued|processing|done|failed
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     detections: Mapped[list["DetectionORM"]] = relationship(back_populates="snapshot")
     report: Mapped["ComplianceReportORM"] = relationship(back_populates="snapshot", uselist=False)
@@ -162,7 +167,7 @@ class ComplianceReportORM(Base):
     osa_score: Mapped[float] = mapped_column(Float)
     violations_json: Mapped[str] = mapped_column(Text)   # сериализованный список ComplianceViolation
     empty_slots_json: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     snapshot: Mapped[ShelfSnapshot] = relationship(back_populates="report")
 
@@ -178,7 +183,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String)
     role: Mapped[str] = mapped_column(String)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     # Язык интерфейса, выбранный сотрудником (ru | uz | uz-Cyrl | en; NULL — не выбран). Миграция 0002.
     language: Mapped[str | None] = mapped_column(String(8), nullable=True)
     # Блокировка, архив и «доступ до» (документ 05, §12.1, §12.5, §12.7; app/core/account_status.py). Миграция 0003.
@@ -212,7 +217,7 @@ class ApiToken(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     token_hash: Mapped[str] = mapped_column(String, unique=True, index=True)
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
 
 
@@ -247,7 +252,7 @@ class UserSecurity(Base):
     pin_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     pin_set_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     pin_failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 class AuthRecoveryCode(Base):
@@ -258,7 +263,7 @@ class AuthRecoveryCode(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), index=True)
     code_hash: Mapped[str] = mapped_column(String, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
@@ -282,7 +287,7 @@ class AuthSessionMeta(Base):
     listener: Mapped[str] = mapped_column(String, default="all", nullable=False)     # где выдан: public | admin | all
     auth_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)        # проверка пароля (и кода) — от неё предел 8 ч
     reauth_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)      # последнее подтверждение для важных операций
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     method: Mapped[str | None] = mapped_column(String, nullable=True)                # pin — вход по ПИН (простой → выход), иначе NULL
 
@@ -296,7 +301,7 @@ class AuthSetupLink(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), index=True)
     token_hash: Mapped[str] = mapped_column(String, unique=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
     used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -309,7 +314,7 @@ class AuthMfaChallenge(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id", ondelete="CASCADE"), index=True)
     pass_hash: Mapped[str] = mapped_column(String, unique=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
     used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     failed_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -361,7 +366,7 @@ class ProductImage(Base):
     credit: Mapped[str | None] = mapped_column(String(200), nullable=True)   # чьё фото: «Open Food Facts, CC BY-SA» (0010)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     deactivated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
@@ -373,7 +378,7 @@ class EmbeddingModel(Base):
 
     version: Mapped[str] = mapped_column(String(80), primary_key=True)
     signature_json: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 class ImageEmbedding(Base):
@@ -386,7 +391,7 @@ class ImageEmbedding(Base):
     model_version: Mapped[str] = mapped_column(String(80), ForeignKey("embedding_models.version"), primary_key=True)
     dim: Mapped[int] = mapped_column(Integer)
     vector: Mapped[bytes] = mapped_column(LargeBinary)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 # --------------------------------------------------------------------------- камеры (только новые таблицы)
@@ -409,8 +414,8 @@ class CameraORM(Base):
     interval_seconds: Mapped[int] = mapped_column(Integer, default=900)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     verify_tls: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     # Состояние ставит ТОЛЬКО агент своими отчётами (POST /api/v1/agent/cameras/{id}/report) — не конфигурация.
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)   # последний ОТПРАВЛЕННЫЙ снимок
@@ -435,7 +440,7 @@ class CameraEventORM(Base):
     kind: Mapped[str] = mapped_column(String)                 # uploaded | bad_frame | camera_error | upload_error | test_ok | test_error
     message: Mapped[str] = mapped_column(Text, default="")
     snapshot_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
 
 
 class AgentStateORM(Base):
@@ -444,7 +449,7 @@ class AgentStateORM(Base):
     __tablename__ = "agent_state"
 
     name: Mapped[str] = mapped_column(String, primary_key=True)
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     version: Mapped[str | None] = mapped_column(String, nullable=True)
     cameras_count: Mapped[int] = mapped_column(Integer, default=0)
 

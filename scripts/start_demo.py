@@ -33,6 +33,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 import webbrowser
 from dataclasses import dataclass, field, replace
@@ -161,6 +162,9 @@ def _http_ready(url: str) -> bool:
         ctx = ssl._create_unverified_context() if url.startswith("https://") else None  # noqa: S323
         with urllib.request.urlopen(url, timeout=2, context=ctx) as r:
             return r.status == 200
+    except urllib.error.HTTPError as exc:   # ответ «не 2xx» — тоже «ещё не готово»; ответ закрываем (иначе ResourceWarning)
+        exc.close()
+        return False
     except Exception:    # noqa: BLE001 — любая ошибка = «ещё не готово»
         return False
 

@@ -30,7 +30,8 @@ def _manifest():
 
 
 def _open(name):
-    return Image.open(FRONTEND / "icons" / name)
+    with Image.open(FRONTEND / "icons" / name) as im:                       # копия в памяти, файл закрыт (без ResourceWarning)
+        return im.copy()
 
 
 # ----------------------------------------------------------------------- манифест
@@ -63,7 +64,8 @@ def test_manifest_icons_exist_with_declared_sizes_and_cover_any_and_maskable():
         path = FRONTEND / i["src"]
         assert path.is_file(), i["src"]
         w, h = (int(x) for x in i["sizes"].split("x"))
-        assert Image.open(path).size == (w, h) and i["type"] == "image/png"
+        with Image.open(path) as im:
+            assert im.size == (w, h) and i["type"] == "image/png"
 
 
 def test_manifest_is_served_with_the_manifest_mime_type():
@@ -108,10 +110,10 @@ def test_icons_are_not_blank():
 
 
 def test_windows_ico_has_all_sizes_and_matches_the_generator():
-    ico = Image.open(FRONTEND / "icons" / "app.ico")
-    assert set(ico.ico.sizes()) >= {(16, 16), (32, 32), (48, 48), (256, 256)}        # Проводник/панель задач берут свой размер
-    fresh = make_icons.render(256, kind="any").convert("RGBA")
-    assert list(_pixels(ico.ico.getimage((256, 256)).convert("RGBA"))) == list(_pixels(fresh))
+    with Image.open(FRONTEND / "icons" / "app.ico") as ico:
+        assert set(ico.ico.sizes()) >= {(16, 16), (32, 32), (48, 48), (256, 256)}    # Проводник/панель задач берут свой размер
+        fresh = make_icons.render(256, kind="any").convert("RGBA")
+        assert list(_pixels(ico.ico.getimage((256, 256)).convert("RGBA"))) == list(_pixels(fresh))
 
 
 def test_committed_icons_match_the_generator_output():

@@ -28,6 +28,36 @@ def _no_vision_download(monkeypatch):
     monkeypatch.setattr(vision_engine, "lmstudio_copy", lambda part, home=None: None)
 
 
+@pytest.fixture(autouse=True, scope="module")
+def _dispose_test_engines():
+    """После файла тестов закрыть соединения движков SQLAlchemy, созданных его тестами (база SQLite в памяти и во временной
+    папке). Тесты их сами не закрывают, и сборщик мусора потом выдавал «ResourceWarning: unclosed database» в чужих тестах.
+    dispose() движок не ломает: при следующем обращении он откроет новое соединение. Фикстура модульная и подключается раньше
+    остальных, поэтому закрывает движки уже после того, как отработали фикстуры самого файла."""
+    try:
+        from sqlalchemy import event
+        from sqlalchemy.engine import Engine
+    except ImportError:
+        yield
+        return
+    import weakref
+    engines: weakref.WeakSet = weakref.WeakSet()
+
+    def remember(conn):
+        engine = conn.engine
+        if engine not in engines:
+            engines.add(engine)
+            # Движок, выброшенный посреди файла: когда его соберёт сборщик мусора, пул закрывается штатно (а не с ResourceWarning).
+            weakref.finalize(engine, engine.pool.dispose)
+    event.listen(Engine, "engine_connect", remember)
+    try:
+        yield
+    finally:
+        event.remove(Engine, "engine_connect", remember)
+        for engine in list(engines):
+            engine.dispose()
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "environment: проверка соответствия окружения требованиям проекта (не логики кода)")
 

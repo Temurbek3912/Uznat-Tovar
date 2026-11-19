@@ -42,6 +42,7 @@ def test_the_real_python_behind_the_venv_launcher_dies_with_the_program():
         assert not _alive(real_pid)
     finally:
         parent.kill()
+        parent.stdout.close()
 
 
 def test_not_windows_is_not_tied_and_the_old_name_still_works():

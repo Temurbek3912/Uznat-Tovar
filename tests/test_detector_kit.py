@@ -364,7 +364,8 @@ def test_overlay_files_are_written_for_every_labeled_image(tmp_path):
     images, labels = _eval_set(tmp_path, 3)
     evaluate_folder(images, labels, FakeDetector(TRUE_BOXES), overlay_dir=tmp_path / "ov")
     files = sorted(p.name for p in (tmp_path / "ov").iterdir())
-    assert files == ["s0.jpg", "s1.jpg", "s2.jpg"] and Image.open(tmp_path / "ov" / "s0.jpg").size == (200, 100)
+    with Image.open(tmp_path / "ov" / "s0.jpg") as overlay:
+        assert files == ["s0.jpg", "s1.jpg", "s2.jpg"] and overlay.size == (200, 100)
 
 
 def test_diagnose_gives_specific_advice():

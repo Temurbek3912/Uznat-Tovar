@@ -195,6 +195,7 @@ def _starlette_form_app(record):
     async def upload(request: Request):
         form = await request.form()
         data = await form["file"].read()
+        await form.close()                              # временный файл формы закрываем сами (без ResourceWarning)
         record["file_bytes"] = len(data)
         return JSONResponse({"ok": True})
 

@@ -249,6 +249,7 @@ def test_the_engine_dies_with_the_program_even_after_a_crash():
         assert not alive
     finally:
         parent.kill()
+        parent.stdout.close()
 
 
 def test_not_windows_is_not_tied():

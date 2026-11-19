@@ -51,7 +51,8 @@ def test_doubts_point_at_what_a_human_must_fix():
 
 
 def test_last_manual_cleanup_list_capital_letter_rows_now_happen_by_themselves():
-    rows = list(csv.DictReader(open("docs/catalog_cleanup/names_2026-11-18.csv", encoding="utf-8")))
+    with open("docs/catalog_cleanup/names_2026-11-18.csv", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
     caps = [r for r in rows if r["why"] == "первая буква маленькая"]
     assert len(caps) > 30
     assert all(tidy_name(r["old_name"]) == r["new_name"] for r in caps)
@@ -63,7 +64,8 @@ def test_fetch_uses_tidy_and_writes_names_to_check(tmp_path):
     rows = [{"sku": "UZ-1", "name": "Дошuрак", "brand": "", "barcode": "1"},
             {"sku": "UZ-2", "name": "Ветчина 500 г", "brand": "Черкизово", "barcode": "2"}]
     assert foc.write_names_to_check(tmp_path, rows) == 1
-    got = list(csv.DictReader(open(tmp_path / "names_to_check.csv", encoding="utf-8")))
+    with open(tmp_path / "names_to_check.csv", encoding="utf-8") as f:
+        got = list(csv.DictReader(f))
     assert [(r["sku"], r["action"], r["old_name"]) for r in got] == [("UZ-1", "rename", "Дошuрак")]
     assert foc.write_names_to_check(tmp_path, rows[1:]) == 0
     assert not (tmp_path / "names_to_check.csv").exists()               # старый список не остаётся

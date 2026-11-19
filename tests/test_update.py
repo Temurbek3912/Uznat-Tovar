@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import zipfile
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -36,14 +37,14 @@ def _program(folder: Path, files: dict[str, str], *, commit: str | None, date: s
 
 def _db(path: Path, rows: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(str(path)) as c:
+    with closing(sqlite3.connect(str(path))) as c, c:
         c.execute("CREATE TABLE IF NOT EXISTS products (name TEXT)")
         c.execute("DELETE FROM products")
         c.executemany("INSERT INTO products VALUES (?)", [(r,) for r in rows])
 
 
 def _names(path: Path) -> list[str]:
-    with sqlite3.connect(str(path)) as c:
+    with closing(sqlite3.connect(str(path))) as c, c:
         return [r[0] for r in c.execute("SELECT name FROM products ORDER BY name")]
 
 

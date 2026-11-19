@@ -55,7 +55,8 @@ def test_portrait_phone_photo_stored_as_landscape_becomes_portrait_jpeg(tmp_path
     p = tmp_path / "phone.jpg"
     landscape.save(p, exif=exif)
     assert load_rgb(p).shape == (200, 100, 3)                                      # высота 200, ширина 100 — полка стоит вертикально
-    assert Image.open(p).size == (200, 100)                                        # exif-ok: доказываем, что БЕЗ нормализации было бы боком
+    with Image.open(p) as raw:                                                     # exif-ok: доказываем, что БЕЗ нормализации было бы боком
+        assert raw.size == (200, 100)
 
 
 def test_files_without_exif_are_untouched_and_all_input_kinds_work(tmp_path):

@@ -7,7 +7,7 @@ API админ-панели: доступ только администрато�
 from __future__ import annotations
 
 import types
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 
@@ -25,7 +25,7 @@ from app.core.error_handlers import install_error_handlers
 from tests.admin_login import admin_entry, admin_token, enable_totp  # noqa: E402
 from app.api import routes_admin, routes_stores  # noqa: E402
 from app.api.routes_auth import router as auth_router  # noqa: E402
-from app.core.security import Role  # noqa: E402
+from app.core.security import Role, utcnow  # noqa: E402
 from app.db.models import (AuditEvent, Base, CameraORM, ComplianceReportORM, PlanogramSlotORM, Product, ShelfORM,  # noqa: E402
                            ShelfSnapshot, Store)
 from app.db.session import get_db  # noqa: E402
@@ -101,7 +101,7 @@ def H(env, user="admin"):
 def add_snapshot(env, sid, store, shelf, status, age_hours=1, osa=None, comp=None):
     with env.Session() as db:
         db.add(ShelfSnapshot(id=sid, store_id=store, shelf_id=shelf, image_path="/x.jpg", status=status,
-                             created_at=datetime.utcnow() - timedelta(hours=age_hours)))
+                             created_at=utcnow() - timedelta(hours=age_hours)))
         db.commit()
         if osa is not None:
             db.add(ComplianceReportORM(snapshot_id=sid, compliance_score=comp, osa_score=osa, violations_json="[]", empty_slots_json="[]"))

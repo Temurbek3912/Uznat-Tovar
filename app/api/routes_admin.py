@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import timezone
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import require_permission
 from app.core import text_search
 from app.core.config import get_settings, resolve_project_path
-from app.core.security import CurrentUser, Permission
+from app.core.security import CurrentUser, Permission, utcnow
 from app.core.errors import ApiError
 from app.db.models import Product, Store
 from app.db.session import get_db
@@ -74,7 +74,7 @@ def _worker_state() -> dict:
 @router.get("/system")
 def system(db: Session = Depends(get_db), _user: CurrentUser = Depends(_admin)) -> dict:
     settings = get_settings()
-    now = datetime.utcnow()
+    now = utcnow()
     tz = tz_for(settings.app_timezone)
     media = resolve_project_path(settings.media_root)
     try:

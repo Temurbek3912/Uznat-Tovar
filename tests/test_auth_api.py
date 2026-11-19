@@ -603,7 +603,7 @@ def test_access_until_ends_access_on_the_date_and_is_explained_only_after_the_ri
     uid = _user_id(env, admin, "merch_a")["id"]
     from app.db.models import User
     with env.Session() as db:
-        db.get(User, uid).access_until = datetime.utcnow() - timedelta(seconds=1)
+        db.get(User, uid).access_until = utcnow() - timedelta(seconds=1)
         db.commit()
     assert env.client.get("/api/v1/auth/me", headers=merch).status_code == 401
     assert _user_id(env, admin, "merch_a")["status"] == "expired"

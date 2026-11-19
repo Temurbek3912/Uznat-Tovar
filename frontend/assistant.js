@@ -449,7 +449,17 @@
         win.fetch(auth.apiBase() + "/api/v1/catalog/products/tasks/" + encodeURIComponent(taskId), { headers: auth.authHeaders() })
           .then(function (res) { return res.ok ? res.json() : null; }).then(function (data) {
             if (!data || data.state === "working") { watchTask(card, taskId, tries - 1); return; }
-            if (data.state === "done") { card.say = { key: "assistant.add_done", name: card.action.name || "" }; card.note = ""; }
+            if (data.state === "done") {
+              card.say = { key: "assistant.add_done", name: card.action.name || "" }; card.note = "";
+              var notes = Array.isArray(data.notes) ? data.notes : [];      // код с фото успели занять: товар добавлен без него
+              if (notes.length) {
+                card.say = null;
+                card.note = [t("assistant.add_done", { name: card.action.name || "" })].concat(notes.map(function (n) {
+                  var known = n && typeof n.code === "string" && /^[a-z_]+$/.test(n.code) && I18N.has("server." + n.code);
+                  return known ? t("server." + n.code, n.params && typeof n.params === "object" ? n.params : {}) : (n && typeof n.message === "string" ? n.message : "");
+                })).join(" ");
+              }
+            }
             else { card.say = data.message ? null : { key: "error.generic" }; card.note = data.message || ""; }
             save(); render();
           }, function () { watchTask(card, taskId, tries - 1); });

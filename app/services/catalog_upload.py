@@ -580,7 +580,23 @@ def describe_task(status: str, result: object) -> dict:
     """Статус Celery -> простое состояние для человека: working / done / failed + сообщение.
     detail — техническая причина «для специалиста» (показывается свёрнуто)."""
     if status == "SUCCESS":
-        return {"state": "done", "message": "Готово: товар добавлен.", "product_id": result if isinstance(result, str) else None, "detail": None}
+        # Итог «Добавить товар» — id товара или {"product_id", "barcodes_not_linked"} (app/services/barcode_link.py): код с фото
+        # успел занять другой запрос, товар добавлен без него — об этом notes (код сообщения + параметры + текст по-русски).
+        product_id = result if isinstance(result, str) else None
+        notes: list[dict] = []
+        if isinstance(result, dict):
+            product_id = result.get("product_id") if isinstance(result.get("product_id"), str) else None
+            for item in result.get("barcodes_not_linked") or []:
+                if not isinstance(item, dict) or not isinstance(item.get("code"), str):
+                    continue
+                code, name = item["code"], item.get("name") if isinstance(item.get("name"), str) else ""
+                if name:
+                    notes.append({"code": "barcode_not_linked", "params": {"code": code, "name": name},
+                                  "message": f"Штрих-код {code} не привязан: его уже успели привязать к товару «{name}»."})
+                else:
+                    notes.append({"code": "barcode_not_linked_unknown", "params": {"code": code},
+                                  "message": f"Штрих-код {code} не привязан (сбой базы) — добавьте его в карточке товара."})
+        return {"state": "done", "message": "Готово: товар добавлен.", "product_id": product_id, "detail": None, "notes": notes}
     if status in ("FAILURE", "REVOKED"):
         # Наш текст (AppError) показывается как есть; текст любого другого исключения клиенту НЕ отдаётся (там бывают пути,
         # SQL, адреса): только общий текст и код, подробности — в журнале воркера.

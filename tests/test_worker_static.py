@@ -120,7 +120,9 @@ def test_barcodes_are_linked_after_the_product_exists_and_a_failed_link_never_lo
     calls = [n for n in ast.walk(_func("add_catalog_product_task")) if isinstance(n, ast.Call)]
     names = [(c.func.id if isinstance(c.func, ast.Name) else c.func.attr) for c in calls if isinstance(c.func, (ast.Name, ast.Attribute))]
     assert "_link_barcodes" in names and names.index("_link_barcodes") > names.index("add_product")
-    helper = _func("_link_barcodes")
+    # Сама привязка — app/services/barcode_link.py (сбой не пробрасывается, сессия откатывается; поведение — test_barcode_link.py).
+    link_src = (ROOT / "app" / "services" / "barcode_link.py").read_text(encoding="utf-8")
+    helper = next(n for n in ast.walk(ast.parse(link_src)) if isinstance(n, ast.FunctionDef) and n.name == "link_barcodes")
     handlers = [h for n in ast.walk(helper) if isinstance(n, ast.Try) for h in n.handlers]
     assert handlers and all(not any(isinstance(n, ast.Raise) for n in ast.walk(h)) for h in handlers)   # сбой привязки не пробрасывается
     assert any(isinstance(n, ast.Attribute) and n.attr == "rollback" for h in handlers for n in ast.walk(h))

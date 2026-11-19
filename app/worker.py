@@ -21,7 +21,7 @@ from celery.signals import worker_init, worker_process_init, worker_ready
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings, resolve_project_path
-from app.db.models import PRODUCT_ARCHIVED, Product, ProductBarcodeORM
+from app.db.models import PRODUCT_ARCHIVED, Product
 from app.db.session import SessionLocal
 from app.pipeline.detector import ProductDetector
 from app.pipeline.embedder import ImageEmbedder
@@ -214,16 +214,12 @@ def _note_indexed(index_path: str | None, refs: list[str]) -> None:
         logger.warning("Не удалось записать журнал проиндексированных фото рядом с %s — scripts/reindex_uploads.py доиндексирует их", index_path)
 
 
-def _link_barcodes(db: Session, product_id: str, barcodes: list[str]) -> None:
+def _link_barcodes(db: Session, product_id: str, barcodes: list[str]) -> list[dict]:
     """Привязывает штрих-коды к только что созданному товару. Товар уже сохранён и проиндексирован, поэтому сбой привязки
-    (другой запрос успел занять код) НЕ откатывает и не роняет добавление: пишем в лог, остальные коды привязываем."""
-    for code in barcodes:
-        try:
-            db.add(ProductBarcodeORM(barcode=code, product_id=product_id))
-            db.commit()
-        except Exception:  # noqa: BLE001 — IntegrityError: код уже занят; любая иная — тоже не повод терять товар
-            db.rollback()
-            logger.warning("Штрих-код %s не привязан к товару %s (уже занят или ошибка БД)", code, product_id)
+    (другой запрос успел занять код) НЕ откатывает и не роняет добавление; непривязанные коды возвращаются, чтобы сказать о них
+    человеку (app/services/barcode_link.py)."""
+    from app.services.barcode_link import link_barcodes
+    return link_barcodes(db, product_id, barcodes)
 
 
 def _media_root():
@@ -343,12 +339,13 @@ def add_catalog_product_task(self, product_in_dict: dict) -> str:
                               not_indexed=_not_indexed(index_path, None),
                               note_indexed=lambda refs: _note_indexed(index_path, refs),
                               remember=_remember_photos(db, digests))
-        _link_barcodes(db, outcome.product_id, product_in.barcodes)
+        not_linked = _link_barcodes(db, outcome.product_id, product_in.barcodes)
 
         logger.info("%s SKU %s -> product_id=%s (векторов добавлено: %d, уже были: %d)",
                     "Добавлен" if outcome.created else "Уже был в базе (повтор)", product_in.sku, outcome.product_id,
                     outcome.vectors_added, len(outcome.skipped_refs))
-        return outcome.product_id
+        from app.services.barcode_link import task_result
+        return task_result(outcome.product_id, not_linked)
 
     except CatalogAddError as exc:
         db.rollback()

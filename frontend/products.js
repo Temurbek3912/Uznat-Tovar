@@ -230,7 +230,7 @@
       if (p.type === "done") {
         var ctx = p.ctx;
         $("doneText").textContent = ctx.kind === "photos" ? t("products.done_photos", { name: ctx.name, n: ctx.photos }) : t("products.done_new", { name: ctx.name });
-        $("warnList").textContent = (ctx.warnings || []).map(function (w) { return w.photo ? t("products.warn_photo", { n: w.photo, message: w.message }) : w.message; }).join("\n");
+        $("warnList").textContent = (ctx.warnings || []).map(function (w) { return w.key ? t(w.key, w.params || {}) : w.photo ? t("products.warn_photo", { n: w.photo, message: w.message }) : w.message; }).join("\n");
       }
       if (p.type === "fail") {
         var code = p.task.code;                // причина отказа на языке человека, если сервер прислал известный код
@@ -309,7 +309,7 @@
           };
           if (!res.ok) return next();
           return res.json().then(function (task) {
-            if (task.state === "done") return finishOk(ctx);
+            if (task.state === "done") return finishOk(ctx, task);
             if (task.state === "failed") { setProgress({ type: "fail", task: task }); return null; }
             return next();
           });
@@ -317,7 +317,15 @@
       }
       return poll(0);
     }
-    function finishOk(ctx) {
+    function finishOk(ctx, task) {
+      // Код с фото успели привязать к другому товару, пока задача шла: товар добавлен без него — сказать об этом (notes).
+      var notes = task && Array.isArray(task.notes) ? task.notes : [];
+      notes.forEach(function (n) {
+        if (!n || typeof n !== "object") return;
+        var known = typeof n.code === "string" && /^[a-z_]+$/.test(n.code) && I18N.has("server." + n.code);
+        ctx.warnings = (ctx.warnings || []).concat([known ? { key: "server." + n.code, params: n.params && typeof n.params === "object" ? n.params : {} }
+                                                          : { message: typeof n.message === "string" ? n.message : "" }]);
+      });
       setProgress({ type: "done", ctx: ctx });
       if (ctx.kind === "photos" && ctx.id) forgetThumb(ctx.id);
       return loadProducts();

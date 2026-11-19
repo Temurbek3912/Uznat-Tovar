@@ -307,6 +307,8 @@
     "server.login_failed": "Wrong username or password.",
     "server.role_unknown": "The user role is not recognised — contact the administrator.",
     "server.barcode_taken": "Barcode {code} is already linked to “{name}”.",
+    "server.barcode_not_linked": "Barcode {code} was not linked: while the product was being added, it was linked to “{name}”.",
+    "server.barcode_not_linked_unknown": "Barcode {code} was not linked (database error) — add it in the product card.",
     "server.concurrent_update": "The product was just changed by another request — refresh the page and try again.",
     "server.product_duplicate": "“{name}” is already in the catalog.",
     "server.delete_blocked": "Cannot delete: {reasons}",

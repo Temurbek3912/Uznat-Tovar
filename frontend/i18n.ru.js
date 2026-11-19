@@ -307,6 +307,8 @@
     "server.login_failed": "Неверный логин или пароль.",
     "server.role_unknown": "Роль пользователя не распознана — обратитесь к администратору.",
     "server.barcode_taken": "Штрих-код {code} уже привязан к товару «{name}».",
+    "server.barcode_not_linked": "Штрих-код {code} не привязан: пока товар добавлялся, этот код привязали к товару «{name}».",
+    "server.barcode_not_linked_unknown": "Штрих-код {code} не привязан (сбой базы) — добавьте его в карточке товара.",
     "server.concurrent_update": "Товар только что изменил другой запрос — обновите страницу и повторите.",
     "server.product_duplicate": "Товар «{name}» уже есть в каталоге.",
     "server.delete_blocked": "Удалить нельзя: {reasons}",

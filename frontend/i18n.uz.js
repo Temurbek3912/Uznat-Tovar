@@ -307,6 +307,8 @@
     "server.login_failed": "Login yoki parol notoʻgʻri.",
     "server.role_unknown": "Foydalanuvchi roli aniqlanmadi — administratorga murojaat qiling.",
     "server.barcode_taken": "{code} shtrix-kodi allaqachon «{name}» mahsulotiga bogʻlangan.",
+    "server.barcode_not_linked": "{code} shtrix-kodi bogʻlanmadi: mahsulot qoʻshilayotganda u «{name}» mahsulotiga bogʻlandi.",
+    "server.barcode_not_linked_unknown": "{code} shtrix-kodi bogʻlanmadi (baza xatosi) — uni mahsulot kartochkasida qoʻshing.",
     "server.concurrent_update": "Mahsulotni hozirgina boshqa soʻrov oʻzgartirdi — sahifani yangilang va qayta urinib koʻring.",
     "server.product_duplicate": "«{name}» mahsuloti katalogda allaqachon bor.",
     "server.delete_blocked": "Oʻchirib boʻlmaydi: {reasons}",

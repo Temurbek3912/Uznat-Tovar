@@ -592,6 +592,8 @@ async def get_add_product_status(
     if result.ready():
         # Ошибка задачи: прежнее поле result — только безопасный текст (наш или общий), не текст произвольного исключения.
         payload = described["message"] if isinstance(result.result, Exception) else result.result
+        if isinstance(payload, dict):     # итог с непривязанными кодами: прежнее поле result — по-прежнему id товара
+            payload = described.get("product_id")
     return {"task_id": task_id, "status": result.status, "result": payload, **described}
 
 

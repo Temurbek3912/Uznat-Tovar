@@ -55,7 +55,7 @@ class FakeProc:
 class Env:
     def __init__(self, tmp_path, **over):
         self.lines, self.started, self.docker_calls, self.sleeps, self.opened = [], [], [], [], []
-        self.procs, self.applied = {}, {}
+        self.procs, self.applied, self.tied = {}, {}, []
         self.exit_plan = over.pop("exit_plan", {})
         self.stop_after = over.pop("stop_after", 6)
         settings = over.pop("settings", NS(database_url="postgresql://u:p@dbhost:5432/x", queue_broker_url="redis://redishost:6379/0"))
@@ -67,6 +67,7 @@ class Env:
             out=self.lines.append, platform="win32", python="PY", root=tmp_path, worker_status=lambda p: {"ready": True},
             migrate=lambda: "", probe_hw=lambda: hardware.Hardware(ram_gb=32, cores=8, gpu_name="RTX", vram_gb=8.0),
             apply_env=self.applied.update, hf_cache=lambda: tmp_path / "no-hf-cache", setup_link=lambda py, root, env: None,
+            tie_child=self.tied.append,
         )
         kw.update(over)
         self.deps = Deps(**kw)
@@ -125,6 +126,17 @@ def test_happy_path_starts_in_order_prints_addresses_and_stops_everything_on_ctr
     assert "Ctrl+C" in env.text and "Остановка" in env.text
     assert env.procs["api"].events == ["terminate"] and env.procs["worker"].events == ["terminate"]
     assert (tmp_path / "logs" / "api.log").exists() and (tmp_path / "logs" / "worker.log").exists()
+
+
+def test_every_service_is_tied_to_the_program_so_a_hard_kill_frees_the_port(tmp_path):
+    """Окно закрыли крестиком / taskkill /F: API и воркер должны закрыться сами (задание Windows, scripts/child_tie.py)."""
+    code, env = go(tmp_path)
+    assert code == 0 and env.tied == [env.procs["api"], env.procs["worker"]]
+
+    def broken(proc):
+        raise OSError("нет доступа")
+    code, env = go(tmp_path, tie_child=broken)                # не вышло привязать — программа всё равно запускается
+    assert code == 0 and [n for n, _, _ in env.started] == ["api", "worker"] and "ВСЁ ЗАПУЩЕНО" in env.text
 
 
 def test_database_schema_is_upgraded_before_the_services_start(tmp_path):

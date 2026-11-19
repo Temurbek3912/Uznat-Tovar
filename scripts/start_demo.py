@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Callable
 
 from app.core import hardware
-from scripts import phone_url, public_access, vision_engine
+from scripts import child_tie, phone_url, public_access, vision_engine
 from scripts.preflight import parse_host_port
 from scripts.setup_link import write_run_mode
 
@@ -293,7 +293,7 @@ class Deps:
     find_lms: Callable = _find_lms
     pick_device: Callable = vision_engine.pick_device
     free_port: Callable[[], int] = _free_port
-    tie_child: Callable = vision_engine.tie_to_this_process
+    tie_child: Callable = child_tie.tie_to_this_process
     probe_hw: Callable[[], object] = _probe_hw
     apply_env: Callable[[dict], None] = os.environ.update
     hf_cache: Callable[[], Path] = _hf_model_cache
@@ -630,11 +630,10 @@ def _launch(opts: Options, d: Deps, services: list[Service], child_env: dict, st
         for svc in services:
             logf = open(log_dir / f"{svc.name}.log", "wb")
             procs.append((svc, d.popen(svc.argv, cwd=str(d.root), stdout=logf, stderr=subprocess.STDOUT, env=child_env), logf))
-            if svc.name == "vision":
-                try:
-                    d.tie_child(procs[-1][1])        # закроется и при аварийном выходе программы
-                except Exception:        # noqa: BLE001 — не получилось: остановится обычным путём (Ctrl+C, закрытие окна)
-                    pass
+            try:
+                d.tie_child(procs[-1][1])            # закроется и при жёстком завершении программы (scripts/child_tie.py)
+            except Exception:            # noqa: BLE001 — не получилось: остановится обычным путём (Ctrl+C)
+                pass
             out(f"  запущено: {svc.name}  (журнал: logs/{svc.name}.log)")
 
         health = f"{'https' if tls else 'http'}://127.0.0.1:{opts.port}/health"

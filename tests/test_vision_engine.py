@@ -187,7 +187,7 @@ def test_lite_mode_starts_the_own_engine_and_points_the_program_at_it(tmp_path, 
               find_lms=lambda which: pytest.fail("LM Studio не нужна"), tie_child=tied.append)
     assert sd.run(sd.Options(no_browser=True, lite=True), env.deps) == 0
     (argv, kw), = _vision(env)
-    assert tied == [env.procs["worker"]]                     # только движок привязан к программе (FakeProc зовётся worker)
+    assert tied == [env.procs["api"], env.procs["worker"]]   # и API, и движок привязаны к программе (FakeProc зовётся worker)
     assert "Vulkan1" in argv and "51234" in argv and (tmp_path / "logs" / "vision.log").exists()
     api_env = env.started[0][2]["env"]
     assert api_env["NAMING_VISION_URL"] == "http://127.0.0.1:51234/v1"

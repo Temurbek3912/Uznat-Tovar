@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from scripts.child_tie import tie_to_this_process  # noqa: F401 — прежнее место функции
+
 ROOT = Path(__file__).resolve().parent.parent
 VISION_DIR = Path("models") / "vision"
 ENGINE_TAG = "b12022"           # llama.cpp от 2026-10-31: проверен с Qwen3-VL-4B на RTX 5060 (документ 11, §10)
@@ -221,53 +223,6 @@ def server_argv(root: Path, port: int, device: str) -> list[str]:
     return [str(engine_exe(root)), "-m", str(model_path(root, MODEL)), "--mmproj", str(model_path(root, MMPROJ)),
             "--host", "127.0.0.1", "--port", str(port), "--alias", MODEL_NAME, "-c", str(CTX_SIZE), "-np", "1",
             "-dev", device, "-ngl", "99" if gpu else "0", *([] if gpu else ["--no-mmproj-offload"]), "--no-ui"]
-
-
-_JOBS: list = []                # задание Windows живёт, пока жива программа
-
-
-def tie_to_this_process(proc, platform: str = sys.platform) -> bool:
-    """Движок закрывается вместе с программой, даже если её окно закрыли крестиком или она упала (задание Windows с
-    «закрыть всё при закрытии»): иначе он остался бы висеть и занимать видеопамять, а следующий запуск поднял бы второй."""
-    if not platform.startswith("win"):
-        return False
-    import ctypes
-    from ctypes import wintypes
-
-    class BasicLimits(ctypes.Structure):
-        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
-                    ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
-                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
-                    ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD), ("SchedulingClass", wintypes.DWORD)]
-
-    class IoCounters(ctypes.Structure):
-        _fields_ = [(n, ctypes.c_uint64) for n in ("ReadOps", "WriteOps", "OtherOps", "ReadBytes", "WriteBytes", "OtherBytes")]
-
-    class ExtendedLimits(ctypes.Structure):
-        _fields_ = [("BasicLimitInformation", BasicLimits), ("IoInfo", IoCounters), ("ProcessMemoryLimit", ctypes.c_size_t),
-                    ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                    ("PeakJobMemoryUsed", ctypes.c_size_t)]
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
-    kernel32.OpenProcess.restype = wintypes.HANDLE
-    job = kernel32.CreateJobObjectW(None, None)
-    if not job:
-        return False
-    info = ExtendedLimits()
-    info.BasicLimitInformation.LimitFlags = 0x2000          # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-    if not kernel32.SetInformationJobObject(wintypes.HANDLE(job), 9, ctypes.byref(info), ctypes.sizeof(info)):
-        return False
-    handle = kernel32.OpenProcess(0x0101, False, int(proc.pid))  # PROCESS_SET_QUOTA | PROCESS_TERMINATE
-    if not handle:
-        return False
-    try:
-        ok = bool(kernel32.AssignProcessToJobObject(wintypes.HANDLE(job), wintypes.HANDLE(handle)))
-    finally:
-        kernel32.CloseHandle(wintypes.HANDLE(handle))
-    if ok:
-        _JOBS.append(job)
-    return ok
 
 
 def main(argv: list[str] | None = None) -> int:

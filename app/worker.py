@@ -406,7 +406,8 @@ RECOVER_BATCH = 200          # фото за один запуск восста�
 
 @celery_app.task(name="shelf_audit.recover_index", bind=True)
 def recover_index_task(self) -> dict:
-    """Автоматическое восстановление индекса (запускается при каждом старте воркера, см. _schedule_recovery).
+    """Автоматическое восстановление индекса (ставится при каждом старте воркера и затем по расписанию — раз в
+    recover_index_interval_minutes, см. _schedule_recovery и app/services/recovery_schedule.py).
 
     Товар записывается в базу ДО векторов (app/services/catalog_add.py). Если после этого процесс погиб, а задача очереди
     потерялась, в базе остаётся товар, у фото которого (data/catalog-uploads) нет векторов. Источник истины здесь — база
@@ -447,7 +448,7 @@ def recover_index_task(self) -> dict:
                                   remember=remember)
         except Exception as exc:
             _resync_index_after_failure(size_before, exc)
-            logger.exception("Восстановление индекса прервано (повторится при следующем запуске воркера)")
+            logger.exception("Восстановление индекса прервано (повторится по расписанию или при следующем запуске воркера)")
             raise
     finally:
         db.close()
@@ -474,14 +475,45 @@ def _sweep_stale_frames(**kwargs) -> None:
         logger.warning("Уборка временных кадров при запуске не удалась (%s)", exc)
 
 
+def _enqueue_recovery(expires: float | None = None) -> None:
+    """Поставить задачу восстановления индекса. expires — сколько секунд она может ждать в очереди: не взятая к следующему тику
+    расписания отбрасывается, поэтому копии не копятся (в облегчённом режиме задача выполняется сразу, expires не нужен)."""
+    if expires:
+        recover_index_task.apply_async(expires=expires)
+    else:
+        recover_index_task.delay()
+
+
+_recovery_ticker = None      # RecoveryTicker процесса (один на процесс; см. _start_recovery_schedule)
+
+
+def _start_recovery_schedule() -> bool:
+    """Запустить расписание восстановления индекса в этом процессе (один раз). False — выключено настройкой или уже идёт."""
+    global _recovery_ticker
+    from app.services.recovery_schedule import RecoveryTicker, interval_seconds
+
+    if _recovery_ticker is None:
+        _recovery_ticker = RecoveryTicker(interval_seconds(getattr(settings, "recover_index_interval_minutes", 0)),
+                                          _enqueue_recovery)
+    started = _recovery_ticker.start()
+    if started:
+        logger.info("Восстановление индекса по расписанию: раз в %.0f мин", _recovery_ticker.interval / 60)
+    return started
+
+
 @worker_ready.connect
 def _schedule_recovery(**kwargs) -> None:
-    """При каждом запуске воркера — одна задача восстановления индекса. Очередь недоступна — не беда: восстановится при
-    следующем запуске или вручную (scripts/reindex_uploads.py). Исключения из обработчика сигнала Celery проглотил бы — ловим сами."""
+    """При каждом запуске воркера — одна задача восстановления индекса, дальше — по расписанию (recover_index_interval_minutes).
+    Очередь недоступна — не беда: следующий тик расписания поставит снова; вручную — scripts/reindex_uploads.py. Исключения из
+    обработчика сигнала Celery проглотил бы — ловим сами."""
     try:
-        recover_index_task.delay()
+        _enqueue_recovery()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Задача восстановления индекса не поставлена (%s) — повторится при следующем запуске воркера", exc)
+        logger.warning("Задача восстановления индекса не поставлена (%s) — повторится по расписанию", exc)
+    try:
+        _start_recovery_schedule()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Расписание восстановления индекса не запущено (%s) — только при запуске воркера", exc)
 
 
 @celery_app.task(name="shelf_audit.identify_product", bind=True)

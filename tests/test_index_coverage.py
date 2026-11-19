@@ -258,7 +258,10 @@ def test_worker_schedules_recovery_on_every_start_and_never_raises_from_the_sign
     assert any(isinstance(d, ast.Attribute) and d.attr == "connect" and getattr(d.value, "id", "") == "worker_ready"
                for d in fn.decorator_list)
     src = ast.unparse(fn)
-    assert "recover_index_task.delay()" in src and "except Exception" in src and "raise" not in src
+    # с 2026-11-19 — через _enqueue_recovery (сразу при запуске) и затем по расписанию (tests/test_recovery_schedule.py)
+    assert "_enqueue_recovery()" in src and "_start_recovery_schedule()" in src
+    assert "except Exception" in src and "raise" not in src
+    assert "recover_index_task.delay()" in ast.unparse(_func("_enqueue_recovery"))
 
 
 def test_recovery_task_takes_products_from_the_database_and_stops_without_progress():

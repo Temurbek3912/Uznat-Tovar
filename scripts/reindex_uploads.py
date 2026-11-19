@@ -49,6 +49,7 @@ def main(argv: list[str] | None = None, out=print, load_products=None, settings=
     ap.add_argument("--yes", action="store_true", help="не спрашивать подтверждения")
     args = ap.parse_args(argv)
 
+    from app.pipeline.index_store import IndexBusyError                                  # noqa: PLC0415
     from app.pipeline.matcher import open_catalog_index                                  # noqa: PLC0415
     from app.services import index_coverage as C                                         # noqa: PLC0415
     from app.services.catalog_upload import (CatalogAddError, UploadsManifest, folder_name, list_photo_files,  # noqa: PLC0415
@@ -101,8 +102,12 @@ def main(argv: list[str] | None = None, out=print, load_products=None, settings=
         return 2
 
     def note(refs):
+        # журнал — удобство: векторы уже в индексе и с записью об источнике; сбой журнала не останавливает доиндексацию
         manifest.add(refs)
-        manifest.save()
+        try:
+            manifest.save()
+        except (CatalogAddError, IndexBusyError, OSError) as exc:
+            out(f"  Журнал проиндексированных фото не записан ({exc}) — на работу поиска это не влияет")
 
     # записи о фото в базе: при настоящем запуске — всегда; тесты, подающие товары сами, подают и реестр (или обходятся без него)
     registry = (make_registry or (_open_registry if load_products is None else lambda: None))()

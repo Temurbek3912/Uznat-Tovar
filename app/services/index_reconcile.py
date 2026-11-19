@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import time
 import uuid
@@ -213,17 +212,10 @@ def _load_journal_keys(journal_path: Path | None) -> set[str]:
 
 
 def _drop_journal_keys(journal_path: Path, keys: set[str]) -> int:
-    path = Path(journal_path)
-    data = json.loads(path.read_text(encoding="utf-8"))
-    before = list(data.get("photos", []))
-    data["photos"] = sorted(k for k in before if k not in keys)
-    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex[:12]}.part")
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=1)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
-    return len(before) - len(data["photos"])
+    """Под блокировкой журнала (как и запись отметок воркером): до 2026-11-19 запись шла без неё, и отметка, сделанная воркером
+    между чтением и записью, терялась."""
+    from app.services.catalog_upload import drop_manifest_keys  # noqa: PLC0415
+    return drop_manifest_keys(journal_path, keys)
 
 
 def prepare_full_rebuild(index_path: str, replace_existing: bool, journal_path: Path | None = None) -> Path | None:

@@ -376,6 +376,59 @@ def test_plan_reindex_lists_only_photos_missing_from_the_manifest(tmp_path):
     assert cu.plan_reindex([("id-x", "ORPHAN", "Нет в базе")], root, manifest) == []     # папка без товара в списке игнорируется
 
 
+def test_manifest_save_merges_with_marks_written_by_another_process_meanwhile(tmp_path):
+    """2026-11-19: два процесса загрузили журнал, каждый добавил своё — раньше второй save() стирал отметки первого."""
+    path = tmp_path / "uploads_manifest.json"
+    worker, script = cu.UploadsManifest.load(path), cu.UploadsManifest.load(path)
+    worker.add(["upload:A/001-aaaaaaaaaaaa.jpg"])
+    script.add(["upload:B/001-bbbbbbbbbbbb.jpg"])
+    worker.save()
+    script.save()
+    both = {"A/001-aaaaaaaaaaaa.jpg", "B/001-bbbbbbbbbbbb.jpg"}
+    assert cu.UploadsManifest.load(path).keys == both
+    assert script.keys == both                                 # после save() объект видит и чужие отметки
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_manifest_save_keeps_marks_dropped_meanwhile_by_reconcile(tmp_path):
+    """Сверка сняла устаревшую отметку, пока воркер держал журнал в памяти: save() воркера не должен её вернуть."""
+    path = tmp_path / "uploads_manifest.json"
+    first = cu.UploadsManifest.load(path)
+    first.add(["A/001-aaaaaaaaaaaa.jpg", "OLD/001-cccccccccccc.jpg"])
+    first.save()
+    worker = cu.UploadsManifest.load(path)
+    assert cu.drop_manifest_keys(path, ["OLD/001-cccccccccccc.jpg"]) == 1
+    worker.add(["upload:B/001-bbbbbbbbbbbb.jpg"])
+    worker.save()
+    assert cu.UploadsManifest.load(path).keys == {"A/001-aaaaaaaaaaaa.jpg", "B/001-bbbbbbbbbbbb.jpg"}
+    assert cu.drop_manifest_keys(path, ["NOPE/1.jpg"]) == 0
+    assert cu.drop_manifest_keys(tmp_path / "missing.json", ["A/001-aaaaaaaaaaaa.jpg"]) == 0
+
+
+def test_manifest_waits_for_the_lock_and_gives_up_without_breaking_the_add(tmp_path, monkeypatch):
+    """Журнал занят другим процессом: запись ждёт блокировку; дольше срока — record_indexed возвращает False, файл не тронут."""
+    from app.pipeline.index_store import IndexBusyError
+    index_path = tmp_path / "catalog.faiss"
+    journal = cu.manifest_path_for(index_path)
+    assert cu.record_indexed(index_path, ["upload:A/001-aaaaaaaaaaaa.jpg"]) is True
+    before = journal.read_bytes()
+    monkeypatch.setattr(cu, "MANIFEST_LOCK_TIMEOUT_SECONDS", 0.2)
+    with cu.manifest_lock(journal) as held:
+        if not held.locked:
+            pytest.skip("файловая система без блокировок")
+        assert cu.record_indexed(index_path, ["upload:B/001-bbbbbbbbbbbb.jpg"]) is False
+        with pytest.raises(IndexBusyError):
+            cu.drop_manifest_keys(journal, ["A/001-aaaaaaaaaaaa.jpg"])
+    assert journal.read_bytes() == before
+    assert cu.record_indexed(index_path, ["upload:B/001-bbbbbbbbbbbb.jpg"]) is True       # блокировка снята — пишется
+
+
+def test_manifest_lock_is_its_own_file_not_the_index_lock(tmp_path):
+    """Журнал пишут и под блокировкой индекса: общая блокировка зависла бы при вложенном взятии."""
+    journal = cu.manifest_path_for(tmp_path / "catalog.faiss")
+    assert cu.manifest_lock(journal).path.name == "uploads_manifest.json.lock"
+
+
 def test_plan_reindex_uses_the_hashed_folder_for_odd_skus(tmp_path):
     root = tmp_path / "uploads"
     saved = save_photos(root, "Кола 0,5", [normalize_photo(_noise_jpeg(seed=1))])

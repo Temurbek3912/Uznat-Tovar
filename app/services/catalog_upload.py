@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Iterable
 
 from app.core.app_errors import AppError, code_of, message_of, params_of
-from app.pipeline.index_store import replace_with_retry
+from app.pipeline.index_store import IndexBusyError, IndexLock, replace_with_retry
 
 UPLOAD_SUBDIR = "catalog-uploads"          # внутри media_root (по умолчанию data/)
 IDENTIFY_SUBDIR = "identify-tmp"           # временные кадры для «Узнать товар»
@@ -495,36 +495,77 @@ def manifest_key(ref_or_key: str) -> str:
     return ref_or_key[len(UPLOAD_REF_PREFIX):] if ref_or_key.startswith(UPLOAD_REF_PREFIX) else ref_or_key
 
 
+# Сколько ждать, пока журнал пишет другой процесс: запись — доли секунды; журнал — удобство, долго ждать ради него не стоит.
+MANIFEST_LOCK_TIMEOUT_SECONDS = 10.0
+
+
+def manifest_lock(path: str | Path, timeout: float | None = None) -> IndexLock:
+    """Блокировка журнала между процессами (файл «uploads_manifest.json.lock», тот же механизм, что у индекса). Своя, а не
+    общая с индексом: журнал пишут и под блокировкой индекса, и без неё — вложенное взятие одной блокировки зависло бы.
+    Файловая система без блокировок — работаем без неё (как индекс); занята дольше timeout — IndexBusyError."""
+    return IndexLock(Path(path), timeout=MANIFEST_LOCK_TIMEOUT_SECONDS if timeout is None else timeout)
+
+
+def _read_manifest_keys(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        keys = data["photos"]
+        if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
+            raise ValueError("photos")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise CatalogAddError(f"Журнал {path} повреждён. Удалите его (и файлы индекса — тогда фото проиндексируются заново) и повторите.") from exc
+    return set(keys)
+
+
 class UploadsManifest:
     """Какие загруженные из браузера фото уже превращены в вектора индекса. Индекс не умеет удалять и не помнит, чьи это фото;
-    без журнала после пересборки индекса фото из data/catalog-uploads пришлось бы искать вручную."""
+    без журнала после пересборки индекса фото из data/catalog-uploads пришлось бы искать вручную.
+
+    Журнал пишут несколько процессов (воркер, scripts/reindex_uploads.py, scripts/reconcile_index.py). До 2026-11-19 save()
+    записывал свою копию целиком без блокировки: отметки, сделанные другим процессом между чтением и записью, терялись, а
+    снятые сверкой — возвращались. Теперь save() под блокировкой журнала перечитывает файл и добавляет к нему только отметки,
+    сделанные через add() этого объекта (чужие отметки и чужие удаления сохраняются)."""
 
     def __init__(self, path: Path, keys: set[str] | None = None):
         self.path, self.keys = Path(path), set(keys or ())
+        self._added: set[str] = set()
 
     @classmethod
     def load(cls, path: Path) -> "UploadsManifest":
         path = Path(path)
-        if not path.exists():
-            return cls(path)
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            keys = data["photos"]
-            if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
-                raise ValueError("photos")
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            raise CatalogAddError(f"Журнал {path} повреждён. Удалите его (и файлы индекса — тогда фото проиндексируются заново) и повторите.") from exc
-        return cls(path, set(keys))
+        return cls(path, _read_manifest_keys(path))
 
     def has(self, key: str) -> bool:
         return manifest_key(key) in self.keys
 
     def add(self, keys: Iterable[str]) -> None:
-        self.keys.update(manifest_key(k) for k in keys)
+        new = {manifest_key(k) for k in keys}
+        self.keys.update(new)
+        self._added.update(new)
 
     def save(self) -> None:
+        """Слияние с файлом под блокировкой: файл повреждён — CatalogAddError (не затираем); занят — IndexBusyError."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write(self.path, json.dumps({"version": 1, "photos": sorted(self.keys)}, ensure_ascii=False, indent=1).encode("utf-8"))
+        with manifest_lock(self.path):
+            merged = _read_manifest_keys(self.path) | self._added
+            _atomic_write(self.path, json.dumps({"version": 1, "photos": sorted(merged)}, ensure_ascii=False, indent=1).encode("utf-8"))
+        self.keys, self._added = merged, set()
+
+
+def drop_manifest_keys(path: str | Path, keys: Iterable[str]) -> int:
+    """Снимает отметки (сверка индекса: фото отмечено, а векторов у товара нет) под той же блокировкой, что и save().
+    Возвращает, сколько снято. Нет файла — 0."""
+    path, keys = Path(path), {manifest_key(k) for k in keys}
+    if not path.exists():
+        return 0
+    with manifest_lock(path):
+        before = _read_manifest_keys(path)
+        after = before - keys
+        if after != before:
+            _atomic_write(path, json.dumps({"version": 1, "photos": sorted(after)}, ensure_ascii=False, indent=1).encode("utf-8"))
+    return len(before) - len(after)
 
 
 def not_yet_indexed(index_path: str | Path, refs: Iterable[str]) -> list[str]:
@@ -548,7 +589,7 @@ def record_indexed(index_path: str | Path, refs: Iterable[str]) -> bool:
         manifest.add(refs)
         manifest.save()
         return True
-    except (CatalogAddError, OSError):
+    except (CatalogAddError, IndexBusyError, OSError):   # журнал занят другим процессом дольше 10 с — тоже не роняем
         return False
 
 

@@ -478,3 +478,21 @@ def test_shopper_never_sees_an_archived_product(env):
         assert public_card(p) is None
         found = {"status": "matched", "product": {"id": pid}, "candidates": [{"id": pid}]}
         assert public_result(db, found)["status"] == "unknown"
+
+
+def test_deactivated_photo_is_never_the_cover(env):
+    """Выведенное из эталонов фото не становится миниатюрой: первое — выведено, миниатюра — второе; выведены все — миниатюры
+    нет (cover_image_id None, фото 404 → на странице заглушка), хотя записи о фото и файлы остаются."""
+    pid = _product(env)
+    a = _register(env, pid, "COLA", 1, (200, 10, 10), size=(800, 600))
+    b = _register(env, pid, "COLA", 2, (10, 200, 10), size=(500, 900))
+    url = f"/api/v1/catalog/products/{pid}/images"
+    assert env.client.patch(f"{url}/{a}", headers=env.admin, json={"active": False}).json()["cover_image_id"] == b
+    full = env.client.get(f"/api/v1/catalog/products/{pid}/photo?size=full", headers=env.admin)
+    assert Image.open(io.BytesIO(full.content)).size == (500, 900)
+    body = env.client.patch(f"{url}/{b}", headers=env.admin, json={"active": False}).json()
+    assert body["cover_image_id"] is None and not any(i["is_cover"] for i in body["images"])
+    row = env.client.get("/api/v1/catalog/products", headers=env.admin).json()[0]
+    assert row["cover_image_id"] is None and row["photo_count"] == 2
+    assert env.client.get(f"/api/v1/catalog/products/{pid}/photo", headers=env.admin).status_code == 404
+    assert env.client.get(f"/api/v1/catalog/products/{pid}/photo?image_id={a}", headers=env.admin).status_code == 200   # по номеру — видно

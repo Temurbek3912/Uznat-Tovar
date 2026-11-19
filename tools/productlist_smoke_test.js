@@ -243,6 +243,15 @@ function setup(lang, items, extra) {
     const plain = setup("ru", ITEMS); assert.strictEqual(plain.host.byTag("img").length, 0, "без loadThumb ничего не загружается");
   });
 
+  await test("все фото товара выведены из эталонов (фото в базе есть, cover_image_id нет) — миниатюру не спрашиваем, остаётся буква", async () => {
+    const out = Object.assign(P("Z1", "Желание", "3 Желания", "Сладости", 1000, 2), { reference_count: 0, cover_image_id: null });
+    const ok = Object.assign(P("Z2", "Calve 700g", "Calve", "Соусы", 2000, 2), { reference_count: 1, cover_image_id: "img-1" });
+    const asked = [], s = setup("ru", [out, ok], { loadThumb: (p) => { asked.push(p.sku); return Promise.resolve("blob:" + p.sku); } });
+    assert.deepStrictEqual(asked, ["Z2"]);
+    const thumb = (name) => s.host.byClass("prow").find((r) => r.byClass("prow__name")[0].textContent === name).byClass("prow__thumb")[0];
+    assert.strictEqual(thumb("Желание").textContent, "Ж");
+  });
+
   await test("с IntersectionObserver миниатюра грузится только когда строка подъехала к экрану, один раз; после перерисовки слежение начинается заново", async () => {
     let observers = [];
     class FakeIO {

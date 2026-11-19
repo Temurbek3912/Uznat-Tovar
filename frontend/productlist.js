@@ -157,6 +157,13 @@
       img.setAttribute("src", url); img.setAttribute("alt", ""); img.setAttribute("loading", "lazy");
       thumb.appendChild(img);
     }
+    /* Есть ли миниатюра: фото у товара есть, и, если фото учтены в базе (reference_count не null), сервер выбрал витринное
+       (cover_image_id). Все фото выведены из эталонов — миниатюры нет, остаётся буква, лишнего запроса с ответом 404 нет. */
+    function hasThumb(p) {
+      if (!(p.photo_count > 0)) return false;
+      return p.reference_count === null || p.reference_count === undefined || Boolean(p.cover_image_id);
+    }
+
     function lazyThumb(thumb, p) {
       var go = function () {
         var pending;
@@ -181,7 +188,7 @@
       if (url) putImage(thumb, url);
       else {
         thumb.textContent = String(p.name || "?").trim().charAt(0).toUpperCase();
-        if (deps.loadThumb && p.photo_count > 0) lazyThumb(thumb, p);
+        if (deps.loadThumb && hasThumb(p)) lazyThumb(thumb, p);
       }
       b.appendChild(thumb);
       var text = node(doc, "span", "prow__text");

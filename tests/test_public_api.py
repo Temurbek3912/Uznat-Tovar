@@ -368,3 +368,32 @@ def test_photo_credit_is_shown_only_for_photos_from_an_open_base(env):
     items = {i["name"]: i for i in env.client.get("/api/v1/public/products").json()["items"]}
     assert items["Кола 0,5 л"]["photo_credit"] == "Open Food Facts, CC BY-SA"
     assert items["Фанта 0,5 л"]["has_photo"] is True and "photo_credit" not in items["Фанта 0,5 л"]
+
+
+def test_photo_taken_out_of_references_is_never_the_thumbnail(env, monkeypatch):
+    """Фото, выведенное из эталонов (штрихкод, «не товар»), миниатюрой не бывает: есть активное — показывается оно; активных нет —
+    у покупателя заглушка «без фото» (has_photo False, фото 404), а не выведенный снимок."""
+    _browse_reset(env)
+    from datetime import datetime
+
+    from app.db.models import ProductImage
+
+    media = env.tmp_path / "media"
+    monkeypatch.setattr(env.routes, "_media_root", lambda: media)
+    for name, seed in (("old.jpg", 1), ("good.jpg", 2)):
+        path = media / "catalog-imported" / "x" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(jpeg(seed, 600 if name == "good.jpg" else 300, 300))
+    with env.Session() as db:
+        db.add(ProductImage(product_id=env.cola, sha256="c" * 64, storage_path="catalog-imported/x/old.jpg",
+                            is_active=False, created_at=datetime(2026, 1, 1)))                   # раньше и выведено
+        db.add(ProductImage(product_id=env.cola, sha256="d" * 64, storage_path="catalog-imported/x/good.jpg",
+                            created_at=datetime(2026, 1, 2)))
+        db.add(ProductImage(product_id=env.fanta, sha256="e" * 64, storage_path="catalog-imported/x/old.jpg",
+                            is_active=False))                                                   # у товара только выведенное
+        db.commit()
+    items = {i["name"]: i for i in env.client.get("/api/v1/public/products").json()["items"]}
+    assert items["Кола 0,5 л"]["has_photo"] is True and items["Фанта 0,5 л"]["has_photo"] is False
+    cola = env.client.get(f"/api/v1/public/photo/{items['Кола 0,5 л']['ref']}")
+    assert cola.status_code == 200 and Image.open(io.BytesIO(cola.content)).size[0] > Image.open(io.BytesIO(cola.content)).size[1]
+    assert env.client.get(f"/api/v1/public/photo/{items['Фанта 0,5 л']['ref']}").status_code == 404

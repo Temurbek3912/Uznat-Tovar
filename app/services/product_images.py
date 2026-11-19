@@ -335,10 +335,11 @@ def in_recognition(image) -> bool:
 
 
 def cover_image(images: Sequence):
-    """Какое фото показывать миниатюрой товара: первое активное витринное, иначе первый активный эталон, иначе первое любое —
-    из тех, у которых есть файл в программе (storage_path). Нет ни одного файла — None."""
-    with_file = [i for i in images if i.storage_path]
-    for pick in (lambda i: i.role == DISPLAY and i.is_active, lambda i: i.role == REFERENCE and i.is_active, lambda i: True):
+    """Какое фото показывать миниатюрой товара: первое активное витринное, иначе первый активный эталон — из тех, у которых
+    есть файл в программе (storage_path). Выведенные фото (is_active = False: «не товар», штрихкод и т. п.) миниатюрой
+    не бывают никогда: нет активных фото с файлом — None, и страницы показывают заглушку «без фото»."""
+    with_file = [i for i in images if i.storage_path and i.is_active]
+    for pick in (lambda i: i.role == DISPLAY, lambda i: i.role == REFERENCE):
         for image in with_file:
             if pick(image):
                 return image

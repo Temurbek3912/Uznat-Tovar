@@ -77,11 +77,27 @@ def _apply_runtime(rt: ml_runtime.MLRuntime) -> None:
     _face_blurrer = rt.face_blurrer
 
 
+# Сигналы Celery (worker_init, worker_process_init, worker_ready) общие для ВСЕХ приложений Celery в процессе. Без проверки
+# отправителя любой другой воркер в этом процессе (тест с настоящим Celery, tests/test_celery_errors_redis.py) поднимал бы модель
+# (минуты), убирал кадры и ставил recover_index в очередь из настроек. Обработчики ниже действуют только для воркера celery_app.
+_foreign_worker = False      # в этом процессе запущен воркер ДРУГОГО приложения Celery (см. _preflight_worker)
+
+
+def _is_foreign_sender(sender) -> bool:
+    """Отправитель сигнала — воркер другого приложения Celery. Без отправителя (прямой вызов, облегчённый режим) — свой."""
+    app = getattr(sender, "app", None)
+    return app is not None and app is not celery_app
+
+
 @worker_init.connect
 def _preflight_worker(**kwargs) -> None:
     """Главный процесс воркера, ДО пула: если деталь, без которой система не работает, неисправна (OpenCV без CascadeClassifier,
     нет файла весов детектора) — воркер не должен объявлять «ready». SystemExit — BaseException: Celery при рассылке сигнала
     перехватывает только Exception («Signal handler raised» и работа дальше), поэтому запуск здесь действительно прервётся."""
+    global _foreign_worker
+    _foreign_worker = _is_foreign_sender(kwargs.get("sender"))
+    if _foreign_worker:
+        return
     ml_runtime.clear_status()                      # статус прошлого запуска не должен выдавать себя за текущий
     problems = ml_runtime.preflight(settings, os.environ)
     if problems:
@@ -94,8 +110,12 @@ def _preflight_worker(**kwargs) -> None:
 @worker_process_init.connect
 def _init_ml_components(**kwargs) -> None:
     """Поднимает компоненты распознавания (см. app/pipeline/ml_runtime.py). НЕ бросает исключений: Celery их всё равно проглотил бы
-    и объявил готовность. Итог — таблица в логе и файл статуса для healthcheck; задачи перед работой вызывают _require_ml()."""
+    и объявил готовность. Итог — таблица в логе и файл статуса для healthcheck; задачи перед работой вызывают _require_ml().
+    Отправитель этого сигнала — имя узла, а не воркер, поэтому «чужой» определяет worker_init (в prefork флаг наследует
+    дочерний процесс); прямой вызов (без signal=) выполняется всегда."""
     global _runtime
+    if _foreign_worker and "signal" in kwargs:
+        return
     _runtime = ml_runtime.build_runtime(settings, os.environ)
     _apply_runtime(_runtime)
     for line in _runtime.summary_lines():
@@ -465,6 +485,8 @@ def recover_index_task(self) -> dict:
 def _sweep_stale_frames(**kwargs) -> None:
     """При запуске воркера — удалить временные кадры старше 2 минут, оставшиеся от прошлого запуска (ТК-2). Основную уборку
     ведёт API (app/main.py, lifespan); это страховка на случай, когда API не работал."""
+    if _is_foreign_sender(kwargs.get("sender")):
+        return
     try:
         from app.services.frame_lifecycle import sweep_frames
 
@@ -506,6 +528,8 @@ def _schedule_recovery(**kwargs) -> None:
     """При каждом запуске воркера — одна задача восстановления индекса, дальше — по расписанию (recover_index_interval_minutes).
     Очередь недоступна — не беда: следующий тик расписания поставит снова; вручную — scripts/reindex_uploads.py. Исключения из
     обработчика сигнала Celery проглотил бы — ловим сами."""
+    if _is_foreign_sender(kwargs.get("sender")):
+        return
     try:
         _enqueue_recovery()
     except Exception as exc:  # noqa: BLE001

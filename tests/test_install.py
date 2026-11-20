@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import json
+import shutil
 import subprocess
 import zipfile
 import sys
@@ -324,6 +325,8 @@ def test_package_leaves_out_tests_and_old_docs():
     attrs = (ROOT / ".gitattributes").read_text(encoding="utf-8")
     for p in ("/tests", "/docs/archive", "/docs/mockups"):
         assert f"{p}/** " in attrs and "export-ignore" in attrs
+    if shutil.which("git") is None:          # копия без git (прогон в Docker-образе программы) — проверяем только .gitattributes
+        return
     res = subprocess.run(["git", "check-attr", "export-ignore", "tests/test_install.py", "app/main.py"], cwd=str(ROOT),
                          capture_output=True, text=True)
     if res.returncode == 0:

@@ -54,8 +54,9 @@ def shop(tmp_path):
     target, source = tmp_path / "shop", tmp_path / "new" / "uznat-tovar"
     _program(target, {"app/main.py": "old main", "app/gone.py": "old only", "frontend/a.js": "old a",
                       "scripts/lite_restore.py": "# backup"}, commit="aaa1111")
-    (target / ".venv" / "Scripts").mkdir(parents=True)
-    (target / ".venv" / "Scripts" / "python.exe").write_text("", encoding="utf-8")
+    venv_py = up.venv_python(target)          # .venv/Scripts/python.exe на Windows, .venv/bin/python на Linux (прогон в Docker)
+    venv_py.parent.mkdir(parents=True)
+    venv_py.write_text("", encoding="utf-8")
     _write(target, {".env": "AUTH_SECRET_KEY=shop", "data/lite/catalog-uploads/1.jpg": "photo",
                     "data/lite/index/catalog.faiss": "index-old", "data/run_mode.json": '{"port": 8000}',
                     "models/hf/m.bin": "model", "data/install_state.json": '{"requirements": "old"}'})

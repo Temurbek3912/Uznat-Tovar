@@ -217,6 +217,7 @@ class PgTools:
     database_url: str | None = None
     use_compose: bool = True
     runner: Runner = subprocess.run
+    _versions_checked: bool = field(default=False, init=False, repr=False)
 
     # --- построение команд
     def _compose(self) -> list[str]:
@@ -244,8 +245,30 @@ class PgTools:
     def _err(proc) -> str:
         return (proc.stderr or b"").decode("utf-8", "replace").strip()[:400] if isinstance(proc.stderr, bytes) else str(proc.stderr or "")[:400]
 
+    def check_versions(self, tool: str = "pg_dump") -> None:
+        """Режим прямого адреса: утилиты на этом компьютере должны быть той же основной версии, что и сервер базы. Старее сервера —
+        pg_dump откажется сам; новее — копия снимется, но не восстановится на этот же сервер (найдено 2026-11-20 на настоящем
+        PostgreSQL: pg_restore 17 пишет «SET transaction_timeout», сервер 16 такого параметра не знает). В режиме Docker утилиты
+        берутся из контейнера базы — там версии совпадают всегда. Проверка один раз на объект; версия не прочиталась — не мешаем."""
+        if self.use_compose or self._versions_checked:
+            return
+        proc = self._run([tool, "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        found = re.search(r"PostgreSQL\)\s*(\d+)", (proc.stdout or b"").decode("utf-8", "replace")) if proc.returncode == 0 else None
+        server_proc = self._run(["psql", "-v", "ON_ERROR_STOP=1", "-At", "-d", self.database_url],
+                                input=b"SHOW server_version_num", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        server_text = (server_proc.stdout or b"").decode("utf-8", "replace").strip() if server_proc.returncode == 0 else ""
+        client = int(found.group(1)) if found else None
+        server = int(server_text) // 10000 if server_text.isdigit() else None
+        if client and server and client != server:
+            raise BackupError(
+                f"утилиты PostgreSQL на этом компьютере — версии {client}, а сервер базы — версии {server}: копия, снятая или "
+                f"восстановленная утилитами другой версии, может не восстановиться на этот сервер. Установите утилиты версии "
+                f"{server} (Linux: пакет postgresql-client-{server}) или делайте копию в режиме Docker (без --database-url)")
+        self._versions_checked = True
+
     # --- операции
     def dump(self, out: Path) -> None:
+        self.check_versions("pg_dump")
         with Path(out).open("xb") as fh:
             if self.use_compose:
                 proc = self._run(self._exec('pg_dump -U "$POSTGRES_USER" -Fc "$POSTGRES_DB"'), stdout=fh, stderr=subprocess.PIPE)
@@ -327,6 +350,7 @@ class PgTools:
             _check_target_db_name(name)
         else:
             _check_db_name(name)
+        self.check_versions("pg_restore")
         with Path(dump).open("rb") as fh:
             if self.use_compose:
                 cmd = self._exec(f'pg_restore -U "$POSTGRES_USER" --no-owner --exit-on-error -d {name}')

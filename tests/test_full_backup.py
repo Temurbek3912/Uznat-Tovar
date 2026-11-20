@@ -341,6 +341,39 @@ def test_only_temporary_databases_with_the_reserved_prefix_can_be_dropped():
             pg.drop_db(bad)
 
 
+class _VersionRunner:
+    """Поддельный запуск: «pg_dump --version» и «SHOW server_version_num» через psql."""
+
+    def __init__(self, client="pg_dump (PostgreSQL) 17.12 (Debian 17.12-0+deb13u1)\n", server="160013\n", rc=0):
+        self.client, self.server, self.rc, self.calls = client, server, rc, []
+
+    def __call__(self, cmd, **kw):
+        self.calls.append(cmd)
+        out = self.client if cmd[-1] == "--version" else self.server
+        return subprocess.CompletedProcess(cmd, self.rc, out.encode("utf-8"), b"")
+
+
+def test_tools_newer_than_the_server_are_refused_with_a_clear_reason():
+    run = _VersionRunner()
+    pg = fb.PgTools(use_compose=False, database_url="postgresql://u@h/db", runner=run)
+    with pytest.raises(fb.BackupError, match="версии 17, а сервер базы — версии 16.*postgresql-client-16"):
+        pg.check_versions("pg_dump")
+    assert run.calls[0] == ["pg_dump", "--version"] and run.calls[1][-1] == "postgresql://u@h/db"
+
+
+def test_matching_or_unreadable_versions_do_not_block_and_are_checked_once():
+    run = _VersionRunner(client="pg_restore (PostgreSQL) 16.4\n")
+    pg = fb.PgTools(use_compose=False, database_url="postgresql://u@h/db", runner=run)
+    pg.check_versions("pg_restore")
+    pg.check_versions("pg_restore")
+    assert len(run.calls) == 2                                       # второй раз не спрашивает
+    fb.PgTools(use_compose=False, database_url="postgresql://u@h/db", runner=_VersionRunner(rc=1)).check_versions()
+    fb.PgTools(use_compose=False, database_url="postgresql://u@h/db", runner=_VersionRunner(server="?")).check_versions()
+    docker_mode = _VersionRunner()
+    fb.PgTools(use_compose=True, runner=docker_mode).check_versions()    # в Docker утилиты из контейнера базы
+    assert docker_mode.calls == []
+
+
 def test_url_for_keeps_server_and_query_and_changes_only_the_database():
     pg = fb.PgTools(use_compose=False, database_url="postgresql://u@h:5432/main?sslmode=disable")
     assert pg._url_for("restore_check_x1y2z3") == "postgresql://u@h:5432/restore_check_x1y2z3?sslmode=disable"

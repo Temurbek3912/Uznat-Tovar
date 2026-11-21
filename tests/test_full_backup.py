@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from scripts import full_backup as fb
+from tests.pg_cli import psql
 
 PG_URL = os.environ.get("FULL_BACKUP_TEST_DB_URL")
 needs_pg = pytest.mark.skipif(not PG_URL or shutil.which("pg_dump") is None,
@@ -382,8 +383,7 @@ def test_url_for_keeps_server_and_query_and_changes_only_the_database():
 # --------------------------------------------------------------------------- настоящий PostgreSQL 16 (облако)
 
 def _psql(url, sql):
-    return subprocess.run(["psql", "-v", "ON_ERROR_STOP=1", "-At", "-d", url, "-c", sql], check=True,
-                          capture_output=True, text=True).stdout
+    return psql("-v", "ON_ERROR_STOP=1", "-At", "-d", url, "-c", sql)     # с тайм-аутами (tests/pg_cli.py)
 
 
 @pytest.fixture()

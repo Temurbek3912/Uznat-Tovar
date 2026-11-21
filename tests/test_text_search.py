@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import uuid
 
 import pytest
 
 from app.core import text_search as ts
+from tests.pg_cli import psql
 
 
 @pytest.mark.parametrize("raw,expected", [
@@ -68,8 +68,8 @@ def test_search_on_real_postgresql():
     names = ["ЁЛКА новогодняя", "Oʻzbekiston choy", "Сок 50% яблоко", "Сок 500 мл", "Coca-Cola Zero", "Молоко_2,5"]
 
     def sql(text):
-        out = subprocess.run(["psql", PG_URL, "-Atq", "-v", "ON_ERROR_STOP=1", "-c", text], capture_output=True, text=True, check=True)
-        return [line for line in out.stdout.splitlines() if line]
+        out = psql(PG_URL, "-Atq", "-v", "ON_ERROR_STOP=1", "-c", text)      # с тайм-аутами (tests/pg_cli.py)
+        return [line for line in out.splitlines() if line]
 
     values = ", ".join("('" + n.replace("'", "''") + "')" for n in names)
     sql(f"CREATE TABLE {table} (name text); INSERT INTO {table} VALUES {values};")

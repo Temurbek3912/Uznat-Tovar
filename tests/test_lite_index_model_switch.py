@@ -6,7 +6,9 @@
 (scripts/rebuild_index.py — та же реализация), прежние файлы — копией рядом, векторы прежней модели остаются в кэше базы.
 Полный режим сам не пересобирает (несколько процессов воркера, большой каталог) — там понятная команда.
 
-Здесь база и пересборка НАСТОЯЩИЕ (SQLite с миграциями, numpy-индекс, scripts/rebuild_index.main), подделана только модель."""
+Здесь база и пересборка НАСТОЯЩИЕ (SQLite с миграциями, numpy-индекс, scripts/rebuild_index.main), подделана только модель.
+Каждый тест с базой идёт и на PostgreSQL, если задан FULL_BACKUP_TEST_DB_URL (фикстура database из tests/test_product_images.py;
+так его запускает tools/service_tests.py)."""
 from __future__ import annotations
 
 import types

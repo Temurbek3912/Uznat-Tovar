@@ -41,11 +41,13 @@ from typing import Any, Protocol
 import numpy as np
 
 from app.core.schemas import DetectionStatus
-from app.pipeline.index_store import (REBUILD_HINT, IndexBusyError, IndexChangedError, IndexIntegrityError, IndexLock, discard,
+from app.pipeline.index_store import (MODEL_REBUILD_HINT, REBUILD_HINT, IndexBusyError, IndexChangedError, IndexIntegrityError,
+                                      IndexLock, IndexModelMismatchError, discard,
                                       file_probe, fsync_dir, fsync_file, new_generation, replace_with_retry, sha256_bytes,
                                       tmp_name)
 
-__all__ = ["CatalogIndex", "FaissCatalogIndex", "IndexBusyError", "IndexChangedError", "IndexIntegrityError", "MatchResult",
+__all__ = ["CatalogIndex", "FaissCatalogIndex", "IndexBusyError", "IndexChangedError", "IndexIntegrityError",
+           "IndexModelMismatchError", "MatchResult",
            "NumpyCatalogIndex", "ProductMatcher", "decide_match", "index_size", "open_catalog_index", "rank_products",
            "refresh_index_if_changed", "resync_index", "DEFAULT_NAMESPACE", "check_index_model", "index_manifest", "model_mismatch"]
 
@@ -615,9 +617,9 @@ def open_catalog_index(index_path: str | None, embedding_dim: int, model: dict |
         if index is not None:
             dim = index.dimension
             if dim is not None and dim != embedding_dim:
-                raise IndexIntegrityError(
+                raise IndexModelMismatchError(
                     f"Индекс {index_path} построен для векторов размерности {dim}, а эмбеддер даёт {embedding_dim}: индекс от "
-                    f"другой модели. {REBUILD_HINT}")
+                    f"другой модели. {MODEL_REBUILD_HINT}")
             _check_manifest(index, index_path, model, namespace)
             index._expected = (model, namespace)
             return index
@@ -645,9 +647,9 @@ def _check_manifest(index, index_path: str, model: dict | None, namespace: str |
         return
     diff = model_mismatch(index.model, model)
     if diff:
-        raise IndexIntegrityError(
+        raise IndexModelMismatchError(
             f"Индекс {index_path} построен другой моделью распознавания ({diff}). Векторы разных моделей несравнимы: ответы "
-            f"были бы неверными. Пересоберите индекс текущей моделью или верните прежнюю модель. {REBUILD_HINT}")
+            f"были бы неверными. Пересоберите индекс текущей моделью или верните прежнюю модель. {MODEL_REBUILD_HINT}")
     if index.model is None:
         if index_size(index) == 0:
             index.model = dict(model)                       # пустой индекс: модель векторов — та, что будет их добавлять

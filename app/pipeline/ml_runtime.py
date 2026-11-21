@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from app.pipeline.index_store import IndexModelMismatchError
+
 logger = logging.getLogger(__name__)
 
 STATUS_ENV = "ML_STATUS_FILE"
@@ -115,11 +117,14 @@ class Factories:
     index: Callable[..., Any]                            # (index_path, размерность, паспорт модели | None) -> индекс
     matcher: Callable[[Any, Any], Any]                   # (индекс, MatcherConfig|None) -> ProductMatcher
     lock_check: Callable[[Path], bool | None] = None     # (файл индекса) -> действует ли блокировка; None — настоящая проверка
+    rebuild_for_model: Callable[[Any, Any], str] | None = None  # (settings, эмбеддер) -> итог пересборки; None — настоящая
 
     def __post_init__(self):
         if self.lock_check is None:
             from app.pipeline.index_store import lock_supported  # noqa: PLC0415
             self.lock_check = lock_supported
+        if self.rebuild_for_model is None:
+            self.rebuild_for_model = _rebuild_for_model
 
 
 def default_factories() -> Factories:
@@ -269,7 +274,16 @@ def build_runtime(settings, env: Mapping[str, str] | None = None, factories: Fac
         index_path = cfg.index_path if cfg else None
         from app.pipeline.embedder import model_signature  # noqa: PLC0415 — лёгкий модуль, без torch
         model = model_signature(rt.embedder)
-        index = f.index(index_path, getattr(rt.embedder, "embedding_dim", 64), model)
+        dim = getattr(rt.embedder, "embedding_dim", 64)
+        try:
+            index = f.index(index_path, dim, model)
+        except IndexModelMismatchError as exc:
+            if not _flag(env, LITE_MODE_ENV) or model is None:
+                raise
+            report = _rebuild_on_model_change(f, settings, rt.embedder, exc)
+            index = f.index(index_path, dim, model)
+            return f.matcher(index, cfg), (f"индекс: {index_path}; {_model_note(index, model)}; "
+                                           f"{INDEX_REBUILT_MARK} под текущую модель ({report})")
         return f.matcher(index, cfg), f"индекс: {index_path or 'в памяти'}; {_model_note(index, model)}"
 
     rt.matcher = attempt("matcher", True, make_matcher)
@@ -281,6 +295,47 @@ def build_runtime(settings, env: Mapping[str, str] | None = None, factories: Fac
 INDEX_LOCK_WARNING = ("ПАПКА ИНДЕКСА НЕ ПОДДЕРЖИВАЕТ БЛОКИРОВКУ ФАЙЛОВ ({folder}): если индекс одновременно пишут воркер и "
                       "импорт или пересборка, часть товаров может пропасть из поиска. Не запускайте импорт и пересборку, "
                       "пока работает воркер, или перенесите models/ на локальный диск компьютера (не сетевую папку).")
+
+
+LITE_MODE_ENV = "LITE_MODE"
+INDEX_REBUILT_MARK = "ИНДЕКС ПЕРЕСОБРАН"      # по этой отметке scripts/start_demo.py говорит владельцу о пересборке
+
+
+def _rebuild_on_model_change(f: Factories, settings, embedder, exc: Exception) -> str:
+    """Облегчённый режим (2026-11-21): индекс построен другой моделью (например, DINOv2, а в настройках SigLIP 2) — без
+    пересборки «Узнать товар» по фото не работает вовсе, а владелец не может запустить служебный скрипт с переменными
+    облегчённого режима. Поэтому индекс пересобирается сам: из активных эталонов базы (scripts/rebuild_index.py --apply
+    --compute-missing, та же реализация), уже загруженной моделью, прежние файлы — копией рядом с индексом, векторы прежней
+    модели остаются в кэше базы (вернуть прежнюю модель — без пересчёта). Полный режим так не делает: там несколько процессов
+    воркера и большой каталог — пересборку запускают командой (MODEL_REBUILD_HINT). Не получилось — понятная причина."""
+    logger.warning("Индекс каталога построен другой моделью — облегчённый режим пересобирает его текущей моделью: %s", exc)
+    try:
+        report = f.rebuild_for_model(settings, embedder)
+    except Exception as err:  # noqa: BLE001 — причина уходит владельцу в таблицу компонентов
+        raise RuntimeError(f"Индекс поиска по фото построен другой моделью распознавания, а пересобрать его текущей моделью "
+                           f"сам не получилось: {_describe(err)}. Прежний индекс не тронут. Подробности — в журнале "
+                           f"(logs/lite.log).") from err
+    logger.warning("Индекс каталога пересобран текущей моделью: %s", report)
+    return report
+
+
+def _rebuild_for_model(settings, embedder, **script_kw) -> str:
+    """Настоящая пересборка: scripts/rebuild_index.main с уже загруженной моделью. Итог — короткая строка; отказ — исключение
+    с последними строками вывода скрипта. script_kw — для тестов (своя база, путь к фото)."""
+    from scripts import rebuild_index  # noqa: PLC0415 — нужен только облегчённому режиму, запущенному из папки программы
+
+    lines: list[str] = []
+    # --allow-missing: векторы прежней модели в новом индексе всё равно бесполезны (несравнимы), а их копия — в кэше базы и
+    # в копии прежнего индекса; без флага выведенные из эталонов фото остановили бы пересборку
+    code = rebuild_index.main(["--apply", "--yes", "--compute-missing", "--allow-missing"], out=lines.append,
+                              settings=settings, make_embedder=lambda _settings: embedder, **script_kw)
+    for line in lines:
+        logger.info("Пересборка индекса: %s", line)
+    if code != 0:
+        raise RuntimeError("; ".join(lines[-3:]) or f"код {code}")
+    done = next((ln for ln in reversed(lines) if ln.startswith("Готово:")), "")
+    backup = next((ln for ln in lines if ln.startswith("Копия прежнего индекса:")), "")
+    return "; ".join(x for x in (done.split(". Индекс:")[0], backup) if x) or "готово"
 
 
 def _check_index_lock(comp: Component, index_path: str | None, lock_check: Callable[[Path], bool | None]) -> None:

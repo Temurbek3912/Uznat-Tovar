@@ -31,6 +31,7 @@ DEFAULT_TESTS = [
     "tests/test_catalog_photos.py",
     "tests/test_migrations.py",
     "tests/test_product_images.py",
+    "tests/test_lite_index_model_switch.py",
     "tests/test_full_backup.py",
     "tests/test_text_search.py",
     "tests/test_throttle_redis.py",

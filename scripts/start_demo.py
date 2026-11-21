@@ -671,6 +671,8 @@ def _launch(opts: Options, d: Deps, services: list[Service], child_env: dict, st
         if status is not None and not status.get("ready", False):
             out("ВНИМАНИЕ: распознавание по виду не готово (работает только штрихкод): "
                 + "; ".join(str(p) for p in status.get("problems") or []) + ". Журнал: logs/worker.log")
+        for note in _rebuilt_index_notes(status):
+            out(note)
 
         write_run_mode(lite=opts.lite, port=opts.port, scheme="https" if tls else "http",
                        database_url=child_env.get("DATABASE_URL"), path=d.root / "data" / "run_mode.json")
@@ -688,6 +690,19 @@ def _launch(opts: Options, d: Deps, services: list[Service], child_env: dict, st
         return 0
     finally:
         _stop_all(procs, out)
+
+
+def _rebuilt_index_notes(status: dict | None) -> list[str]:
+    """Облегчённый режим сам пересобрал индекс под текущую модель (app/pipeline/ml_runtime.py) — сказать владельцу простыми
+    словами: распознавание работает, прежний индекс сохранён копией."""
+    from app.pipeline.ml_runtime import INDEX_REBUILT_MARK  # noqa: PLC0415 — лёгкий модуль, без torch
+    notes = []
+    for comp in (status or {}).get("components") or []:
+        detail = str(comp.get("detail") or "")
+        if comp.get("name") == "matcher" and INDEX_REBUILT_MARK in detail:
+            notes.append("Модель распознавания сменилась — индекс поиска по фото пересобран "
+                         + detail.split(INDEX_REBUILT_MARK, 1)[1].strip(" ;") + ". «Узнать товар» работает.")
+    return notes
 
 
 def run_lite(opts: Options, d: Deps, services: list[Service] | None = None) -> int:

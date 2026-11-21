@@ -90,6 +90,43 @@ def test_missing_file_and_path_outside_data_folder_are_skipped(tmp_path):
     assert res.skipped == 2 and res.changed == [] and res.hashed == 0
 
 
+def test_absolute_path_in_record_is_skipped_without_reading(tmp_path):
+    outside = tmp_path / "secret.jpg"
+    outside.write_bytes(b"x")
+    data = tmp_path / "data"
+    data.mkdir()
+    res = PhotoContentWatch().check([PhotoRecord("1", "p", str(outside), hashlib.sha256(b"x").hexdigest())], data)
+    assert res.skipped == 1 and res.hashed == 0 and res.changed == []
+
+
+def test_link_from_data_folder_to_outside_is_not_read(tmp_path):
+    outside = tmp_path / "secret.jpg"
+    outside.write_bytes(b"x")
+    data = tmp_path / "data"
+    (data / "catalog-imported").mkdir(parents=True)
+    link = data / "catalog-imported" / "1.jpg"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("ссылки (symlink) здесь создавать нельзя")
+    res = PhotoContentWatch().check([PhotoRecord("1", "p", "catalog-imported/1.jpg", "0" * 64)], data)
+    assert res.skipped == 1 and res.hashed == 0 and res.changed == []
+
+
+def test_unchanged_photos_are_checked_without_resolving_paths(tmp_path, monkeypatch):
+    """Замер 2026-11-21 в Docker на папке Windows: Path.resolve для каждого из 1746 фото — 6,9 с из 9,6 с задачи. Повторная
+    проверка не изменившихся файлов обходится одним os.stat на файл."""
+    recs = [_photo(tmp_path, f"catalog-imported/A/{i}.jpg", bytes([i])) for i in range(5)]
+    watch = PhotoContentWatch()
+    assert watch.check(recs, tmp_path).hashed == 5
+    calls = []
+    real_resolve = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda self, *a, **k: calls.append(self) or real_resolve(self, *a, **k))
+    again = watch.check(recs, tmp_path)
+    assert again.hashed == 0 and again.changed == []
+    assert len(calls) <= 1          # только папка данных, не каждое фото
+
+
 def test_forgets_records_that_left_recognition(tmp_path):
     rec = _photo(tmp_path, "catalog-imported/A/1.jpg", b"original")
     watch = PhotoContentWatch()

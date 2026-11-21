@@ -298,6 +298,9 @@ def _check_index_lock(comp: Component, index_path: str | None, lock_check: Calla
         logger.error(warning)
     elif supported is None:
         logger.warning("Не удалось проверить блокировку индекса в %s", target.parent)
+        comp.detail = f"{comp.detail}; блокировка индекса: не проверена"
+    else:
+        comp.detail = f"{comp.detail}; блокировка индекса: действует"   # видно в таблице компонентов при запуске воркера
 
 
 def _model_note(index, model: dict | None) -> str:

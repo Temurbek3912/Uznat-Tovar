@@ -67,10 +67,12 @@ class PhotoContentWatch:
         alive: set[tuple[str, str]] = set()
         for rec in sorted(records, key=lambda r: r.storage_path):
             key = (rec.image_id, (rec.sha256 or "").lower())
-            path = (root / rec.storage_path).resolve()
+            rel = Path(rec.storage_path)
+            if rel.is_absolute() or rel.drive or ".." in rel.parts:     # вне папки данных — без обращения к диску
+                res.skipped += 1
+                continue
+            path = root / rel
             try:
-                if not path.is_relative_to(root):
-                    raise FileNotFoundError(rec.storage_path)
                 st = os.stat(path)
             except OSError:
                 res.skipped += 1
@@ -86,7 +88,12 @@ class PhotoContentWatch:
                 continue
             budget -= 1
             try:
-                same = _sha256(path) == key[1]
+                # resolve — только перед чтением: ссылка (symlink) из папки данных наружу не читается. Для каждого файла при
+                # каждом запуске он слишком дорог: на папке Windows в Docker 1746 фото — 6,9 с из 9,6 (замер 2026-11-21).
+                real = path.resolve()
+                if not real.is_relative_to(root):
+                    raise FileNotFoundError(rec.storage_path)
+                same = _sha256(real) == key[1]
             except OSError:
                 res.skipped += 1
                 continue

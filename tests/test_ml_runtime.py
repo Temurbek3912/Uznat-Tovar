@@ -243,10 +243,12 @@ def test_index_folder_without_file_locks_marks_matcher_replaced_with_a_clear_rea
 
 
 def test_working_or_unknown_file_lock_keeps_matcher_ok(caplog):
-    assert _build(lock_check=lambda target: True).component("matcher").status == mr.OK
+    working = _build(lock_check=lambda target: True).component("matcher")
+    assert working.status == mr.OK and working.detail.endswith("; блокировка индекса: действует")   # видно в таблице при запуске
     with caplog.at_level("WARNING"):
         rt = _build(lock_check=lambda target: None)                          # проверить не удалось — только запись в журнал
     assert rt.component("matcher").status == mr.OK and not rt.degraded
+    assert rt.component("matcher").detail.endswith("; блокировка индекса: не проверена")
     assert any("Не удалось проверить блокировку" in r.getMessage() for r in caplog.records)
 
 

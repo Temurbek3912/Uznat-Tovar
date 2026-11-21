@@ -114,6 +114,12 @@ class Factories:
     debug_embedder: Callable[[], Any]
     index: Callable[..., Any]                            # (index_path, размерность, паспорт модели | None) -> индекс
     matcher: Callable[[Any, Any], Any]                   # (индекс, MatcherConfig|None) -> ProductMatcher
+    lock_check: Callable[[Path], bool | None] = None     # (файл индекса) -> действует ли блокировка; None — настоящая проверка
+
+    def __post_init__(self):
+        if self.lock_check is None:
+            from app.pipeline.index_store import lock_supported  # noqa: PLC0415
+            self.lock_check = lock_supported
 
 
 def default_factories() -> Factories:
@@ -267,7 +273,31 @@ def build_runtime(settings, env: Mapping[str, str] | None = None, factories: Fac
         return f.matcher(index, cfg), f"индекс: {index_path or 'в памяти'}; {_model_note(index, model)}"
 
     rt.matcher = attempt("matcher", True, make_matcher)
+    if rt.matcher is not None:
+        _check_index_lock(rt.component("matcher"), settings.matcher.index_path if settings.matcher else None, f.lock_check)
     return rt
+
+
+INDEX_LOCK_WARNING = ("ПАПКА ИНДЕКСА НЕ ПОДДЕРЖИВАЕТ БЛОКИРОВКУ ФАЙЛОВ ({folder}): если индекс одновременно пишут воркер и "
+                      "импорт или пересборка, часть товаров может пропасть из поиска. Не запускайте импорт и пересборку, "
+                      "пока работает воркер, или перенесите models/ на локальный диск компьютера (не сетевую папку).")
+
+
+def _check_index_lock(comp: Component, index_path: str | None, lock_check: Callable[[Path], bool | None]) -> None:
+    """Блокировка индекса проверяется при запуске (2026-11-21). Без неё одна проверка поколения не спасает: в испытании два
+    процесса, записывающие индекс одновременно, теряли почти половину товаров (tools/docker_lock_check.py, шаг 5). Воркер
+    при этом работает (поиск верен), но компонент помечен «заменён», а причина — в журнале и файле статуса."""
+    if not index_path:
+        return
+    from app.pipeline.matcher import lock_target  # noqa: PLC0415
+    target = lock_target(index_path)
+    supported = lock_check(target)
+    if supported is False:
+        warning = INDEX_LOCK_WARNING.format(folder=target.parent)
+        comp.status, comp.detail = DEGRADED, f"{comp.detail}; {warning}"
+        logger.error(warning)
+    elif supported is None:
+        logger.warning("Не удалось проверить блокировку индекса в %s", target.parent)
 
 
 def _model_note(index, model: dict | None) -> str:

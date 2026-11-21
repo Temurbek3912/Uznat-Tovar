@@ -19,7 +19,7 @@ SETTINGS = types.SimpleNamespace(
 )
 
 
-def _factories(**broken):
+def _factories(lock_check=lambda target: True, **broken):
     def maker(name, value):
         def make(*args):
             if name in broken:
@@ -29,12 +29,12 @@ def _factories(**broken):
     return mr.Factories(
         face_blurrer=maker("face_blurrer", "blur"), detector=maker("detector", "yolo"), heuristic_detector=maker("heuristic", "heur"),
         embedder=maker("embedder", types.SimpleNamespace(embedding_dim=8)), debug_embedder=maker("debug", types.SimpleNamespace(embedding_dim=8)),
-        index=maker("index", "index"), matcher=maker("matcher", "matcher"),
+        index=maker("index", "index"), matcher=maker("matcher", "matcher"), lock_check=lock_check,
     )
 
 
-def _build(env=None, **broken):
-    return mr.build_runtime(SETTINGS, env or {}, _factories(**broken), resolve_path=lambda p: Path("/srv/app") / p)
+def _build(env=None, lock_check=lambda target: True, **broken):
+    return mr.build_runtime(SETTINGS, env or {}, _factories(lock_check, **broken), resolve_path=lambda p: Path("/srv/app") / p)
 
 
 def test_everything_ok_means_ready_and_every_component_is_reported():
@@ -221,3 +221,67 @@ def test_compose_worker_healthcheck_requires_readiness_not_just_ping():
     worker = text[text.index("  worker:"):text.index("\nvolumes:\n  pgdata:")]            # воркер — последний сервис перед томами
     assert "python -m scripts.worker_health &&" in worker and "inspect ping" in worker
     assert "ALLOW_HEURISTIC_DETECTOR: ${ALLOW_HEURISTIC_DETECTOR:-0}" in text                  # по умолчанию подмена детектора выключена
+
+
+# --------------------------------------------------------------------------- блокировка индекса при запуске (2026-11-21)
+
+def test_index_folder_without_file_locks_marks_matcher_replaced_with_a_clear_reason(caplog):
+    """Папка индекса без блокировки файлов: воркер работает (поиск верен), но «matcher» помечен «заменён», причина — в статусе
+    и журнале (без блокировки одновременная запись воркера и импорта теряет товары — tools/docker_lock_check.py, шаг 5)."""
+    seen = []
+    with caplog.at_level("ERROR"):
+        rt = _build(lock_check=lambda target: seen.append(target) or False)
+    comp = rt.component("matcher")
+    assert rt.ready and rt.degraded
+    assert comp.status == mr.DEGRADED and "НЕ ПОДДЕРЖИВАЕТ БЛОКИРОВКУ" in comp.detail and "models/" in comp.detail
+    assert comp.detail.startswith("индекс: models/index/c.faiss")            # прежнее описание сохранено
+    assert seen == [Path("models/index/c.faiss")]                             # тот же файл блокировки, что у записи индекса
+    assert any("НЕ ПОДДЕРЖИВАЕТ БЛОКИРОВКУ" in r.getMessage() for r in caplog.records)
+    status = rt.to_dict()
+    assert status["degraded"] and any("БЛОКИРОВКУ" in c["detail"] for c in status["components"] if c["name"] == "matcher")
+    assert any("[ЗАМЕНЁН ] matcher" in line for line in rt.summary_lines())
+
+
+def test_working_or_unknown_file_lock_keeps_matcher_ok(caplog):
+    assert _build(lock_check=lambda target: True).component("matcher").status == mr.OK
+    with caplog.at_level("WARNING"):
+        rt = _build(lock_check=lambda target: None)                          # проверить не удалось — только запись в журнал
+    assert rt.component("matcher").status == mr.OK and not rt.degraded
+    assert any("Не удалось проверить блокировку" in r.getMessage() for r in caplog.records)
+
+
+def test_lock_is_not_checked_when_the_matcher_failed_or_index_is_in_memory():
+    calls = []
+    rt = _build(lock_check=lambda target: calls.append(target) or False, index=RuntimeError("индекс повреждён"))
+    assert rt.component("matcher").status == mr.FAILED and calls == []
+    in_memory = types.SimpleNamespace(**{**vars(SETTINGS), "matcher": types.SimpleNamespace(**{**vars(SETTINGS.matcher), "index_path": None})})
+    rt = mr.build_runtime(in_memory, {}, _factories(lambda target: calls.append(target) or False))
+    assert rt.component("matcher").status == mr.OK and calls == []
+
+
+def test_default_factories_use_the_real_lock_check():
+    from app.pipeline.index_store import lock_supported
+    assert mr.default_factories().lock_check is lock_supported
+
+
+def test_lock_supported_on_a_real_folder(tmp_path, monkeypatch):
+    """Настоящая папка: блокировка действует; занята другим держателем — тоже «действует»; ENOLCK — «не поддерживается»;
+    прочая ошибка — «не удалось проверить»."""
+    import errno
+    from app.pipeline import index_store
+    target = tmp_path / "index" / "catalog.faiss"
+    assert index_store.lock_supported(target) is True
+    with index_store.IndexLock(target) as held:
+        assert held.locked
+        assert index_store.lock_supported(target) is True
+    monkeypatch.setattr(index_store.IndexLock, "_warned_unsupported", True)   # не засорять журнал других тестов
+
+    def no_lock(fh):
+        raise OSError(errno.ENOLCK, "no locks")
+    monkeypatch.setattr(index_store, "_try_lock", no_lock)
+    assert index_store.lock_supported(target) is False
+
+    def io_error(fh):
+        raise OSError(errno.EIO, "io")
+    monkeypatch.setattr(index_store, "_try_lock", io_error)
+    assert index_store.lock_supported(target) is None

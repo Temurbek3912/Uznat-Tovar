@@ -186,3 +186,17 @@ class IndexLock:
         if self._fh is not None:
             self._fh.close()
             self._fh = None
+
+
+def lock_supported(target: Path) -> bool | None:
+    """Действует ли блокировка индекса в папке target (проверка при запуске воркера, 2026-11-21). True — да (в том числе
+    если её сейчас держит другой процесс); False — файловая система блокировку не поддерживает: остаётся только проверка
+    поколения, и при одновременной записи двумя процессами товары теряются (проверено tools/docker_lock_check.py, шаг 5);
+    None — проверить не удалось (нет доступа к папке и т. п.)."""
+    try:
+        with IndexLock(target, timeout=0) as lock:
+            return lock.locked
+    except IndexBusyError:
+        return True
+    except OSError:
+        return None

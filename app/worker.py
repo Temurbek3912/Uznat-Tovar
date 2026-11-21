@@ -321,6 +321,43 @@ def _backfill_photos(db: Session, products: dict[str, str]) -> None:
         logger.warning("Модель векторов индекса не записана: векторы в кэш не перенесены (рекомендуется полная пересборка)")
 
 
+def _prune_index(db: Session, products: dict[str, str], index_path: str | None) -> dict | None:
+    """Векторы фото, выведенных из эталонов давно (index_prune.PRUNE_AFTER_DAYS), — из файла индекса; векторы фото, вернувшихся
+    в эталоны, — обратно из кэша базы (app/services/index_prune.py). Сохранение — под блокировкой и со сверкой поколения;
+    сбой (в том числе индекс записал другой процесс) — индекс в памяти перечитывается с диска, восстановление продолжается,
+    уборка повторится при следующем запуске. None — уборка не удалась."""
+    from app.services.index_prune import prune_index
+    from app.services.product_images import PhotoRegistry
+    try:
+        fresh, plan = prune_index(_matcher.index, index_path, PhotoRegistry(db), products)
+    except Exception as exc:  # noqa: BLE001 — уборка вспомогательная; восстановление индекса важнее
+        db.rollback()
+        _resync_index_after_failure(-1, exc)
+        logger.exception("Векторы выведенных из эталонов фото не убраны (повторится при следующем запуске)")
+        return None
+    _matcher.index = fresh
+    if plan.removed:
+        logger.info("Из индекса убраны векторы фото, выведенных из эталонов: %d", len(plan.removed))
+    if plan.restore:
+        logger.info("В индекс возвращены из кэша векторы фото, снова ставших эталонами: %d", len(plan.restore))
+    if plan.kept_without_cache:
+        logger.warning("Векторы выведенных из эталонов фото без копии в базе остаются в индексе (исключены по записи): %d",
+                       plan.kept_without_cache)
+    return {"removed": len(plan.removed), "restored": len(plan.restore), "kept_without_cache": plan.kept_without_cache,
+            "skipped": plan.skipped}
+
+
+def _excluded_sources(db: Session) -> frozenset:
+    """(товар, источник) фото, которые не участвуют в распознавании: их векторы восстановление не добавляет."""
+    from app.services.product_images import PhotoRegistry
+    try:
+        return frozenset(PhotoRegistry(db).excluded_sources())
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.exception("Не прочитаны выведенные из эталонов фото — восстановление индекса отложено")
+        raise
+
+
 # БАГФИКС (вычитка после F12): декоратор был потерян при вставке соседней задачи выше, и
 # функция превратилась в обычную — routes_catalog.py вызывал бы .delay() у функции (AttributeError, 500).
 # Тесты это не ловили, т.к. подменяют задачу заглушкой; см. tests/test_worker_static.py.
@@ -450,7 +487,10 @@ def recover_index_task(self) -> dict:
     db = SessionLocal()
     try:
         products = {pid: sku for pid, sku in db.query(Product.id, Product.sku).all()}
-        _backfill_photos(db, products)
+        _backfill_photos(db, products)              # заодно кладёт в кэш базы векторы индекса — без них уборка ниже не уберёт
+        pruned = _prune_index(db, products, index_path)
+        size_before = index_size(_matcher.index)
+        excluded = _excluded_sources(db)
         remember_db = _remember_photos(db)
 
         def remember(pid: str, refs: list[str], vectors) -> None:
@@ -465,7 +505,7 @@ def recover_index_task(self) -> dict:
                                   index_path=index_path, folder_of=folder_name, list_photos=list_photo_files,
                                   upload_ref=upload_ref, load_image=_load, manifest_keys=_manifest_keys(index_path),
                                   note_indexed=lambda refs: _note_indexed(index_path, refs), limit=RECOVER_BATCH,
-                                  remember=remember)
+                                  remember=remember, skip=excluded)
         except Exception as exc:
             _resync_index_after_failure(size_before, exc)
             logger.exception("Восстановление индекса прервано (повторится по расписанию или при следующем запуске воркера)")
@@ -479,7 +519,8 @@ def recover_index_task(self) -> dict:
         logger.info("Восстановление индекса: добавлены векторы %d фото", len(res.added))
     if res.remaining and res.progressed:                # продолжение партиями; без продвижения не зацикливается
         recover_index_task.delay()
-    return {"added": len(res.added), "failed": len(res.failed), "remaining": res.remaining, "changed_photos": changed_photos}
+    return {"added": len(res.added), "failed": len(res.failed), "remaining": res.remaining, "changed_photos": changed_photos,
+            "pruned": pruned}
 
 
 _photo_watch = None          # PhotoContentWatch процесса: помнит уже проверенные файлы (app/services/photo_watch.py)

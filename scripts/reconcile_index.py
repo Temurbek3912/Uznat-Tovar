@@ -33,7 +33,20 @@ def _load_products() -> dict[str, str]:
         db.close()
 
 
-def main(argv: list[str] | None = None, out=print, load_products=None, settings=None, resolve_path=None) -> int:
+def _load_excluded() -> frozenset:
+    """(товар, ссылка) фото, выведенных из эталонов или витринных (база — источник истины): их векторы не добавляются, а
+    отсутствие вектора не считается пропуском (вектор выведенного фото убирает app/services/index_prune.py)."""
+    from app.db.session import SessionLocal                       # noqa: PLC0415
+    from app.services.product_images import PhotoRegistry         # noqa: PLC0415
+    db = SessionLocal()
+    try:
+        return frozenset(PhotoRegistry(db).excluded_sources())
+    finally:
+        db.close()
+
+
+def main(argv: list[str] | None = None, out=print, load_products=None, settings=None, resolve_path=None,
+         load_excluded=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="выполнить восстановление (без флага — только отчёт)")
     ap.add_argument("--yes", action="store_true", help="не спрашивать подтверждения")
@@ -77,7 +90,8 @@ def main(argv: list[str] | None = None, out=print, load_products=None, settings=
     out(f"Повторные векторы одного фото: {report.duplicate_vectors}")
     out(f"Устаревшие отметки журнала проиндексированных фото: {len(report.stale_journal_keys)}")
     coverage = C.analyze_coverage(index, products, root, folder_of=folder_name, list_photos=list_photo_files, upload_ref=upload_ref,
-                                  manifest_keys=R._load_journal_keys(journal), verify_content=args.verify_photos)
+                                  manifest_keys=R._load_journal_keys(journal), verify_content=args.verify_photos,
+                                  skip=(load_excluded or (_load_excluded if load_products is None else frozenset))())
     out("Полнота индекса (связь фото и векторов):")
     for line in C.describe(coverage):
         out(f"  {line}")

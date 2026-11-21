@@ -367,7 +367,7 @@ def _build_env(env, tmp_path: Path):
         return types.SimpleNamespace(delay=delay, apply_async=apply_async)
 
     inject("app.worker", add_catalog_product_task=make_task("add_product"), add_catalog_photos_task=make_task("add_photos"),
-           identify_product_task=make_task("identify", lambda: env.identify_answer),
+           identify_product_task=make_task("identify", lambda: env.identify_answer), recover_index_task=make_task("recover_index"),
            celery_app=types.SimpleNamespace(AsyncResult=lambda tid: types.SimpleNamespace(status="PENDING", ready=lambda: False, result=None)))
 
     # ProductIn: настоящая (если pydantic был) или из раннера; в крайнем случае — минимальная заглушка

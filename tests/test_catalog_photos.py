@@ -11,6 +11,7 @@ import sys
 import types
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -83,6 +84,7 @@ def env(tmp_path, monkeypatch, database):
     fake_worker.add_catalog_product_task = task("add")
     fake_worker.add_catalog_photos_task = task("photos")
     fake_worker.identify_product_task = task("identify")
+    fake_worker.recover_index_task = task("recover_index")
     fake_worker.celery_app = types.SimpleNamespace(AsyncResult=lambda tid: None)
     monkeypatch.setitem(sys.modules, "app.worker", fake_worker)
     sys.modules.pop("app.api.routes_catalog", None)
@@ -496,3 +498,104 @@ def test_deactivated_photo_is_never_the_cover(env):
     assert row["cover_image_id"] is None and row["photo_count"] == 2
     assert env.client.get(f"/api/v1/catalog/products/{pid}/photo", headers=env.admin).status_code == 404
     assert env.client.get(f"/api/v1/catalog/products/{pid}/photo?image_id={a}", headers=env.admin).status_code == 200   # по номеру — видно
+
+
+# ------------------------------------------------------------------ вектор выведенного фото убирается из файла индекса (2026-11-21)
+
+
+def test_deactivated_photo_vector_leaves_the_index_file_and_returns_from_the_cache(env, monkeypatch, tmp_path):
+    """Сквозной путь со страницей и настоящей функцией воркера: вывели фото -> первые дни исключено по записи (вектор в файле)
+    -> плановая проверка убирает вектор из файла -> не узнаётся; вернули -> проверка ставится в очередь сразу и возвращает вектор
+    из кэша базы байт в байт -> снова узнаётся. Другой процесс записал индекс — файл не перезаписан, индекс перечитан с диска."""
+    from app.services import index_prune
+    from app.services.index_reconcile import _vectors_of
+    cola, pepsi = _product(env), _product(env, "PEPSI", "Пепси")
+    a = _register(env, cola, "COLA", 1, (200, 10, 10))
+    b = _register(env, pepsi, "PEPSI", 1, (10, 200, 10))
+    sig = {"name": "t", "weights": "w", "preprocess": "p", "dim": 3, "normalization": "l2"}
+    with env.Session() as db:
+        src = {r.id: r.source_ref for r in db.query(ProductImage).all()}
+        P.PhotoRegistry(db).store_vectors([(a, _unit([1, 0, 0])), (b, _unit([0.5, 0.86, 0]))], sig)
+    path = str(tmp_path / "idx" / "catalog.faiss")
+    index = M.NumpyCatalogIndex()
+    index.add(cola, _unit([1, 0, 0]), [src[a]])
+    index.add(pepsi, _unit([0.5, 0.86, 0]), [src[b]])
+    index.model = sig
+    monkeypatch.setitem(sys.modules, "faiss", None)
+    index.save(path)
+    matcher = M.ProductMatcher(M.open_catalog_index(path, 3), match_threshold=0.9, unknown_threshold=0.3)
+    lookup, frame = _Lookup({cola: "Кола", pepsi: "Пепси"}), np.zeros((4, 4, 3), dtype=np.uint8)
+    embedder = _Embedder(_unit([1, 0, 0]))
+    queued = []
+    routes = sys.modules["app.api.routes_catalog"]
+    monkeypatch.setattr(routes, "recover_index_task",
+                        types.SimpleNamespace(delay=lambda: queued.append("recover") or types.SimpleNamespace(id="r")))
+
+    fake = sys.modules.pop("app.worker")
+    try:
+        import importlib
+        worker = importlib.import_module("app.worker")
+    finally:
+        sys.modules["app.worker"] = fake
+    monkeypatch.setattr(worker, "_matcher", matcher)
+    monkeypatch.setattr(worker, "_index_path", lambda: path)
+    monkeypatch.setattr(worker, "_index_dim", lambda: 3)
+    products = {cola: "COLA", pepsi: "PEPSI"}
+
+    def recognize():
+        with env.Session() as db:
+            worker._refresh_exclusions(db)
+        return identify_service.identify(frame, embedder, matcher, lookup)
+
+    def prune():
+        with env.Session() as db:
+            return worker._prune_index(db, products, path)
+
+    url = f"/api/v1/catalog/products/{cola}/images/{a}"
+    assert env.client.patch(url, headers=env.admin, json={"active": False}).status_code == 200
+    assert queued == []                                             # вывод из эталонов проверку не ставит
+    assert prune()["removed"] == 0 and len(M.open_catalog_index(path, 3)._ids) == 2      # первые дни — только по записи
+    with env.Session() as db:
+        row = db.get(ProductImage, a)
+        row.deactivated_at = index_prune._utcnow() - timedelta(days=index_prune.PRUNE_AFTER_DAYS + 1)
+        db.commit()
+    assert prune() == {"removed": 1, "restored": 0, "kept_without_cache": 0, "skipped": None}
+    disk = M.open_catalog_index(path, 3)
+    assert disk._ids == [pepsi] and np.array_equal(_vectors_of(disk), np.atleast_2d(_unit([0.5, 0.86, 0])))
+    assert matcher.index._ids == [pepsi]                            # воркер пользуется новым индексом
+    assert all(c["id"] != cola for c in recognize()["candidates"])
+
+    assert env.client.patch(url, headers=env.admin, json={"active": True}).status_code == 200
+    assert queued == ["recover"]                                    # проверка поставлена сразу
+    assert prune()["restored"] == 1
+    disk = M.open_catalog_index(path, 3)
+    assert disk._ids == [pepsi, cola] and np.array_equal(_vectors_of(disk)[1], _unit([1, 0, 0]))
+    assert recognize()["product"]["id"] == cola
+
+    # другой процесс записал индекс между загрузкой и уборкой: файл не перезаписан, индекс в памяти — с диска
+    with env.Session() as db:
+        row = db.get(ProductImage, a)
+        row.is_active, row.deactivated_at = False, index_prune._utcnow() - timedelta(days=30)
+        db.commit()
+    other = M.open_catalog_index(path, 3)
+    other.add(pepsi, _unit([0, 1, 0]), ["upload:pepsi/2"])
+    other.save(path)
+    before = Path(path + ".npz").read_bytes()
+    assert prune() is None
+    assert Path(path + ".npz").read_bytes() == before
+    assert len(matcher.index._ids) == 3                             # перечитан с диска (с чужим вектором)
+    assert prune()["removed"] == 1                                  # следующий запуск убирает уже по новому файлу
+
+
+def test_queue_down_does_not_fail_returning_a_photo(env, monkeypatch):
+    pid = _product(env)
+    a = _register(env, pid, "COLA", 1, (200, 10, 10))
+    routes = sys.modules["app.api.routes_catalog"]
+
+    def down():
+        raise ConnectionError("redis down")
+    monkeypatch.setattr(routes, "recover_index_task", types.SimpleNamespace(delay=down))
+    url = f"/api/v1/catalog/products/{pid}/images/{a}"
+    assert env.client.patch(url, headers=env.admin, json={"active": False}).status_code == 200
+    resp = env.client.patch(url, headers=env.admin, json={"active": True})
+    assert resp.status_code == 200 and resp.json()["changed"] == ["active"]

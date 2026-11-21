@@ -87,6 +87,7 @@ def env(monkeypatch, tmp_path):
     fake.identify_product_task = task
     fake.add_catalog_product_task = task
     fake.add_catalog_photos_task = task
+    fake.recover_index_task = task
     fake.celery_app = types.SimpleNamespace(AsyncResult=lambda _id: None)
     monkeypatch.setitem(sys.modules, "app.worker", fake)
     for name in ("app.api.routes_catalog", "app.api.routes_public"):
@@ -232,7 +233,7 @@ CHECK_CUSTOMER_ENTRANCE = r"""
 import sys, types
 fake = types.ModuleType("app.worker")
 task = types.SimpleNamespace(apply_async=lambda *a, **k: None, delay=lambda *a: None)
-fake.identify_product_task = fake.add_catalog_product_task = fake.add_catalog_photos_task = task
+fake.identify_product_task = fake.add_catalog_product_task = fake.add_catalog_photos_task = fake.recover_index_task = task
 fake.celery_app = types.SimpleNamespace(AsyncResult=lambda _id: None)
 sys.modules["app.worker"] = fake
 from fastapi.testclient import TestClient

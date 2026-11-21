@@ -89,6 +89,7 @@ def env(tmp_path, monkeypatch):
     fake_worker.add_catalog_product_task = make_task("add_product")
     fake_worker.add_catalog_photos_task = make_task("add_photos")
     fake_worker.identify_product_task = make_task("identify", result=lambda: e.identify_answer)
+    fake_worker.recover_index_task = make_task("recover_index")
     fake_worker.celery_app = types.SimpleNamespace(AsyncResult=lambda task_id: e.async_results.get(task_id, FakeAsync("PENDING", None, task_id)))
     monkeypatch.setitem(sys.modules, "app.worker", fake_worker)
     sys.modules.pop("app.api.routes_catalog", None)

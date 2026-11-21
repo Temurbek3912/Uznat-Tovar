@@ -245,6 +245,21 @@ def test_reindex_uploads_script_uses_the_index_not_the_journal(env, monkeypatch)
     lines.clear()
     assert reindex_uploads.main(["--apply", "--yes"], **common) == 0 and "Нечего добавлять" in "\n".join(lines)
 
+def test_reindex_uploads_script_does_not_bring_back_excluded_photos(env):
+    """Вектор выведенного из эталонов фото убран (app/services/index_prune.py) — скрипт не называет фото пропущенным и не
+    добавляет его обратно."""
+    from scripts import reindex_uploads
+    gone = _save_photo(env.uploads, "KOLA", 1, (200, 10, 10))
+    env.products["id-kola"] = "KOLA"
+    settings = types.SimpleNamespace(matcher=types.SimpleNamespace(index_path=env.path),
+                                     embedder=types.SimpleNamespace(embedding_dim=3, weights_path="x"),
+                                     media_root=str(env.tmp / "media"))
+    lines = []
+    common = dict(out=lines.append, load_products=lambda: dict(env.products), settings=settings, resolve_path=lambda p: Path(p),
+                  make_embedder=lambda s: env.embedder, load_image=_load, load_excluded=lambda: frozenset({("id-kola", gone)}))
+    assert reindex_uploads.main(["--apply", "--yes"], **common) == 0 and "Нечего добавлять" in "\n".join(lines)
+    assert env.embedder.calls == 0
+
 
 def _func(name):
     import ast

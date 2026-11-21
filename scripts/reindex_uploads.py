@@ -31,6 +31,18 @@ def _load_products() -> dict[str, str]:
         db.close()
 
 
+def _load_excluded() -> frozenset:
+    """(товар, ссылка) фото, выведенных из эталонов или витринных (база — источник истины): их векторы не добавляются, а
+    отсутствие вектора не считается пропуском (вектор выведенного фото убирает app/services/index_prune.py)."""
+    from app.db.session import SessionLocal                       # noqa: PLC0415
+    from app.services.product_images import PhotoRegistry         # noqa: PLC0415
+    db = SessionLocal()
+    try:
+        return frozenset(PhotoRegistry(db).excluded_sources())
+    finally:
+        db.close()
+
+
 def _load_embedder(settings):
     from app.pipeline.embedder import create_embedder  # noqa: PLC0415
     return create_embedder(settings.embedder)
@@ -43,6 +55,7 @@ def _open_registry():
 
 
 def main(argv: list[str] | None = None, out=print, load_products=None, settings=None, resolve_path=None, make_embedder=None,
+         load_excluded=None,
          load_image=None, make_registry=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="действительно добавить фото в индекс (без флага — только показать)")
@@ -71,8 +84,9 @@ def main(argv: list[str] | None = None, out=print, load_products=None, settings=
         out(f"Не удалось открыть индекс или журнал: {exc}")
         return 2
     products = (load_products or _load_products)()
+    excluded = (load_excluded or (_load_excluded if load_products is None else frozenset))()
     rep = C.analyze_coverage(index, products, root, folder_of=folder_name, list_photos=list_photo_files, upload_ref=upload_ref,
-                             manifest_keys=manifest.keys)
+                             manifest_keys=manifest.keys, skip=excluded)
     if not rep.photos_not_indexed:
         out(f"Нечего добавлять: все фото из {root} уже в индексе.")
         return 0
@@ -122,7 +136,8 @@ def main(argv: list[str] | None = None, out=print, load_products=None, settings=
     try:
         res = C.recover_pending(index, products, root, embedder=embedder, index_path=index_path, folder_of=folder_name,
                                 list_photos=list_photo_files, upload_ref=upload_ref, load_image=load_image,
-                                manifest_keys=manifest.keys, note_indexed=note, limit=10 ** 9, remember=remember)
+                                manifest_keys=manifest.keys, note_indexed=note, limit=10 ** 9, remember=remember,
+                                skip=excluded)
     finally:
         if registry is not None:
             registry.db.close()

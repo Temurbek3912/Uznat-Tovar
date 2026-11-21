@@ -28,7 +28,7 @@ import hashlib
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Mapping
+from typing import Callable, Collection, Iterable, Mapping
 
 import numpy as np
 
@@ -97,9 +97,12 @@ class CoverageReport:
 
 
 def analyze_coverage(index, products: Mapping[str, str], uploads_root: Path, *, folder_of, list_photos,
-                     upload_ref, manifest_keys: set[str] | None = None, verify_content: bool = False) -> CoverageReport:
+                     upload_ref, manifest_keys: set[str] | None = None, verify_content: bool = False,
+                     skip: Collection[tuple[str, str]] = frozenset()) -> CoverageReport:
     """products: {id: артикул} из базы. folder_of(артикул) -> папка; list_photos(root, артикул) -> файлы фото;
-    upload_ref(папка, файл) -> ссылка. Векторы товаров, которых нет в базе, — дело scripts/reconcile_index.py (здесь не считаются)."""
+    upload_ref(папка, файл) -> ссылка. Векторы товаров, которых нет в базе, — дело scripts/reconcile_index.py (здесь не считаются).
+    skip — (товар, ссылка) фото, которые не участвуют в распознавании (PhotoRegistry.excluded_sources): отсутствие их
+    вектора не ошибка (вектор выведенного фото убирает app/services/index_prune.py)."""
     state = IndexedState.of(index)
     keys = manifest_keys or set()
     rep = CoverageReport(content_checked=verify_content)
@@ -124,7 +127,8 @@ def analyze_coverage(index, products: Mapping[str, str], uploads_root: Path, *, 
         for f in files:
             ref = upload_ref(folder_by_product[pid], f.name)
             if not state.has(pid, ref, lambda r: (_upload_key(r) or r) in keys):
-                rep.photos_not_indexed.append((pid, sku, ref))
+                if (pid, ref) not in skip:
+                    rep.photos_not_indexed.append((pid, sku, ref))
             elif verify_content and state.sources.get(ref):
                 expected = f.name.split("-", 1)[1].split(".", 1)[0] if "-" in f.name else ""
                 if _sha12_of(f) != expected:
@@ -150,10 +154,13 @@ class RecoveryResult:
 def recover_pending(index, products: Mapping[str, str], uploads_root: Path, *, embedder, index_path: str | None,
                     folder_of, list_photos, upload_ref, load_image, manifest_keys: set[str] | None = None,
                     note_indexed: Callable[[list[str]], None] = lambda refs: None, limit: int = 200,
-                    remember: Callable[[str, list[str], np.ndarray], None] | None = None) -> RecoveryResult:
+                    remember: Callable[[str, list[str], np.ndarray], None] | None = None,
+                    skip: Collection[tuple[str, str]] = frozenset()) -> RecoveryResult:
     """Векторы для фото из браузера, которых нет в индексе, — по одному товару: векторы -> индекс -> сохранение -> журнал.
     Товары берутся только из базы. Повтор безопасен: что уже в индексе, решает сам индекс. Непригодное фото — в failed,
-    остальные продолжаются. Не больше limit фото за запуск (remaining — сколько осталось)."""
+    остальные продолжаются. Не больше limit фото за запуск (remaining — сколько осталось). skip — (товар, ссылка) фото, выведенных
+    из эталонов или витринных (PhotoRegistry.excluded_sources): их векторы не добавляются — иначе вектор, убранный
+    app/services/index_prune.py, вернулся бы при следующем запуске."""
     res = RecoveryResult()
     keys = manifest_keys or set()
     budget = limit
@@ -161,7 +168,8 @@ def recover_pending(index, products: Mapping[str, str], uploads_root: Path, *, e
     for pid, sku in sorted(products.items(), key=lambda kv: kv[1]):
         folder = folder_of(sku)
         todo = [(f, upload_ref(folder, f.name)) for f in list_photos(uploads_root, sku)]
-        todo = [(f, ref) for f, ref in todo if not state.has(pid, ref, lambda r: (_upload_key(r) or r) in keys)]
+        todo = [(f, ref) for f, ref in todo
+                if (pid, ref) not in skip and not state.has(pid, ref, lambda r: (_upload_key(r) or r) in keys)]
         if not todo:
             continue
         if budget <= 0:

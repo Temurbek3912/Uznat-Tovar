@@ -84,6 +84,7 @@ from app.worker import (
     add_catalog_product_task,
     celery_app,
     identify_product_task,
+    recover_index_task,
 )
 
 IDENTIFY_MAX_MB = 10               # кадр с камеры — десятки/сотни КБ; больше — явная ошибка клиента
@@ -719,7 +720,7 @@ def update_product_image(
     if body.role is not None and body.role not in (REFERENCE, DISPLAY):
         raise ApiError(422, "photo_role_invalid", "Роль фото: эталон (reference) или витринное (display).")
     try:
-        _row, before, after = PhotoRegistry(db).change(image_id, active=body.active, role=body.role, product_id=product.id)
+        row, before, after = PhotoRegistry(db).change(image_id, active=body.active, role=body.role, product_id=product.id)
     except LookupError:
         raise ApiError(404, "photo_not_found", "Такого фото у этого товара нет.") from None
     from app.services import audit            # здесь, а не в начале файла: журнал тянет SQLAlchemy-запросы (тест логики без неё)
@@ -731,9 +732,21 @@ def update_product_image(
                          target_id=product.id, before={"image_id": image_id, field_name: before[field_name]},
                          after={"image_id": image_id, field_name: after[field_name]}, reason=reason_text)
     db.commit()
+    if after and in_recognition(row):
+        _request_index_check()
     payload = _images_payload(db, product)
     payload["changed"] = sorted(after)
     return payload
+
+
+def _request_index_check() -> None:
+    """Фото снова эталон: если плановая уборка уже убрала его вектор из индекса (app/services/index_prune.py — через
+    PRUNE_AFTER_DAYS после вывода), воркер вернёт его из кэша базы при ближайшей проверке индекса — ставим её сразу, а не
+    ждём расписания. Очередь недоступна — не ошибка: проверка пройдёт по расписанию или при запуске воркера."""
+    try:
+        _enqueue(lambda: recover_index_task.delay())
+    except ApiError:
+        logger.warning("Проверка индекса после возврата фото в эталоны не поставлена в очередь — пройдёт по расписанию")
 
 
 def run_identify(db: Session, data: bytes, lang: str = "ru") -> dict:

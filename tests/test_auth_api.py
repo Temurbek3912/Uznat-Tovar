@@ -70,6 +70,7 @@ def _install_fake_worker(monkeypatch, calls):
     # Все задачи, которые импортирует app/api/routes_catalog.py (заглушка отставала от маршрутов — модуль не импортировался).
     fake.add_catalog_photos_task = _Task("add_product")
     fake.identify_product_task = _Task("add_product")
+    fake.recover_index_task = _Task("recover_index")
     fake.celery_app = _Celery()
     monkeypatch.setitem(sys.modules, "app.worker", fake)
 

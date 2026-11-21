@@ -59,6 +59,9 @@ NEVER_COPY = {"identify-tmp"}                    # временные кадры
 CONFIG_FILES = ("configs/config.yaml", "docker-compose.yml", "requirements.txt")
 CHUNK = 1024 * 1024
 KEEP_DAILY, KEEP_WEEKLY, KEEP_MONTHLY = 7, 4, 6
+# Срок ПОДКЛЮЧЕНИЯ утилит PostgreSQL к серверу (не срок всей копии: большой дамп может идти долго). Без него при недоступном
+# сервере pg_dump/psql ждут столько, сколько ждёт система (минуты). Свой PGCONNECT_TIMEOUT или connect_timeout в адресе — главнее.
+CONNECT_TIMEOUT_S = 15
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
@@ -223,8 +226,17 @@ class PgTools:
     def _compose(self) -> list[str]:
         return ["docker", "compose"] + (["-f", self.compose_file] if self.compose_file else [])
 
+    def _exec_db(self) -> list[str]:
+        """`docker compose exec` в контейнер базы со сроком подключения (переменная окружения внутри контейнера)."""
+        return self._compose() + ["exec", "-T", "-e", f"PGCONNECT_TIMEOUT={self._connect_timeout()}", "db"]
+
     def _exec(self, shell: str) -> list[str]:
-        return self._compose() + ["exec", "-T", "db", "sh", "-c", shell]
+        return self._exec_db() + ["sh", "-c", shell]
+
+    @staticmethod
+    def _connect_timeout() -> str:
+        own = os.environ.get("PGCONNECT_TIMEOUT", "").strip()
+        return own if own.isdigit() and int(own) > 0 else str(CONNECT_TIMEOUT_S)
 
     def _url_for(self, dbname: str) -> str:
         """Тот же сервер и учётная запись, другая база (параметры адреса вроде ?sslmode= сохраняются)."""
@@ -236,6 +248,8 @@ class PgTools:
         return urlunsplit(parts._replace(path=f"/{dbname}"))
 
     def _run(self, cmd: list[str], **kw) -> subprocess.CompletedProcess:
+        if not self.use_compose and "env" not in kw:
+            kw["env"] = {**os.environ, "PGCONNECT_TIMEOUT": self._connect_timeout()}
         try:
             return self.runner(cmd, **kw)
         except FileNotFoundError as exc:
@@ -283,7 +297,7 @@ class PgTools:
 
     def listing(self, dump: Path) -> str:
         with Path(dump).open("rb") as fh:
-            cmd = self._compose() + ["exec", "-T", "db", "pg_restore", "--list"] if self.use_compose else ["pg_restore", "--list"]
+            cmd = self._exec_db() + ["pg_restore", "--list"] if self.use_compose else ["pg_restore", "--list"]
             proc = self._run(cmd, stdin=fh, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         text = (proc.stdout or b"").decode("utf-8", "replace")
         if proc.returncode != 0 or "Archive created at" not in text:

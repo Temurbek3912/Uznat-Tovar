@@ -335,6 +335,62 @@ def test_compose_mode_runs_tools_inside_the_db_container_and_passes_sql_on_stdin
     assert kw["input"] == b"SELECT 'x'" and "SELECT" not in " ".join(cmd)
 
 
+def test_every_db_command_gets_a_connect_timeout_in_both_modes(tmp_path, monkeypatch):
+    monkeypatch.delenv("PGCONNECT_TIMEOUT", raising=False)
+    dump = tmp_path / "d.dump"
+    dump.write_bytes(b"x")
+    rec = Recorder(stdout=b"Archive created at\n")
+    pg = fb.PgTools(compose_file="dc.yml", runner=rec)
+    pg.create_db("restore_check_20261107_abcdef")
+    pg.drop_db("restore_check_20261107_abcdef")
+    pg._psql("postgres", "SELECT 1")
+    pg.schema_revision()
+    pg.listing(dump)
+    pg.restore_into(dump, "restore_check_20261107_abcdef")
+    with pytest.raises(fb.BackupError, match="пуст"):     # поддельный запуск ничего не пишет
+        pg.dump(tmp_path / "out.dump")
+    assert len(rec.calls) >= 7
+    for cmd, _ in rec.calls:                       # внутри контейнера базы — через -e перед именем службы
+        assert cmd[4:9] == ["exec", "-T", "-e", f"PGCONNECT_TIMEOUT={fb.CONNECT_TIMEOUT_S}", "db"], cmd
+
+    rec = Recorder(stdout=b"Archive created at\n")
+    pg = fb.PgTools(use_compose=False, database_url="postgresql://u@h/db", runner=rec)
+    pg._versions_checked = True
+    pg._psql("postgres", "SELECT 1")
+    pg.listing(dump)
+    pg.restore_into(dump, "restore_check_20261107_abcdef")
+    with pytest.raises(fb.BackupError, match="пуст"):     # поддельный запуск ничего не пишет
+        pg.dump(tmp_path / "out2.dump")
+    for cmd, kw in rec.calls:                      # локальные утилиты — через окружение, остальное окружение сохранено
+        assert kw["env"]["PGCONNECT_TIMEOUT"] == str(fb.CONNECT_TIMEOUT_S) and kw["env"].get("PATH") == os.environ.get("PATH")
+
+
+def test_own_connect_timeout_wins_and_a_bad_one_falls_back_to_the_default(monkeypatch):
+    rec = Recorder()
+    monkeypatch.setenv("PGCONNECT_TIMEOUT", "40")
+    fb.PgTools(compose_file=None, runner=rec)._psql("postgres", "SELECT 1")
+    fb.PgTools(use_compose=False, database_url="postgresql://u@h/db", runner=rec)._psql("postgres", "SELECT 1")
+    assert "PGCONNECT_TIMEOUT=40" in rec.calls[0][0] and rec.calls[1][1]["env"]["PGCONNECT_TIMEOUT"] == "40"
+    monkeypatch.setenv("PGCONNECT_TIMEOUT", "0")      # 0 у libpq — «ждать без срока»: не принимаем
+    fb.PgTools(compose_file=None, runner=rec)._psql("postgres", "SELECT 1")
+    assert f"PGCONNECT_TIMEOUT={fb.CONNECT_TIMEOUT_S}" in rec.calls[2][0]
+
+
+@pytest.mark.skipif(shutil.which("pg_dump") is None, reason="нет утилит PostgreSQL")
+def test_real_unreachable_server_fails_within_the_connect_timeout(tmp_path, monkeypatch):
+    import time
+
+    monkeypatch.setenv("PGCONNECT_TIMEOUT", "3")
+    pg = fb.PgTools(use_compose=False, database_url="postgresql://u:p@10.255.255.1:5432/db")
+    pg._versions_checked = True                    # проверка версий тоже подключается — её проверяем ниже отдельно
+    started = time.monotonic()
+    with pytest.raises(fb.BackupError, match="pg_dump"):
+        pg.dump(tmp_path / "x.dump")
+    with pytest.raises(fb.BackupError, match="psql"):
+        pg._psql("postgres", "SELECT 1")
+    assert time.monotonic() - started < 20
+
+
 def test_only_temporary_databases_with_the_reserved_prefix_can_be_dropped():
     pg = fb.PgTools(use_compose=True, runner=Recorder())
     for bad in ("shelf_audit", "postgres", "restore_check_x; drop", "restore_check_"):

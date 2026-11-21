@@ -3,7 +3,8 @@
 
 У каждого вектора индекса записан источник — какое фото его дало (matcher: `sources`, параллельно `ids`):
   «upload:<папка>/<файл>»  — фото из браузера (data/catalog-uploads/<папка>/<файл>, имя «NNN-<12 знаков SHA-256>.jpg»);
-  «import:<SHA-256>»       — фото из папки импорта (scripts/import_catalog.py; сама папка — вне проекта);
+  «import:<SHA-256>»       — фото из папки импорта (scripts/import_catalog.py); копия файла — data/catalog-imported, путь и
+                             SHA-256 — в записи о фото (product_images);
   «file:<папка>/<файл>»    — полная пересборка ml/build_catalog_embeddings.py;
   нет источника            — векторы версий до 2026-11-07 («старые»).
 Индекс сам говорит, какие фото в нём есть: отдельный журнал uploads_manifest.json больше не источник истины (он ведётся для
@@ -17,6 +18,9 @@
   - изменение фото после индексирования (содержимое не совпадает с SHA-256 в имени) — по запросу, это чтение всех фото;
   - товары без векторов и без фото (восстановить нечем — нужны новые фото);
   - «старые» векторы без источника (их нельзя проверить поштучно).
+Фото импорта (2026-11-21) проверяются по записям о фото (import_photos, product_images): есть ли запись этого товара, есть ли
+копия файла в папке данных, не изменилось ли содержимое (--verify-photos: SHA-256 файла с записью), у каждого ли активного
+эталона импорта есть вектор. Без записей (import_photos=None) векторы импорта только считаются — как раньше.
 Восстановление:
   - недостающие векторы фото из браузера — recover_pending (нужна модель: задача воркера при каждом запуске и
     scripts/reindex_uploads.py); повтор безопасен — «есть ли вектор» каждый раз решает сам индекс;
@@ -77,6 +81,37 @@ def _sha12_of(path: Path) -> str:
     return digest.hexdigest()[:12]
 
 
+def _sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+@dataclass(frozen=True)
+class ImportPhoto:
+    """Запись о фото импорта (product_images с источником «import:<SHA-256>»)."""
+    product_id: str
+    source_ref: str
+    storage_path: str | None      # копия файла внутри папки данных, через «/»; None — копии нет (импорт до копирования фото)
+    sha256: str
+    reference: bool               # активный эталон — участвует в распознавании, вектор нужен
+
+
+def _file_inside(media_root: Path, rel: str) -> Path | None:
+    """Файл копии внутри папки данных; путь из базы наружу (абсолютный, «..», ссылка вне папки) — None, без чтения."""
+    r = Path(rel)
+    if r.is_absolute() or r.drive or ".." in r.parts:
+        return None
+    root = Path(media_root).resolve()
+    try:
+        real = (root / r).resolve()
+    except OSError:
+        return None
+    return real if real.is_relative_to(root) and real.is_file() else None
+
+
 @dataclass
 class CoverageReport:
     photos_not_indexed: list[tuple[str, str, str]] = field(default_factory=list)       # (id, артикул, ссылка)
@@ -87,25 +122,39 @@ class CoverageReport:
     products_without_vectors: list[tuple[str, str]] = field(default_factory=list)
     products_without_vectors_or_photos: list[tuple[str, str]] = field(default_factory=list)
     legacy_vectors: dict[str, int] = field(default_factory=dict)                      # id -> число векторов без источника
-    import_vectors: int = 0                                                           # их фото вне проекта — не проверяются
+    import_vectors: int = 0                                                           # векторы фото импорта (всего)
     content_checked: bool = False
+    imports_checked: bool = False                                                     # фото импорта сверены с записями о фото
+    import_vectors_without_record: list[tuple[str, str]] = field(default_factory=list)  # (id, источник) — у товара нет записи
+    import_vectors_without_copy: int = 0                                              # запись без копии файла — не проверяются
+    import_photos_not_indexed: list[tuple[str, str]] = field(default_factory=list)    # (id, источник) — эталон без вектора
 
     @property
     def complete(self) -> bool:
         return not (self.photos_not_indexed or self.vectors_without_photo or self.foreign_photo_vectors or self.duplicate_sources
-                    or self.changed_photos or self.products_without_vectors)
+                    or self.changed_photos or self.products_without_vectors or self.import_vectors_without_record
+                    or self.import_photos_not_indexed)
 
 
 def analyze_coverage(index, products: Mapping[str, str], uploads_root: Path, *, folder_of, list_photos,
                      upload_ref, manifest_keys: set[str] | None = None, verify_content: bool = False,
-                     skip: Collection[tuple[str, str]] = frozenset()) -> CoverageReport:
+                     skip: Collection[tuple[str, str]] = frozenset(), import_photos: Iterable[ImportPhoto] | None = None,
+                     media_root: Path | None = None) -> CoverageReport:
     """products: {id: артикул} из базы. folder_of(артикул) -> папка; list_photos(root, артикул) -> файлы фото;
     upload_ref(папка, файл) -> ссылка. Векторы товаров, которых нет в базе, — дело scripts/reconcile_index.py (здесь не считаются).
     skip — (товар, ссылка) фото, которые не участвуют в распознавании (PhotoRegistry.excluded_sources): отсутствие их
-    вектора не ошибка (вектор выведенного фото убирает app/services/index_prune.py)."""
+    вектора не ошибка (вектор выведенного фото убирает app/services/index_prune.py). import_photos — записи о фото импорта,
+    media_root — папка данных (их копии): с ними проверяются и векторы фото импорта (иначе только считаются)."""
     state = IndexedState.of(index)
+    imports = None if import_photos is None else list(import_photos)
+    if imports is not None and media_root is None:
+        raise ValueError("для проверки фото импорта нужна папка данных (media_root)")
+    by_source: dict[str, list[ImportPhoto]] = {}
+    for rec in imports or ():
+        by_source.setdefault(rec.source_ref, []).append(rec)
+    checked: set[tuple[str, str]] = set()
     keys = manifest_keys or set()
-    rep = CoverageReport(content_checked=verify_content)
+    rep = CoverageReport(content_checked=verify_content, imports_checked=imports is not None)
     sources = getattr(index, "_sources", None) or [None] * len(index._ids)
     folder_by_product = {pid: folder_of(sku) for pid, sku in products.items()}
     for pid, source in zip(index._ids, sources, strict=True):
@@ -115,6 +164,21 @@ def analyze_coverage(index, products: Mapping[str, str], uploads_root: Path, *, 
             rep.legacy_vectors[pid] = rep.legacy_vectors.get(pid, 0) + 1
         elif source.startswith(IMPORT):
             rep.import_vectors += 1
+            if imports is None or (pid, source) in skip or (pid, source) in checked:   # выведенные — уберёт index_prune
+                continue
+            checked.add((pid, source))
+            recs = by_source.get(source, [])
+            own = [r for r in recs if r.product_id == pid]
+            if not own:
+                (rep.foreign_photo_vectors if recs else rep.import_vectors_without_record).append((pid, source))
+                continue
+            rec = next((r for r in own if r.storage_path), own[0])
+            if not rec.storage_path:
+                rep.import_vectors_without_copy += 1
+            elif (path := _file_inside(media_root, rec.storage_path)) is None:
+                rep.vectors_without_photo.append((pid, source))
+            elif verify_content and _sha256_of(path) != (rec.sha256 or "").lower():
+                rep.changed_photos.append((pid, source))
         elif (key := _upload_key(source)) is not None:
             folder, _, name = key.partition("/")
             if folder != folder_by_product[pid]:
@@ -122,6 +186,15 @@ def analyze_coverage(index, products: Mapping[str, str], uploads_root: Path, *, 
             elif not (Path(uploads_root) / folder / name).is_file():
                 rep.vectors_without_photo.append((pid, source))
     rep.duplicate_sources = {s: n for s, n in state.sources.items() if n > 1}
+    indexed_pairs = set(zip(index._ids, sources, strict=True))
+    import_refs_by_product: Counter = Counter()
+    for rec in imports or ():
+        pair = (rec.product_id, rec.source_ref)
+        if not rec.reference or rec.product_id not in products or pair in skip:
+            continue
+        import_refs_by_product[rec.product_id] += 1
+        if pair not in indexed_pairs and pair not in rep.import_photos_not_indexed:
+            rep.import_photos_not_indexed.append(pair)
     for pid, sku in sorted(products.items(), key=lambda kv: kv[1]):
         files = list_photos(uploads_root, sku)
         for f in files:
@@ -135,7 +208,7 @@ def analyze_coverage(index, products: Mapping[str, str], uploads_root: Path, *, 
                     rep.changed_photos.append((pid, ref))
         if state.vectors_by_product.get(pid, 0) == 0:
             rep.products_without_vectors.append((pid, sku))
-            if not files:
+            if not files and not import_refs_by_product.get(pid):
                 rep.products_without_vectors_or_photos.append((pid, sku))
     return rep
 
@@ -208,4 +281,9 @@ def describe(rep: CoverageReport) -> Iterable[str]:
     yield f"Товары без векторов: {len(rep.products_without_vectors)}; из них без фото (восстановить нечем): " \
           f"{len(rep.products_without_vectors_or_photos)}"
     yield f"Векторы без источника (версии до 2026-11-07, поштучно не проверяются): {sum(rep.legacy_vectors.values())}"
-    yield f"Векторы фото из папки импорта (файлы вне проекта, не проверяются): {rep.import_vectors}"
+    if rep.imports_checked:
+        yield f"Векторы фото импорта: {rep.import_vectors}; без записи о фото у товара: {len(rep.import_vectors_without_record)}; " \
+              f"запись без копии файла (не проверяются): {rep.import_vectors_without_copy}"
+        yield f"Фото импорта без вектора: {len(rep.import_photos_not_indexed)}"
+    else:
+        yield f"Векторы фото импорта (записи о фото не загружены — не проверялись): {rep.import_vectors}"

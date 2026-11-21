@@ -195,3 +195,34 @@ def test_full_rebuild_with_the_flag_makes_a_verified_backup_first(backend, tmp_p
 def test_rebuild_script_checks_the_target_before_loading_the_model():
     src = (Path(__file__).resolve().parents[1] / "ml" / "build_catalog_embeddings.py").read_text(encoding="utf-8")
     assert "--replace-existing" in src and src.index("prepare_full_rebuild(") < src.index("embedder = create_embedder(")
+
+
+def test_script_checks_import_photos_against_records(backend, tmp_path):
+    import hashlib
+
+    from app.services.index_coverage import ImportPhoto
+    media = tmp_path / "media"
+    data = b"photo-of-kola"
+    sha = hashlib.sha256(data).hexdigest()
+    rel = f"catalog-imported/p1/{sha[:16]}.jpg"
+    (media / rel).parent.mkdir(parents=True)
+    (media / rel).write_bytes(data)
+    path = tmp_path / "idx" / "catalog.faiss"
+    index = M.open_catalog_index(str(path), 3)
+    index.add("p1", _unit(1, 0, 0), [f"import:{sha}"])
+    index.add("p2", _unit(0, 1, 0), ["import:" + "ab" * 32])
+    index.save(str(path))
+    records = [ImportPhoto("p1", f"import:{sha}", rel, sha, True), ImportPhoto("p2", "import:" + "ab" * 32, "catalog-imported/p2/x.jpg",
+                                                                               "ab" * 32, True)]
+    from scripts import reconcile_index
+    lines = []
+    code = reconcile_index.main(["--verify-photos"], out=lines.append, load_products=lambda: {"p1": "KOLA", "p2": "FANTA"},
+                                settings=_settings(tmp_path), resolve_path=lambda p: Path(p), load_import_photos=lambda: records)
+    text = "\n".join(lines)
+    assert code == 0 and "Векторы, чьих фото нет на диске: 1" in text and "нет фото у вектора: import:abab" in text
+    assert "Расхождений нет" not in text
+    (media / rel).write_bytes(data + b"x")
+    lines.clear()
+    reconcile_index.main(["--verify-photos"], out=lines.append, load_products=lambda: {"p1": "KOLA", "p2": "FANTA"},
+                         settings=_settings(tmp_path), resolve_path=lambda p: Path(p), load_import_photos=lambda: records)
+    assert f"фото изменено после индексирования: import:{sha}" in "\n".join(lines)

@@ -6,6 +6,10 @@
                                                  # снять устаревшие отметки журнала
     python -m scripts.reconcile_index --verify-photos   # дополнительно проверить, не менялись ли фото после индексирования
 
+Фото импорта каталога (data/catalog-imported) сверяются по записям о фото в базе: запись у этого товара, копия файла на месте,
+содержимое то же (--verify-photos), у каждого активного эталона есть вектор. Недостающие векторы фото импорта воркер не
+добавляет — их возвращает пересборка из базы: python -m scripts.rebuild_index --apply (модель не нужна, векторы из кэша базы).
+
 --apply НЕ добавляет недостающие векторы (нужна модель): это делает воркер автоматически при каждом запуске
 (задача recover_index) или вручную python -m scripts.reindex_uploads --apply.
 
@@ -45,8 +49,25 @@ def _load_excluded() -> frozenset:
         db.close()
 
 
+def _load_import_photos() -> list:
+    """Записи о фото импорта (product_images, источник «import:…») — для проверки векторов фото импорта."""
+    from app.db.models import ProductImage                        # noqa: PLC0415
+    from app.db.session import SessionLocal                       # noqa: PLC0415
+    from app.services.index_coverage import ImportPhoto          # noqa: PLC0415
+    from app.services.product_images import REFERENCE            # noqa: PLC0415
+    db = SessionLocal()
+    try:
+        rows = (db.query(ProductImage.product_id, ProductImage.source_ref, ProductImage.storage_path, ProductImage.sha256,
+                         ProductImage.role, ProductImage.is_active)
+                .filter(ProductImage.source_ref.like("import:%")).all())
+        return [ImportPhoto(str(pid), str(src), path or None, str(sha or ""), role == REFERENCE and bool(active))
+                for pid, src, path, sha, role, active in rows]
+    finally:
+        db.close()
+
+
 def main(argv: list[str] | None = None, out=print, load_products=None, settings=None, resolve_path=None,
-         load_excluded=None) -> int:
+         load_excluded=None, load_import_photos=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true", help="выполнить восстановление (без флага — только отчёт)")
     ap.add_argument("--yes", action="store_true", help="не спрашивать подтверждения")
@@ -91,7 +112,10 @@ def main(argv: list[str] | None = None, out=print, load_products=None, settings=
     out(f"Устаревшие отметки журнала проиндексированных фото: {len(report.stale_journal_keys)}")
     coverage = C.analyze_coverage(index, products, root, folder_of=folder_name, list_photos=list_photo_files, upload_ref=upload_ref,
                                   manifest_keys=R._load_journal_keys(journal), verify_content=args.verify_photos,
-                                  skip=(load_excluded or (_load_excluded if load_products is None else frozenset))())
+                                  skip=(load_excluded or (_load_excluded if load_products is None else frozenset))(),
+                                  import_photos=(load_import_photos or (_load_import_photos if load_products is None
+                                                                        else (lambda: None)))(),
+                                  media_root=resolve_path(settings.media_root))
     out("Полнота индекса (связь фото и векторов):")
     for line in C.describe(coverage):
         out(f"  {line}")
@@ -101,10 +125,20 @@ def main(argv: list[str] | None = None, out=print, load_products=None, settings=
         out(f"    нет фото у вектора: {source} (товар {pid})")
     for pid, sku in coverage.products_without_vectors_or_photos[:20]:
         out(f"    товар без векторов и без фото — нужны новые фото: {sku} ({pid})")
+    for pid, source in coverage.foreign_photo_vectors[:20]:
+        out(f"    вектор фото другого товара: {source} (товар {pid})")
+    for pid, source in coverage.changed_photos[:20]:
+        out(f"    фото изменено после индексирования: {source} (товар {pid}) — вернуть фото из копии или заново добавить фото товара")
+    for pid, source in coverage.import_vectors_without_record[:20]:
+        out(f"    вектор фото импорта без записи о фото: {source} (товар {pid}) — запись добавит воркер при запуске")
+    for pid, source in coverage.import_photos_not_indexed[:20]:
+        out(f"    фото импорта без вектора: {source} (товар {pid})")
     for b in report.blockers:
         out(f"ОТКАЗ: {b}")
     if coverage.photos_not_indexed:
         out("Недостающие векторы добавит воркер при запуске или: python -m scripts.reindex_uploads --apply")
+    if coverage.import_photos_not_indexed:
+        out("Векторы фото импорта вернёт пересборка из базы: python -m scripts.rebuild_index (план), затем --apply")
     if report.clean:
         out("Лишних векторов и устаревших отметок нет." if not coverage.complete else "Расхождений нет.")
         return 0

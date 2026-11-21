@@ -290,3 +290,97 @@ def test_worker_decides_what_is_indexed_by_the_index_itself():
     for task in ("add_catalog_product_task", "add_catalog_photos_task"):
         src = ast.unparse(_func(task))
         assert "_not_indexed(index_path" in src and "not_yet_indexed" not in src, task
+
+
+# --------------------------------------------------------------------------- фото импорта сверяются по записям о фото (2026-11-21)
+# Раньше векторы фото импорта (на рабочей машине — все 1798) только считались: «Расхождений нет» ничего о них не говорило.
+
+def _import_env(env):
+    media = env.tmp / "media"
+    photos = {}
+    for n, (pid, rgb) in enumerate([("id-kola", (200, 10, 10)), ("id-kola", (190, 20, 10)), ("id-fanta", (250, 140, 0))]):
+        data = _jpeg(rgb)
+        sha = hashlib.sha256(data).hexdigest()
+        rel = f"catalog-imported/{pid}/{sha[:16]}.jpg"
+        (media / rel).parent.mkdir(parents=True, exist_ok=True)
+        (media / rel).write_bytes(data)
+        photos[n] = C.ImportPhoto(pid, f"import:{sha}", rel, sha, True)
+    env.products.update({"id-kola": "KOLA", "id-fanta": "FANTA"})
+    index = env.index()
+    for rec in photos.values():
+        index.add(rec.product_id, np.atleast_2d(_unit3(rec.sha256)), [rec.source_ref])
+    index.save(env.path)
+    return media, photos
+
+
+def _unit3(seed: str):
+    v = np.array([int(seed[i:i + 2], 16) + 1 for i in (0, 2, 4)], dtype=np.float32)
+    return v / np.linalg.norm(v)
+
+
+def test_import_photos_are_checked_against_their_records_and_a_clean_catalog_is_complete(env):
+    media, photos = _import_env(env)
+    rep = _coverage(env, import_photos=photos.values(), media_root=media, verify_content=True)
+    assert rep.imports_checked and rep.import_vectors == 3 and rep.complete
+    assert not (rep.vectors_without_photo or rep.changed_photos or rep.import_photos_not_indexed)
+    assert "Векторы фото импорта: 3; без записи о фото у товара: 0" in "\n".join(C.describe(rep))
+
+
+def test_missing_or_changed_import_photo_is_found_changed_only_with_verify(env):
+    media, photos = _import_env(env)
+    (media / photos[0].storage_path).unlink()
+    p = media / photos[1].storage_path
+    p.write_bytes(p.read_bytes() + b"x")
+    rep = _coverage(env, import_photos=photos.values(), media_root=media)
+    assert rep.vectors_without_photo == [("id-kola", photos[0].source_ref)] and rep.changed_photos == [] and not rep.complete
+    rep = _coverage(env, import_photos=photos.values(), media_root=media, verify_content=True)
+    assert rep.changed_photos == [("id-kola", photos[1].source_ref)]
+
+
+def test_import_vector_of_another_product_or_without_a_record_is_reported(env):
+    media, photos = _import_env(env)
+    records = [photos[0], photos[1], C.ImportPhoto("id-kola", photos[2].source_ref, photos[2].storage_path, photos[2].sha256, True)]
+    rep = _coverage(env, import_photos=records, media_root=media)
+    assert rep.foreign_photo_vectors == [("id-fanta", photos[2].source_ref)]
+    rep = _coverage(env, import_photos=[photos[0], photos[1]], media_root=media)
+    assert rep.import_vectors_without_record == [("id-fanta", photos[2].source_ref)] and not rep.complete
+
+
+def test_active_import_reference_without_a_vector_is_reported_and_product_is_not_called_photoless(env):
+    media, photos = _import_env(env)
+    env.products["id-water"] = "WATER"
+    extra = C.ImportPhoto("id-water", "import:" + "ab" * 32, "catalog-imported/id-water/x.jpg", "ab" * 32, True)
+    rep = _coverage(env, import_photos=[*photos.values(), extra], media_root=media)
+    assert rep.import_photos_not_indexed == [("id-water", extra.source_ref)]
+    assert ("id-water", "WATER") in rep.products_without_vectors and rep.products_without_vectors_or_photos == []
+
+
+def test_excluded_inactive_and_copyless_import_photos_are_not_alarms(env):
+    media, photos = _import_env(env)
+    (media / photos[0].storage_path).unlink()
+    rep = _coverage(env, import_photos=photos.values(), media_root=media, skip={("id-kola", photos[0].source_ref)})
+    assert rep.vectors_without_photo == [] and rep.import_photos_not_indexed == []
+    inactive = C.ImportPhoto("id-kola", "import:" + "cd" * 32, None, "cd" * 32, False)         # выведенный, вектора нет — норма
+    copyless = C.ImportPhoto("id-fanta", photos[2].source_ref, None, photos[2].sha256, True)  # импорт до копирования фото
+    rep = _coverage(env, import_photos=[photos[0], photos[1], inactive, copyless], media_root=media)
+    assert rep.import_vectors_without_copy == 1 and rep.import_photos_not_indexed == []
+
+
+def test_import_record_path_outside_the_data_folder_is_never_read(env, tmp_path):
+    media, photos = _import_env(env)
+    outside = tmp_path / "outside.jpg"
+    outside.write_bytes(b"secret")
+    rec = photos[0]
+    bad = [C.ImportPhoto(rec.product_id, rec.source_ref, "../outside.jpg", rec.sha256, True),
+           C.ImportPhoto("id-fanta", photos[2].source_ref, str(outside), photos[2].sha256, True), photos[1]]
+    rep = _coverage(env, import_photos=bad, media_root=media, verify_content=True)
+    assert sorted(rep.vectors_without_photo) == sorted([("id-kola", rec.source_ref), ("id-fanta", photos[2].source_ref)])
+    assert rep.changed_photos == []
+
+
+def test_without_records_import_vectors_are_only_counted_as_before(env):
+    media, photos = _import_env(env)
+    (media / photos[0].storage_path).unlink()
+    rep = _coverage(env)
+    assert not rep.imports_checked and rep.import_vectors == 3 and rep.vectors_without_photo == []
+    assert "не проверялись" in "\n".join(C.describe(rep))

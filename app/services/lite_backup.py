@@ -2,7 +2,8 @@
 Резервная копия магазина в облегчённом режиме (база SQLite в data/lite; полный режим на Docker — scripts/full_backup.py).
 
 Что входит в копию: база (товары, штрихкоды, фото товаров в базе, сотрудники, журнал) — согласованный снимок SQLite, сжатый;
-индекс каталога; фото товаров (`<media>/catalog-uploads`); ключи входа и камер из .env (без них после восстановления на другом
+индекс каталога; фото товаров (`<media>/catalog-uploads` — добавленные в браузере, `<media>/catalog-imported` — из импорта
+каталога; вторая папка — с 2026-11-21, формат 2); ключи входа и камер из .env (без них после восстановления на другом
 компьютере не расшифровать второй фактор и адреса камер). Снимки полок (`shelf-images`) и временные кадры не входят.
 
 Куда: всегда в папку на этом компьютере — выбранную администратором в «Настройках» (`<media>/backup_settings.json`,
@@ -21,7 +22,8 @@
         manifest.json              ← когда, сколько товаров и сотрудников, SHA-256 каждого файла
         shop.db.gz                 ← база
         index/…                    ← индекс каталога (его можно и пересобрать из базы: scripts/rebuild_index.py)
-        photos.list                ← «sha256<TAB>размер<TAB>путь» — какие фото у этой копии
+        photos.list                ← «sha256<TAB>размер<TAB>путь» — какие фото у этой копии (путь от папки данных:
+                                     «catalog-imported/…»; в копиях формата 1 — от catalog-uploads)
         keys.env                   ← AUTH_SECRET_KEY, CAMERA_SECRET_KEY
 
 Копия собирается в папке «….part» и получает имя только после проверки (SHA-256 записанных файлов, проверка базы
@@ -58,8 +60,15 @@ KEYS_FILE = "keys.env"
 DB_FILE = "shop.db.gz"
 INDEX_DIR = "index"
 UPLOADS_DIR = "catalog-uploads"
+IMPORTED_DIR = "catalog-imported"     # копии фото импорта каталога (app/services/product_images.py, IMPORTED_SUBDIR)
+# Все папки фото товаров внутри media_root. До 2026-11-21 (формат 1) копия брала только catalog-uploads, и фото импорта
+# каталога в неё не попадали. Как в полной копии (scripts/full_backup.py, PHOTO_SUBDIRS).
+PHOTO_SUBDIRS = (UPLOADS_DIR, IMPORTED_DIR)
 STATE_FILE = "backup_state.json"
-FORMAT = 1
+# Формат копии. 1 — пути в photos.list от папки catalog-uploads (копии до 2026-11-21); 2 — от папки данных (media_root):
+# «catalog-uploads/…» или «catalog-imported/…», как product_images.storage_path. Восстанавливаются оба.
+FORMAT = 2
+FORMATS = (1, 2)
 
 KEEP_LOCAL = 14
 KEEP_CLOUD = 7
@@ -99,7 +108,7 @@ class Destination:
 class Photo:
     sha256: str
     size: int
-    rel: str           # путь внутри catalog-uploads, через «/»
+    rel: str           # через «/»: формат 2 — от папки данных («catalog-imported/…»); формат 1 — внутри catalog-uploads
     source: Path | None = None
 
 
@@ -208,7 +217,7 @@ def shop_bytes(media_root: Path, db_file: Path | None = None) -> int:
             total += p.stat().st_size
         except OSError:
             pass
-    for sub in (UPLOADS_DIR, INDEX_DIR):
+    for sub in (*PHOTO_SUBDIRS, INDEX_DIR):
         d = media_root / sub
         if d.is_dir():
             for f in d.rglob("*"):
@@ -353,16 +362,54 @@ def gunzip(src: Path, dst: Path) -> None:
         shutil.copyfileobj(fin, fout, 1024 * 1024)
 
 
-def scan_photos(uploads: Path) -> list[Photo]:
+def scan_photos(media_root: Path) -> list[Photo]:
+    """Все фото товаров из папок PHOTO_SUBDIRS; путь — от media_root. Недописанные временные файлы («.part», «.tmp-…») — нет."""
     photos: list[Photo] = []
-    if not uploads.is_dir():
-        return photos
-    for path in sorted(p for p in uploads.rglob("*") if p.is_file()):
-        try:
-            photos.append(Photo(sha256_file(path), path.stat().st_size, path.relative_to(uploads).as_posix(), path))
-        except OSError as exc:       # фото удалили во время копии — без него
-            logger.warning("Копия: фото %s пропущено (%s)", path, type(exc).__name__)
+    for sub in PHOTO_SUBDIRS:
+        base = media_root / sub
+        if not base.is_dir():
+            continue
+        for path in sorted(p for p in base.rglob("*") if p.is_file()):
+            if ".part" in path.name or path.name.startswith(".tmp-"):
+                continue
+            try:
+                photos.append(Photo(sha256_file(path), path.stat().st_size, path.relative_to(media_root).as_posix(), path))
+            except OSError as exc:       # фото удалили во время копии — без него
+                logger.warning("Копия: фото %s пропущено (%s)", path, type(exc).__name__)
     return photos
+
+
+def db_photos_missing(db: Path, photos: list[Photo]) -> list[str]:
+    """Обратная сверка: файлы фото, записанные в базе (product_images.storage_path), которых нет среди фото копии.
+    Такие товары после восстановления останутся без фото. Нет таблицы или столбца (старая база) — пусто."""
+    conn = sqlite3.connect(str(db))
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(product_images)")}
+        if "storage_path" not in cols:
+            return []
+        paths = {r[0] for r in conn.execute("SELECT storage_path FROM product_images "
+                                            "WHERE storage_path IS NOT NULL AND storage_path <> ''")}
+    finally:
+        conn.close()
+    return sorted(paths - {p.rel for p in photos})
+
+
+def photo_target(root: Path, photo: Photo, fmt: int) -> Path:
+    """Куда класть фото при восстановлении (root — будущая папка данных). Формат 1 — в catalog-uploads, как раньше;
+    формат 2 — по его пути, только внутри папок фото (иначе строка списка могла бы заменить, например, базу)."""
+    if fmt == 1:
+        return root / UPLOADS_DIR / Path(photo.rel)
+    parts = Path(photo.rel).parts
+    if len(parts) < 2 or parts[0] not in PHOTO_SUBDIRS:
+        raise BackupError(f"Фото {photo.rel} — вне папок фото; копия испорчена. Выберите другую копию.")
+    return root / Path(photo.rel)
+
+
+def copy_format(copy_dir: Path) -> int:
+    try:
+        return int(json.loads((copy_dir / MANIFEST).read_text(encoding="utf-8")).get("format"))
+    except (OSError, ValueError, TypeError) as exc:
+        raise BackupError("Нет или не читается manifest.json — выберите другую копию.") from exc
 
 
 def read_photos_list(path: Path) -> list[Photo]:
@@ -399,6 +446,11 @@ def build_copy(work: Path, *, db_file: Path, media_root: Path, keys: dict[str, s
     work.mkdir(parents=True, exist_ok=True)
     raw_db = work / "shop.db"
     counts = snapshot_db(db_file, raw_db)
+    photos = scan_photos(media_root)
+    missing = db_photos_missing(raw_db, photos)
+    if missing:
+        logger.warning("Копия: в базе записано фото, которого нет на диске: %d (например, %s) — после восстановления "
+                       "у этих товаров фото не будет", len(missing), ", ".join(missing[:3]))
     _gzip(raw_db, work / DB_FILE)
     raw_db.unlink()
     index_src = media_root / INDEX_DIR
@@ -407,13 +459,13 @@ def build_copy(work: Path, *, db_file: Path, media_root: Path, keys: dict[str, s
         for f in sorted(index_src.iterdir()):
             if f.is_file() and not f.name.endswith(".lock") and ".tmp" not in f.name:
                 shutil.copy2(f, work / INDEX_DIR / f.name)
-    photos = scan_photos(media_root / UPLOADS_DIR)
     (work / PHOTOS_LIST).write_text("".join(f"{p.sha256}\t{p.size}\t{p.rel}\n" for p in photos), encoding="utf-8")
     (work / KEYS_FILE).write_text("".join(f"{k}={keys[k]}\n" for k in KEY_NAMES if keys.get(k)), encoding="utf-8")
     files = {p.relative_to(work).as_posix(): sha256_file(p) for p in sorted(work.rglob("*")) if p.is_file()}
     counts["photos"] = len(photos)
     manifest = {"format": FORMAT, "created_at": _now_local(now).isoformat(timespec="seconds"), "app_version": app_version,
-                "counts": counts, "photos_bytes": sum(p.size for p in photos), "files": files}
+                "counts": counts, "photos_bytes": sum(p.size for p in photos), "files": files,
+                "db_photos_missing": len(missing), "db_photos_missing_examples": missing[:10]}
     (work / MANIFEST).write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
     return manifest, photos
 
@@ -523,8 +575,9 @@ def verify_copy(copy_dir: Path, *, full: bool = False) -> list[str]:
         manifest = json.loads((copy_dir / MANIFEST).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return ["нет или не читается manifest.json"]
-    if manifest.get("format") != FORMAT:
-        problems.append(f"неизвестный формат копии: {manifest.get('format')}")
+    fmt = manifest.get("format")
+    if fmt not in FORMATS:
+        problems.append(f"неизвестный формат копии: {fmt}")
     for rel, sha in (manifest.get("files") or {}).items():
         p = copy_dir / rel
         if not p.is_file():
@@ -537,6 +590,12 @@ def verify_copy(copy_dir: Path, *, full: bool = False) -> list[str]:
     except (OSError, BackupError, ValueError) as exc:
         return problems + [f"список фото не читается ({exc})"]
     for p in photos:
+        if fmt in FORMATS:
+            try:
+                photo_target(Path("."), p, fmt)
+            except BackupError:
+                problems.append(f"фото {p.rel} — вне папок фото")
+                continue
         target = store_path(store, p.sha256)
         try:
             if not target.is_file() or target.stat().st_size != p.size:
@@ -639,11 +698,14 @@ def restore_copy(copy_dir: Path, *, media_root: Path, db_name: str = "shop.db", 
             shutil.copytree(copy_dir / INDEX_DIR, part / INDEX_DIR)
         store = copy_dir.parent / PHOTOS_DIR
         photos = read_photos_list(copy_dir / PHOTOS_LIST)
+        fmt = copy_format(copy_dir)
         for p in photos:
-            target = part / UPLOADS_DIR / Path(p.rel)
+            target = photo_target(part, p, fmt)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(store_path(store, p.sha256), target)
         (part / UPLOADS_DIR).mkdir(exist_ok=True)
+        missing = db_photos_missing(part / db_name, photos if fmt != 1 else
+                                    [Photo(p.sha256, p.size, f"{UPLOADS_DIR}/{p.rel}") for p in photos])
     except BaseException:
         shutil.rmtree(part, ignore_errors=True)
         raise
@@ -669,7 +731,8 @@ def restore_copy(copy_dir: Path, *, media_root: Path, db_name: str = "shop.db", 
             env_file.write_text(text, encoding="utf-8")
     _carry_settings(backup_of_old, media_root, old_auth, keys.get("AUTH_SECRET_KEY") or old_auth)
     counts["photos"] = len(photos)
-    return {"counts": counts, "old_data": str(backup_of_old) if backup_of_old else "", "keys_changed": changed_keys}
+    return {"counts": counts, "old_data": str(backup_of_old) if backup_of_old else "", "keys_changed": changed_keys,
+            "db_photos_missing": missing}
 
 
 def _carry_settings(old_media: Path | None, new_media: Path, old_key: str, new_key: str) -> None:

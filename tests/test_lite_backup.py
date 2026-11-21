@@ -332,3 +332,108 @@ def test_places_come_from_the_program_settings(tmp_path):
         ("local", tmp_path / "copies" / B.FOLDER_NAME)]
     S.backup_cloud_dir = str(tmp_path / "Yandex.Disk")
     assert B.destinations_from_settings(tmp_path, S())[1].root == tmp_path / "Yandex.Disk" / B.FOLDER_NAME
+
+
+# ------------------------------------------------------------------ фото импорта каталога (формат 2, 2026-11-21)
+
+def add_imported(media: Path, db: Path) -> None:
+    """Фото импорта каталога (catalog-imported) и записи о фото в базе, как у app/services/product_images.py."""
+    d = media / "catalog-imported" / "IMP1"
+    d.mkdir(parents=True)
+    (d / "abcdef0123456789.jpg").write_bytes(b"imported" * 100)
+    (d / "half.jpg.part").write_bytes(b"x")                      # недописанный временный файл — не в копию
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE product_images (id TEXT PRIMARY KEY, product_id TEXT, storage_path TEXT)")
+    conn.executemany("INSERT INTO product_images VALUES (?, ?, ?)", [
+        ("i1", "p0", "catalog-uploads/P0/1.jpg"),
+        ("i2", "p1", "catalog-imported/IMP1/abcdef0123456789.jpg"),
+        ("i3", "p2", "catalog-imported/GONE/0000000000000000.jpg"),   # файл удалён с диска
+        ("i4", "p2", None)])
+    conn.commit()
+    conn.close()
+
+
+def test_imported_photos_go_into_the_copy_and_come_back(tmp_path):
+    media = tmp_path / "lite"
+    db = make_shop(media)
+    add_imported(media, db)
+    report = backup(tmp_path, media, db)
+    assert report["ok"] and report["counts"]["photos"] == 4
+    copy_dir = B.list_copies(tmp_path / "local" / B.FOLDER_NAME)[0].path
+    manifest = json.loads((copy_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["format"] == 2
+    assert manifest["db_photos_missing"] == 1
+    assert manifest["db_photos_missing_examples"] == ["catalog-imported/GONE/0000000000000000.jpg"]
+    rels = [p.rel for p in B.read_photos_list(copy_dir / "photos.list")]
+    assert "catalog-imported/IMP1/abcdef0123456789.jpg" in rels and "catalog-uploads/P0/1.jpg" in rels
+    assert not [r for r in rels if r.endswith(".part")]
+    assert B.verify_copy(copy_dir, full=True) == []
+    result = B.restore_copy(copy_dir, media_root=media, env_file=None, now=T0)
+    assert (media / "catalog-imported" / "IMP1" / "abcdef0123456789.jpg").read_bytes() == b"imported" * 100
+    assert (media / "catalog-uploads" / "P2" / "1.jpg").read_bytes() == b"photo-2" * 100
+    assert not (media / "catalog-uploads" / "catalog-uploads").exists()
+    assert result["db_photos_missing"] == ["catalog-imported/GONE/0000000000000000.jpg"]
+
+
+def test_space_estimate_counts_imported_photos(tmp_path):
+    media = tmp_path / "lite"
+    db = make_shop(media)
+    before = B.shop_bytes(media)
+    add_imported(media, db)
+    assert B.shop_bytes(media) >= before + 800
+
+
+def make_old_copy(tmp: Path, media: Path, db: Path) -> Path:
+    """Копия формата 1 (до 2026-11-21): пути в photos.list — от catalog-uploads, фото импорта нет."""
+    backup(tmp, media, db)
+    copy_dir = B.list_copies(tmp / "local" / B.FOLDER_NAME)[0].path
+    lst = copy_dir / "photos.list"
+    lines = [ln.split("\t", 2) for ln in lst.read_text(encoding="utf-8").splitlines()]
+    lst.write_text("".join(f"{s}\t{n}\t{r.removeprefix('catalog-uploads/')}\n" for s, n, r in lines), encoding="utf-8")
+    manifest = json.loads((copy_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest["format"] = 1
+    manifest.pop("db_photos_missing")
+    manifest.pop("db_photos_missing_examples")
+    manifest["files"]["photos.list"] = B.sha256_file(lst)
+    (copy_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+    return copy_dir
+
+
+def test_old_copy_of_format_1_restores_as_before(tmp_path):
+    media = tmp_path / "lite"
+    db = make_shop(media)
+    copy_dir = make_old_copy(tmp_path, media, db)
+    assert B.verify_copy(copy_dir, full=True) == []
+    result = B.restore_copy(copy_dir, media_root=media, env_file=None, now=T0)
+    assert result["counts"]["photos"] == 3 and result["db_photos_missing"] == []
+    for i in range(3):
+        assert (media / "catalog-uploads" / f"P{i}" / "1.jpg").read_bytes() == b"photo-%d" % i * 100
+    assert not (media / "catalog-uploads" / "catalog-uploads").exists()
+
+
+def test_photo_path_outside_photo_folders_is_refused(tmp_path):
+    media = tmp_path / "lite"
+    db = make_shop(media)
+    backup(tmp_path, media, db)
+    copy_dir = B.list_copies(tmp_path / "local" / B.FOLDER_NAME)[0].path
+    lst = copy_dir / "photos.list"
+    sha, size, _ = lst.read_text(encoding="utf-8").splitlines()[0].split("\t", 2)
+    lst.write_text(f"{sha}\t{size}\tshop.db\n", encoding="utf-8")
+    manifest = json.loads((copy_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest["files"]["photos.list"] = B.sha256_file(lst)
+    (copy_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+    assert B.verify_copy(copy_dir) == ["фото shop.db — вне папок фото"]
+    with pytest.raises(B.BackupError, match="Выберите другую копию"):
+        B.restore_copy(copy_dir, media_root=media, env_file=None)
+    assert not list(tmp_path.glob("lite.bak-*")) and (media / "shop.db").is_file()
+
+
+def test_unknown_format_is_refused(tmp_path):
+    media = tmp_path / "lite"
+    db = make_shop(media)
+    backup(tmp_path, media, db)
+    copy_dir = B.list_copies(tmp_path / "local" / B.FOLDER_NAME)[0].path
+    manifest = json.loads((copy_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest["format"] = 3
+    (copy_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert B.verify_copy(copy_dir) == ["неизвестный формат копии: 3"]

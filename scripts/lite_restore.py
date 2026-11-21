@@ -192,6 +192,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Прежние данные сохранены в папке: {result['old_data']}")
     if result["keys_changed"]:
         print("Ключи входа взяты из копии (прежний .env сохранён рядом).")
+    lost = result.get("db_photos_missing") or []
+    if lost:
+        print(f"Внимание: в базе записано фото, которого не было в копии: {len(lost)} (например, {', '.join(lost[:3])}). "
+              "У этих товаров фото не будет — снимите их заново.")
     print("Запустите программу как обычно (ярлык «Узнать товар»).")
     return 0
 

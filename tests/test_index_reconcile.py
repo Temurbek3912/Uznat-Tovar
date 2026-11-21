@@ -194,7 +194,7 @@ def test_full_rebuild_with_the_flag_makes_a_verified_backup_first(backend, tmp_p
 
 def test_rebuild_script_checks_the_target_before_loading_the_model():
     src = (Path(__file__).resolve().parents[1] / "ml" / "build_catalog_embeddings.py").read_text(encoding="utf-8")
-    assert "--replace-existing" in src and src.index("prepare_full_rebuild(") < src.index("embedder = create_embedder(")
+    assert "--replace-existing" in src and src.index("prepare_full_rebuild(") < src.index("embedder = (make_embedder or _load_embedder)(")
 
 
 def test_script_checks_import_photos_against_records(backend, tmp_path):

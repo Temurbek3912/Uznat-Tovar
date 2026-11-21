@@ -136,7 +136,7 @@ python -m scripts.import_catalog --dir catalog
   товаров, которых нет в базе; фото и товары не трогаются. Товарам без векторов: `python -m scripts.reindex_uploads --apply`.
 - `python -m scripts.cleanup_temp` — показать временные файлы, оставленные оборванной записью; `--apply` — удалить (только
   временные файлы программы, с журналом в `logs/cleanup-temp.log`).
-- `python -m ml.build_catalog_embeddings` больше не заменяет существующий индекс без `--replace-existing` (с ним — сначала копия).
+- `python -m ml.build_catalog_embeddings` — только опытный индекс в отдельный путь (`--output-index`), для сравнения моделей. Рабочий индекс он не пишет (с 2026-11-21): новые товары из папок с артикулами — `scripts.import_catalog`, пересборка рабочего индекса — `scripts.rebuild_index --apply`. Папки сопоставляются с товарами базы по id или артикулу; неизвестные — отказ до записи.
 - Скрипты лучше запускать внутри контейнера (`docker compose run --rm api python -m scripts.…`), а не в Windows-Python на
   компьютере: блокировка индекса в Windows и в контейнерах друг друга не видит.
 

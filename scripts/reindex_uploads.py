@@ -14,7 +14,7 @@ app/services/index_coverage.py). Поэтому скрипт находит и �
     python -m scripts.reindex_uploads            # только показать, что будет добавлено (ничего не меняет, модель не грузится)
     python -m scripts.reindex_uploads --apply    # добавить
 
-Порядок полной пересборки: python -m ml.build_catalog_embeddings … --replace-existing (или import_catalog), затем этот скрипт.
+Порядок полной пересборки: python -m scripts.rebuild_index --apply (из базы; ml.build_catalog_embeddings рабочий индекс не пишет).
 """
 from __future__ import annotations
 

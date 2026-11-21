@@ -113,8 +113,13 @@ def test_match_batch_applies_the_rule_per_vector():
 
 # ----------------------------------------------------------------------- конфигурация и воркер
 
-def test_margin_is_configurable_off_by_default_and_passed_by_the_worker():
-    assert "margin_threshold: 0.0" in (ROOT / "configs" / "config.yaml").read_text(encoding="utf-8")
+def test_margin_is_on_in_config_off_in_code_default_and_passed_by_the_worker():
+    # Замер 2026-11-21 (ml/benchmark_similar.py, 1290 снимков каталога): при 0.88 без запаса каждый пятый ответ «найдено» —
+    # другой товар (93 из 455), при 0.86 с запасом 0.04 — 30 из 429, а товар не из базы «узнаётся» реже (3,4 % против 8,2 %).
+    # Запасное значение в коде — 0.0 (прежнее поведение, если в config.yaml строки нет).
+    import yaml
+    cfg = yaml.safe_load((ROOT / "configs" / "config.yaml").read_text(encoding="utf-8"))["models"]["matcher"]
+    assert (cfg["match_threshold"], cfg["margin_threshold"]) == (0.86, 0.04)
     assert "margin_threshold: float = 0.0" in (ROOT / "app" / "core" / "config.py").read_text(encoding="utf-8")
     runtime = (ROOT / "app" / "pipeline" / "ml_runtime.py").read_text(encoding="utf-8")        # матчер строится в ml_runtime
     assert "margin_threshold=cfg.margin_threshold if cfg else 0.0" in runtime

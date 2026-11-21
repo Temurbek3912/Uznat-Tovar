@@ -61,18 +61,35 @@ def same_size(a: tuple[str, float] | None, b: tuple[str, float] | None) -> bool:
     return a is not None and b is not None and a[0] == b[0] and abs(a[1] - b[1]) <= max(a[1], b[1]) * 0.02
 
 
+def size_label(size: tuple[str, float]) -> str:
+    """Размер -> подпись для вопроса модели: ("l", 0.5) -> «0,5 л», ("l", 0.222) -> «222 мл», ("g", 1000) -> «1 кг»."""
+    unit, value = size
+    if unit == "l":
+        text = f"{value:g} л" if value >= 1 or value in (0.25, 0.33, 0.5, 0.75) else f"{round(value * 1000):g} мл"
+    elif unit == "g":
+        text = f"{value / 1000:g} кг" if value >= 1000 else f"{value:g} г"
+    else:
+        text = f"{value:g} шт"
+    return text.replace(".", ",")
+
+
 def size_variants(first: dict, others: list[dict]) -> list[dict]:
-    """Другие размеры того же товара среди кандидатов: те же слова названия (и марки), другой размер."""
+    """Другие размеры того же товара среди кандидатов: те же слова названия (и марки), другой размер.
+
+    Размер не указан у одного из двух («Pepsi» и «Pepsi 1,5 л», «Майонез Провансаль» и «… 770 г») — тоже «другой размер»: по
+    фото их не различить, и уверенный ответ одним из них был бы угадыванием (замер 2026-11-21, ml/benchmark_similar.py). Размер
+    не указан у обоих — это не размеры, а одинаковые названия: не трогаем."""
     base = name_without_size(f"{first.get('name', '')} {first.get('brand', '')}")
     size = size_of(first.get("name", ""))
-    if not base or size is None:
+    if not base:
         return []
     out = []
     for c in others:
         if not c or c.get("id") == first.get("id"):
             continue
         other_size = size_of(c.get("name", ""))
-        if other_size is not None and not same_size(size, other_size) \
-                and name_without_size(f"{c.get('name', '')} {c.get('brand', '')}") == base:
+        if size is None and other_size is None:
+            continue
+        if not same_size(size, other_size) and name_without_size(f"{c.get('name', '')} {c.get('brand', '')}") == base:
             out.append(c)
     return out

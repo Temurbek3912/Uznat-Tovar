@@ -49,9 +49,9 @@ models:
   matcher:
     index_path: "models/index/catalog.faiss"
     top_k: 5
-    match_threshold: 0.88       # SigLIP 2 (замер 2026-11-18, §6.3); ниже -> "uncertain", в очередь на ручную проверку
+    match_threshold: 0.86       # SigLIP 2 вместе с запасом 0.04 (замер 2026-11-21, ml/benchmark_similar.py); ниже -> "uncertain", в очередь на ручную проверку. Было 0.88 / 0.0
     unknown_threshold: 0.70     # SigLIP 2; ниже -> "unknown" (товар не из каталога). У DINOv2 были 0.72 / 0.45
-    margin_threshold: 0.0       # 0 = выключено; >0: при близком втором товаре -> "uncertain". Подбор: python -m ml.evaluate_matching
+    margin_threshold: 0.04      # второй товар ближе 0.04 к первому -> "uncertain" (похожие товары одной марки): уверенных ошибок втрое меньше. 0 = выключено (прежнее поведение)
 
 # «Назвать любой товар» (документ 07, §10.6): если товара нет в базе — назвать его и попросить обратиться к сотруднику.
 naming:
@@ -61,6 +61,7 @@ naming:
   vision_model: "qwen/qwen3-vl-4b"
   vision_timeout_seconds: 40                 # первый запрос после запуска LM Studio загружает модель — бывает долгим
   min_confidence: high                       # ниже — «не удалось определить». Замер 2026-11-14: «medium» неверны 4 из 4 (07, §10.6)
+  size_question: true                       # рядом другой объём того же товара -> спросить модель, какой объём на этикетке (верно 61 из 62, замер 2026-11-21). false — как раньше
 
 pipeline:
   max_image_side_px: 2048

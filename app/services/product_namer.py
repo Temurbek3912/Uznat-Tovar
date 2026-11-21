@@ -439,6 +439,77 @@ def read_label(jpeg: bytes | None, lang: str, settings, http_post: HttpPost | No
     return guess if guess is not None and guess.sure else None
 
 
+
+# Объём на этикетке (замер 2026-11-21, docs/benchmark/similar_report_2026-11-21.md): в общем названии модель объём почти не
+# пишет (6 из 365 снимков), на прямой вопрос «что напечатано» часто читает чужое число (на 100 г, состав), а выбор из вариантов
+# иногда угадывает. Оба ответа вместе — верно 61 из 62. Поэтому ответ принимается, только если совпали оба; свободный ответ не
+# совпал ни с одним вариантом — второй вопрос не задаётся (быстрее).
+SIZE_OPEN_PROMPT = ("Read the net volume or net weight printed on the package of the product in the photo (for example '0,5 L', "
+                    "'500 ml', '90 g'). Copy it exactly as printed. If no volume or weight is printed or you cannot read it, "
+                    "answer with an empty string. Reply with JSON only.")
+SIZE_OPEN_SCHEMA = {"type": "object", "properties": {"size": {"type": "string"}}, "required": ["size"]}
+SIZE_NOT_VISIBLE = "not_visible"
+
+
+def _size_choice_prompt(options: list[str]) -> str:
+    return ("Which net volume or net weight is printed on the package of the product in the photo? Options: "
+            + ", ".join(options) + f". Answer '{SIZE_NOT_VISIBLE}' if none of these is clearly printed or you cannot read it. "
+            "Do not guess from the shape of the package. Reply with JSON only.")
+
+
+def _ask_size(jpeg: bytes, text: str, schema: dict, url: str, model: str, timeout: float, post: HttpPost) -> str:
+    image = base64.b64encode(_shrink_jpeg(jpeg)).decode("ascii")
+    payload = {
+        "model": model,
+        "temperature": 0,
+        "max_tokens": 60,
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": text},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}},
+        ]}],
+        "response_format": {"type": "json_schema", "json_schema": {"name": "size", "strict": True, "schema": schema}},
+    }
+    del image
+    try:
+        reply = post(url.rstrip("/") + "/chat/completions", payload, timeout)
+    finally:
+        payload.clear()
+    try:
+        content = reply["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+    answer = _parse_answer(content if isinstance(content, str) else "")
+    return str((answer or {}).get("size") or "").strip()
+
+
+def read_size(jpeg: bytes | None, options: list[str], settings, http_post: HttpPost | None = None) -> str | None:
+    """Какой из размеров (подписи вроде «0,5 л», «1,5 л» — app/services/product_size.size_label) напечатан на упаковке, или None
+    (выключено — naming.size_question, модели нет, не видно, ответы не совпали). Только большая модель по кадру, коротко."""
+    global _label_pause_until
+    from app.services.product_size import same_size, size_of     # noqa: PLC0415 — product_size сам импортирует этот модуль
+    if not jpeg or not options or not getattr(settings, "naming_enabled", False) \
+            or not getattr(settings, "naming_size_question", False):
+        return None
+    url = getattr(settings, "naming_vision_url", "") or ""
+    if not url or time.monotonic() < _label_pause_until:
+        return None
+    timeout = min(LABEL_CHECK_TIMEOUT, float(getattr(settings, "naming_vision_timeout_seconds", LABEL_CHECK_TIMEOUT)))
+    model = getattr(settings, "naming_vision_model", "") or ""
+    post = http_post or _http_post_json
+    try:
+        printed = size_of(_ask_size(jpeg, SIZE_OPEN_PROMPT, SIZE_OPEN_SCHEMA, url, model, timeout, post))
+        hits = [o for o in options if printed is not None and same_size(size_of(o), printed)]
+        if len(hits) != 1:
+            return None
+        schema = {"type": "object", "properties": {"size": {"type": "string", "enum": [*options, SIZE_NOT_VISIBLE]}},
+                  "required": ["size"]}
+        chosen = _ask_size(jpeg, _size_choice_prompt(options), schema, url, model, timeout, post)
+    except Exception as exc:  # noqa: BLE001 — модель не запущена или не успела: ответ как был, минуту не спрашиваем
+        _label_pause_until = time.monotonic() + LABEL_CHECK_PAUSE
+        logger.warning("Модель «зрение + текст» не ответила про объём (%s)", type(exc).__name__)
+        return None
+    return chosen if chosen == hits[0] else None
+
 def agreed_kind(guess: Guess | None, jpeg: bytes, settings, classify: KindFn | None = None) -> Guess | None:
     """Вид товара в догадке остаётся, только если с ним согласна малая модель (см. _agreed_kind)."""
     return _agreed_kind(guess, jpeg, settings, classify)

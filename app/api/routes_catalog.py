@@ -871,7 +871,8 @@ SIZE_CHECK_MAX_GAP = 0.15
 
 def _check_size(result: dict, jpeg: bytes | None, lang: str) -> dict | None:
     """Найдено по виду, а среди близких кандидатов — другой размер того же товара (app/services/product_size.py):
-      - размер прочитан на этикетке (модель уверена) -> этот размер первым, статус как был; size = "label";
+      - размер прочитан на этикетке (в названии от модели или прямым вопросом об объёме — _size_by_question) -> этот размер
+        первым, статус как был; size = "label";
       - не прочитан -> «похоже» со всеми размерами первыми: выбирает человек; size = "choose".
     Других размеров рядом нет -> None (обычная проверка)."""
     from app.services.product_size import same_size, size_of, size_variants     # noqa: PLC0415
@@ -889,11 +890,27 @@ def _check_size(result: dict, jpeg: bytes | None, lang: str) -> dict | None:
         return None                       # на этикетке другая марка — это решает обычная сверка надписи (_check_label)
     read = size_of(guess.name) if guess is not None else None
     chosen = next((c for c in sizes if read is not None and same_size(size_of(c.get("name", "")), read)), None)
+    if chosen is None:
+        chosen = _size_by_question(sizes, jpeg)
     if chosen is not None:
         ordered = [chosen, *[c for c in sizes if c.get("id") != chosen.get("id")], *rest]
         return {**result, "product": chosen, "score": chosen.get("score", result.get("score")), "candidates": ordered,
                 "size": "label"}
     return {**result, "status": "uncertain", "product": first, "candidates": [*sizes, *rest], "size": "choose"}
+
+
+def _size_by_question(sizes: list[dict], jpeg: bytes | None) -> dict | None:
+    """В общем названии размера нет -> прямой вопрос модели об объёме среди размеров кандидатов (product_namer.read_size;
+    включается naming.size_question). Кандидат без размера в названии вариантом не бывает."""
+    from app.services.product_namer import read_size                       # noqa: PLC0415
+    from app.services.product_size import size_label, size_of              # noqa: PLC0415
+    by_label: dict[str, dict] = {}
+    for c in sizes:
+        size = size_of(c.get("name", ""))
+        if size is not None:
+            by_label.setdefault(size_label(size), c)
+    answer = read_size(jpeg, list(by_label), get_settings()) if by_label else None
+    return by_label.get(answer) if answer else None
 
 
 def _check_label(result: dict, jpeg: bytes | None, lang: str) -> dict:

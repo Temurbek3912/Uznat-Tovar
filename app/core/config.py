@@ -188,6 +188,10 @@ class Settings(BaseSettings):
     # Ниже какой уверенности модели ответ считается «не удалось определить»: "high" или "medium". Замер 2026-11-14 (документ 07,
     # §10.6, docs/benchmark/naming_report_2026-11-14.md): ответы «medium» были неверны в 4 случаях из 4 — принимаем только «high».
     naming_min_confidence: str = "high"
+    # Объём на этикетке, когда рядом другой объём того же товара («Pepsi 0,5 л» и «1,5 л»): два коротких вопроса модели
+    # (app/services/product_namer.read_size), ответ принимается, только если оба совпали. Замер 2026-11-21: верно 61 из 62.
+    # False — прежнее поведение (объём только из общего названия; там модель его почти не пишет).
+    naming_size_question: bool = False
     # Вид товара (документ 07, §10.7): «это напиток», «это обувь». naming_kind_model — малая модель HuggingFace «картинка + текст»
     # (пусто — выключена). Есть большая модель — вид показывается, только если обе модели назвали один вид (замер 2026-11-15:
     # ошибок 1–2 %); большой нет — малая с уверенностью не ниже naming_kind_min_score (0,6: ошибок 3–4 %).
@@ -290,6 +294,7 @@ def get_settings() -> Settings:
             "vision_timeout_seconds", Settings.model_fields["naming_vision_timeout_seconds"].default
         )
         naming_min_confidence: str = naming.get("min_confidence", Settings.model_fields["naming_min_confidence"].default)
+        naming_size_question: bool = naming.get("size_question", Settings.model_fields["naming_size_question"].default)
         naming_kind_model: str = naming.get("kind_model", Settings.model_fields["naming_kind_model"].default) or ""
         naming_kind_min_score: float = naming.get("kind_min_score", Settings.model_fields["naming_kind_min_score"].default)
 

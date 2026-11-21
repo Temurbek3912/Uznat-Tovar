@@ -29,6 +29,8 @@
     python scripts/full_backup.py prune         --dest D:\\backups-uznat           # только план; удаление — с --apply
 
 Скрипт ничего не удаляет в рабочей системе. `restore-check` создаёт временную базу с уникальным именем и удаляет только её.
+Перед созданием временной (и новой, для `restore`) базы проверяется свободное место на диске сервера базы: временная база
+размером с рабочую; не хватает — отказ до создания базы, узнать место нельзя (сервер на другом компьютере) — предупреждение.
 `prune` по умолчанию лишь показывает, какие копии и фото стали лишними по правилу 7 ежедневных + 4 еженедельных +
 6 ежемесячных (последняя проверенная — всегда); удаляет — только с `--apply`. Фото удаляется из хранилища копий, только
 когда на него не ссылается ни одна оставшаяся копия.
@@ -67,6 +69,10 @@ KEEP_DAILY, KEEP_WEEKLY, KEEP_MONTHLY = 7, 4, 6
 # Срок ПОДКЛЮЧЕНИЯ утилит PostgreSQL к серверу (не срок всей копии: большой дамп может идти долго). Без него при недоступном
 # сервере pg_dump/psql ждут столько, сколько ждёт система (минуты). Свой PGCONNECT_TIMEOUT или connect_timeout в адресе — главнее.
 CONNECT_TIMEOUT_S = 15
+# Проверка места перед созданием новой базы на сервере (restore-check, restore): дамп -Fc сжат — восстановленная база больше
+# его примерно в несколько раз (оценка, когда размер рабочей базы не прочитался); запас — на журнал WAL и рост рабочей базы.
+DUMP_EXPANSION = 5
+SPACE_RESERVE_BYTES = 512 * 1024 * 1024
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
@@ -347,6 +353,47 @@ class PgTools:
         if run(sql_has) != "t":
             return None
         return run(sql_rev) or None
+
+    def working_db_size(self) -> int | None:
+        """Размер рабочей базы в байтах (pg_database_size). Не прочитался — None: проверка места тогда идёт по размеру дампа."""
+        sql = "SELECT pg_database_size(current_database())"
+        if self.use_compose:
+            cmd = self._exec('psql -v ON_ERROR_STOP=1 -At -U "$POSTGRES_USER" -d "$POSTGRES_DB"')
+        else:
+            cmd = ["psql", "-v", "ON_ERROR_STOP=1", "-At", "-d", self.database_url]
+        proc = self._run(cmd, input=sql.encode("utf-8"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        text = (proc.stdout or b"").decode("utf-8", "replace").strip() if proc.returncode == 0 else ""
+        return int(text) if text.isdigit() else None
+
+    def server_free_space(self) -> int | None:
+        """Свободное место (байты) на диске, где сервер PostgreSQL хранит базы. None — узнать нельзя (сервер на другом
+        компьютере, нет прав читать data_directory, df не сработал): тогда проверка места только предупреждает.
+        Docker: `df` внутри контейнера базы по папке данных ($PGDATA). Прямой адрес: только если сервер на этом же компьютере
+        (localhost) и его папка данных видна отсюда — по ней shutil.disk_usage."""
+        if self.use_compose:
+            proc = self._run(self._exec('df -Pk "${PGDATA:-/var/lib/postgresql/data}"'),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if proc.returncode != 0:
+                return None
+            lines = [ln.split() for ln in (proc.stdout or b"").decode("utf-8", "replace").splitlines() if ln.strip()]
+            # df -P: «Filesystem 1024-blocks Used Available Capacity Mounted»; последняя строка — наша папка
+            if len(lines) < 2 or len(lines[-1]) < 4 or not lines[-1][3].isdigit():
+                return None
+            return int(lines[-1][3]) * 1024
+        from urllib.parse import urlsplit
+
+        try:
+            host = (urlsplit(self.database_url or "").hostname or "").lower()
+        except ValueError:
+            return None
+        if host not in {"", "localhost", "127.0.0.1", "::1"}:
+            return None
+        proc = self._run(["psql", "-v", "ON_ERROR_STOP=1", "-At", "-d", self.database_url],
+                         input=b"SELECT current_setting('data_directory')", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        data_dir = (proc.stdout or b"").decode("utf-8", "replace").strip() if proc.returncode == 0 else ""
+        if not data_dir or not Path(data_dir).is_dir():     # например, сервер в Docker, а адрес — через проброшенный порт
+            return None
+        return shutil.disk_usage(data_dir).free
 
     def db_exists(self, name: str) -> bool:
         _check_target_db_name(name)
@@ -683,6 +730,37 @@ def control_checks(pg: PgTools, name: str, counts: dict[str, int], photo_rows: l
     return checks, warnings
 
 
+def _gb(n: int) -> str:
+    if n < 1024 ** 3:
+        return f"{max(1, round(n / 1024 ** 2))} МБ"
+    return f"{n / 1024 ** 3:.1f}".replace(".", ",") + " ГБ"
+
+
+def check_server_space(pg: PgTools, manifest: dict, *, purpose: str, out: Callable[[str], None] = print) -> dict:
+    """Перед созданием новой базы на сервере PostgreSQL (пробное восстановление — временная база размером с рабочую): хватит ли
+    места на диске сервера. Не хватает — BackupError ДО создания базы (иначе восстановление заполнило бы диск, и рабочая база
+    встала бы с ошибкой «нет места»). Нужно: размер рабочей базы (не прочитался — размер дампа × DUMP_EXPANSION) × 1,2 +
+    запас SPACE_RESERVE_BYTES (журнал WAL во время восстановления, сама рабочая база). Место узнать нельзя — предупреждение,
+    не отказ. Возвращает {"free_bytes", "need_bytes", "note"} (free_bytes — None, если место узнать нельзя)."""
+    db_size = pg.working_db_size()
+    dump_size = int((manifest.get("database") or {}).get("size") or 0)
+    estimate = db_size if db_size else dump_size * DUMP_EXPANSION
+    need = int(estimate * 1.2) + SPACE_RESERVE_BYTES
+    free = pg.server_free_space()
+    if free is None:
+        note = (f"не удалось узнать свободное место на диске сервера базы — {purpose} займёт около {_gb(estimate)}; "
+                f"проверьте место сами (нужно не меньше {_gb(need)})")
+        out(f"  внимание: {note}")
+        return {"free_bytes": None, "need_bytes": need, "note": note}
+    if free < need:
+        raise BackupError(
+            f"на диске сервера базы свободно {_gb(free)}, а для {purpose} нужно около {_gb(need)} "
+            f"(новая база размером с рабочую — {_gb(estimate)} — и запас {_gb(SPACE_RESERVE_BYTES)}). Ничего не создано. "
+            f"Освободите место на диске, где хранится база (в Docker Desktop — диск его виртуальной машины), и повторите")
+    out(f"  место на сервере базы: свободно {_gb(free)}, нужно около {_gb(need)}")
+    return {"free_bytes": free, "need_bytes": need, "note": None}
+
+
 def restore_check(backup_dir: Path, pg: PgTools, *, out: Callable[[str], None] = print) -> dict:
     """Пробное восстановление дампа во ВРЕМЕННУЮ базу, сверка списка таблиц, подсчёт строк, контрольные запросы (§5);
     временная база удаляется. Итог записывается в restore_check.json рядом с манифестом (манифест не меняется)."""
@@ -690,6 +768,7 @@ def restore_check(backup_dir: Path, pg: PgTools, *, out: Callable[[str], None] =
     manifest = load_manifest(backup_dir)
     name = f"restore_check_{datetime.now():%Y%m%d%H%M%S}_{secrets.token_hex(3)}"
     result: dict = {"database": name, "started_at": datetime.now().isoformat(timespec="seconds")}
+    result["space"] = check_server_space(pg, manifest, purpose="пробного восстановления", out=out)
     pg.create_db(name)
     try:
         pg.restore_into(backup_dir / "db.dump", name)
@@ -762,6 +841,7 @@ def restore_to_new(backup_dir: Path, pg: PgTools, *, target_db: str, out_dir: Pa
     _check_target_db_name(target_db)
     if pg.db_exists(target_db):
         raise BackupError(f"база {target_db} уже существует — восстановление делается только в новую базу")
+    check_server_space(pg, manifest, purpose="восстановления в новую базу", out=out)
     files = materialize_files(backup_dir, backup_dir.parent / STORE_DIR, out_dir, out=out)
     pg.create_db(target_db)
     pg.restore_into(backup_dir / "db.dump", target_db)

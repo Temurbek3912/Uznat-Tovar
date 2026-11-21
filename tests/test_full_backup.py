@@ -746,3 +746,100 @@ def test_real_restore_check_runs_control_queries_admin_products_and_orphan_photo
     final2 = fb.create_backup(layout, pg, out=lambda s: None)
     result2 = fb.restore_check(final2, pg, out=lambda s: None)
     assert result2["checks"]["active_admins"] == 1 and result2["warnings"] == []
+
+
+# --------------------------------------------------------------------------- место на сервере базы перед новой базой (2026-11-21)
+
+class _SpaceRunner:
+    """Ответы утилит без базы: размер рабочей базы, df в контейнере, data_directory; записывает команды."""
+
+    def __init__(self, *, size=b"1073741824\n", df=None, data_dir=b"", rc=0):
+        self.size, self.df, self.data_dir, self.rc, self.calls = size, df, data_dir, rc, []
+
+    def __call__(self, cmd, **kw):
+        self.calls.append((cmd, kw))
+        text = " ".join(cmd)
+        if "df -Pk" in text:
+            out = self.df
+        elif kw.get("input") == b"SELECT pg_database_size(current_database())":
+            out = self.size
+        elif kw.get("input") == b"SELECT current_setting('data_directory')":
+            out = self.data_dir
+        else:
+            out = b""
+        return subprocess.CompletedProcess(cmd, self.rc if out is not None else 1, stdout=out or b"", stderr=b"")
+
+
+_DF = b"Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sdd 1055762868 9000000 %d 1%% /var/lib/postgresql/data\n"
+
+
+def test_docker_mode_reads_free_space_of_the_database_folder_inside_the_container():
+    rec = _SpaceRunner(df=_DF % (5 * 1024 * 1024))            # 5 ГБ в килобайтах
+    pg = fb.PgTools(compose_file="dc.yml", runner=rec)
+    assert pg.server_free_space() == 5 * 1024 ** 3
+    cmd = rec.calls[-1][0]
+    assert cmd[4:9] == ["exec", "-T", "-e", f"PGCONNECT_TIMEOUT={fb.CONNECT_TIMEOUT_S}", "db"] and "PGDATA" in cmd[-1]
+    assert pg.working_db_size() == 1024 ** 3 and '"$POSTGRES_DB"' in rec.calls[-1][0][-1]
+    assert fb.PgTools(compose_file=None, runner=_SpaceRunner(df=None)).server_free_space() is None      # df не сработал
+    assert fb.PgTools(compose_file=None, runner=_SpaceRunner(df=b"garbage\n")).server_free_space() is None
+
+
+def test_direct_mode_checks_space_only_for_a_server_on_this_computer(tmp_path, monkeypatch):
+    rec = _SpaceRunner(data_dir=str(tmp_path).encode())
+    monkeypatch.setattr(fb.shutil, "disk_usage", lambda p: shutil._ntuple_diskusage(10, 5, 7 * 1024 ** 3))
+    assert fb.PgTools(use_compose=False, database_url="postgresql://u@localhost:5432/db", runner=rec).server_free_space() == 7 * 1024 ** 3
+    rec = _SpaceRunner(data_dir=str(tmp_path).encode())
+    assert fb.PgTools(use_compose=False, database_url="postgresql://u@db.example:5432/db", runner=rec).server_free_space() is None
+    assert rec.calls == []                                     # чужой компьютер — даже не спрашиваем
+    # сервер в Docker, адрес через порт 127.0.0.1: его папки данных на этом компьютере нет
+    rec = _SpaceRunner(data_dir=b"/var/lib/postgresql/data-not-here")
+    assert fb.PgTools(use_compose=False, database_url="postgresql://u@127.0.0.1/db", runner=rec).server_free_space() is None
+
+
+class _SpacePg(fb.PgTools):
+    def __init__(self, *, free, size):
+        super().__init__(use_compose=False, database_url="postgresql://x@h/db")
+        self.free, self.size, self.created = free, size, []
+
+    def server_free_space(self):
+        return self.free
+
+    def working_db_size(self):
+        return self.size
+
+    def db_exists(self, name):
+        return False
+
+    def create_db(self, name):
+        self.created.append(name)
+        raise AssertionError("база не должна создаваться")
+
+
+def _backup_for_space(tmp_path):
+    layout = _project(tmp_path)
+    return fb.create_backup(layout, FakePg(), out=lambda s: None)
+
+
+def test_restore_check_refuses_before_creating_the_temporary_database_when_space_is_short(tmp_path):
+    final = _backup_for_space(tmp_path)
+    pg = _SpacePg(free=2 * 1024 ** 3, size=3 * 1024 ** 3)
+    with pytest.raises(fb.BackupError, match=r"свободно 2,0 ГБ.*нужно около 4,1 ГБ.*Ничего не создано") as err:
+        fb.restore_check(final, pg, out=lambda s: None)
+    assert pg.created == [] and not (final / "restore_check.json").exists()
+    assert "Docker Desktop" in str(err.value)
+    with pytest.raises(fb.BackupError, match="Ничего не создано"):                 # и восстановление в новую базу
+        fb.restore_to_new(final, pg, target_db="uznat_restored", out_dir=tmp_path / "restored", out=lambda s: None)
+    assert pg.created == [] and not (tmp_path / "restored").exists()
+
+
+def test_enough_space_is_reported_and_unknown_space_only_warns():
+    manifest = {"database": {"size": 10 * 1024 ** 2}}
+    lines = []
+    info = fb.check_server_space(_SpacePg(free=50 * 1024 ** 3, size=1024 ** 3), manifest, purpose="проверки", out=lines.append)
+    assert info["free_bytes"] == 50 * 1024 ** 3 and info["note"] is None and "свободно 50,0 ГБ" in lines[-1]
+    # размер рабочей базы не прочитался — оценка по сжатому дампу (× DUMP_EXPANSION)
+    info = fb.check_server_space(_SpacePg(free=None, size=None), manifest, purpose="проверки", out=lines.append)
+    assert info["free_bytes"] is None and info["need_bytes"] == int(50 * 1024 ** 2 * 1.2) + fb.SPACE_RESERVE_BYTES
+    assert lines[-1].startswith("  внимание: не удалось узнать свободное место")
+    with pytest.raises(fb.BackupError):                        # маленький диск: запас нужен даже для маленькой базы
+        fb.check_server_space(_SpacePg(free=100 * 1024 ** 2, size=1024), manifest, purpose="проверки", out=lines.append)

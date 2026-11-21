@@ -470,6 +470,7 @@ def recover_index_task(self) -> dict:
             _resync_index_after_failure(size_before, exc)
             logger.exception("Восстановление индекса прервано (повторится по расписанию или при следующем запуске воркера)")
             raise
+        changed_photos = _watch_photo_content(db)
     finally:
         db.close()
     for pid, ref, why in res.failed:
@@ -478,7 +479,39 @@ def recover_index_task(self) -> dict:
         logger.info("Восстановление индекса: добавлены векторы %d фото", len(res.added))
     if res.remaining and res.progressed:                # продолжение партиями; без продвижения не зацикливается
         recover_index_task.delay()
-    return {"added": len(res.added), "failed": len(res.failed), "remaining": res.remaining}
+    return {"added": len(res.added), "failed": len(res.failed), "remaining": res.remaining, "changed_photos": changed_photos}
+
+
+_photo_watch = None          # PhotoContentWatch процесса: помнит уже проверенные файлы (app/services/photo_watch.py)
+PHOTO_WATCH_LOG_LIMIT = 20   # сколько новых изменённых фото перечислять в журнале за один запуск
+
+
+def _watch_photo_content(db) -> int | None:
+    """Изменённые после индексирования фото (содержимое файла не совпадает с SHA-256 записи о фото) — только сообщить:
+    в журнал (новые — поимённо, затем общее число) и в итог задачи. Вектор не заменяется. Ошибка проверки не мешает
+    восстановлению индекса; None — проверка не удалась."""
+    global _photo_watch
+    try:
+        from app.services.photo_watch import PhotoContentWatch, reference_records
+
+        if _photo_watch is None:
+            _photo_watch = PhotoContentWatch()
+        res = _photo_watch.check(reference_records(db), _media_root())
+    except Exception:  # noqa: BLE001 — проверка фото вспомогательная; восстановление индекса важнее
+        db.rollback()
+        logger.exception("Проверка содержимого фото не выполнена (повторится по расписанию)")
+        return None
+    for rec in res.newly_changed[:PHOTO_WATCH_LOG_LIMIT]:
+        logger.warning("Фото %s товара %s изменено после индексирования (содержимое не совпадает с записью); вектор в индексе "
+                       "описывает прежнее фото — вернуть фото из копии или заново добавить фото товара", rec.storage_path,
+                       rec.product_id)
+    if len(res.newly_changed) > PHOTO_WATCH_LOG_LIMIT:
+        logger.warning("...и ещё изменённых фото: %d", len(res.newly_changed) - PHOTO_WATCH_LOG_LIMIT)
+    if res.changed:
+        logger.warning("Фото, изменённых после индексирования: %d (векторы не заменялись)", len(res.changed))
+    if res.pending:
+        logger.info("Проверка содержимого фото: ещё не проверено %d (продолжится при следующем запуске)", res.pending)
+    return len(res.changed)
 
 
 @worker_ready.connect

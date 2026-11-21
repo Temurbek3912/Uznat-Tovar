@@ -214,6 +214,30 @@ def test_vpn_override_binds_only_to_an_explicit_vpn_address_and_refuses_without_
     assert set(service["depends_on"]) == set(SERVICES["admin-api"]["depends_on"])
 
 
+VPN_UP_COMMAND = re.compile(r"docker compose[^`\n«»]*-f docker-compose\.vpn\.yml[^`\n«»]*\bup\b[^`\n«»]*")
+# Исторические записи (журнал работ, старые подсказки, архив) не переписываются — в них прежняя команда остаётся как была.
+HISTORY_DOCS = {"ENGINEERING_STATUS.md"}
+
+
+def _instruction_files() -> list[Path]:
+    files = sorted(ROOT.glob("docker-compose*.yml")) + [ROOT / "README.md"]
+    files += [p for p in sorted((ROOT / "docs").rglob("*.md"))
+              if p.name not in HISTORY_DOCS and not p.name.startswith("NEXT_CHAT") and "archive" not in p.relative_to(ROOT / "docs").parts[0]]
+    return files
+
+
+def test_vpn_entrance_is_started_on_its_own_so_a_missing_vpn_cannot_stop_the_local_admin_entrance():
+    """Испытано 2026-11-21 в Docker Desktop для Windows: «-f docker-compose.vpn.yml up -d» при неподнятом адресе VPN прерывает
+    запуск и admin-api, если Compose создаёт его в тот же раз (обновление образа, правка .env) — вход на самом компьютере выключен.
+    Поэтому во всех инструкциях VPN-вход запускается отдельно: «up -d --no-deps admin-api-vpn»."""
+    found = 0
+    for path in _instruction_files():
+        for match in VPN_UP_COMMAND.finditer(path.read_text(encoding="utf-8")):
+            found += 1
+            assert "--no-deps admin-api-vpn" in match.group(0), f"{path.relative_to(ROOT)}: {match.group(0)}"
+    assert found >= 4          # docker-compose.vpn.yml, docker-compose.yml, DOCKER.md, REMOTE_ACCESS_GUIDE.md
+
+
 def test_admin_listener_knows_its_allowed_names_and_has_no_cors():
     env = _env("admin-api")
     assert env["VPN_BIND_IP"] == "${VPN_BIND_IP:-}" and env["ADMIN_ALLOWED_HOSTS"] == "${ADMIN_ALLOWED_HOSTS:-}"

@@ -77,12 +77,25 @@
 **Способ А — порт на адресе VPN** (подходит для любого VPN):
 2. Узнайте адрес компьютера магазина **в VPN-сети** (например, `100.64.0.5` у Tailscale) и добавьте в `.env`:
    `VPN_BIND_IP=100.64.0.5`
-3. Запуск с административным адресом в VPN:
-   `docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d`
+3. Запуск — **двумя командами**: сначала вся программа как обычно, затем отдельно вход через VPN:
+   `docker compose up -d`
+   `docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d --no-deps admin-api-vpn`
+   Не объединяйте их в одну (`… -f docker-compose.vpn.yml up -d` без `--no-deps admin-api-vpn`): если VPN в этот момент не
+   подключён, Docker прервёт запуск и обычного административного входа `localhost:8001` (проверено 2026-11-21).
 4. С устройства в VPN: `http://100.64.0.5:8001/ui/admin.html`. Канал шифрует VPN.
+5. Если с телефона в VPN адрес не открывается, а на самом компьютере `http://100.64.0.5:8001` открывается — его закрывает
+   брандмауэр Windows: разрешение для Docker Desktop обычно создано только для сетей «Общедоступная», а сеть VPN Windows считает
+   «Частной». Разрешите порт 8001 **только на адаптере VPN** — в PowerShell от имени администратора (имя адаптера — как в
+   «Сетевых подключениях», у Tailscale — `Tailscale`):
+   `New-NetFirewallRule -DisplayName "Узнать товар: вход через VPN" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8001 -InterfaceAlias Tailscale`
+   Это изменение настроек безопасности компьютера — делаете вы сами; убрать: `Remove-NetFirewallRule -DisplayName "Узнать товар: вход через VPN"`.
 
 Если после перезагрузки VPN включился позже Docker, служба VPN-входа (`admin-api-vpn`) не запустится — это безопасно, вход на самом
-компьютере продолжит работать. Подключите VPN и повторите команду из шага 3.
+компьютере продолжит работать. Подключите VPN и повторите вторую команду из шага 3.
+
+Остановить всё вместе с VPN-входом: `docker compose -f docker-compose.yml -f docker-compose.vpn.yml down`. Простое
+`docker compose down` VPN-вход **не останавливает**. Предупреждение `Found orphan containers (…admin-api-vpn…)` после
+`docker compose up -d` означает то же самое и безопасно: VPN-вход продолжает работать.
 
 **Способ Б — только для Tailscale: `tailscale serve`** (без привязки Docker к адресу VPN, с HTTPS):
 1. На компьютере магазина: `tailscale serve --bg 8001` — Tailscale откроет `https://ИМЯ-КОМПЬЮТЕРА.….ts.net` только для устройств
@@ -99,8 +112,10 @@
 **Не пробрасывайте порты 8000 и 8001 на роутере в интернет.** Если позже понадобится свой домен и HTTPS — документ 18, §2,
 вариант Б (отдельное решение).
 
-Не проверено: публикация на адрес VPN и `tailscale serve` в Docker Desktop для Windows, запросы брандмауэра Windows (документ 18,
-§12.2).
+Проверено 2026-11-21 на этом компьютере (Docker Desktop для Windows, адрес Tailscale, временная копия программы): способ А —
+порт на адресе VPN работает рядом с `localhost:8001`, с адреса Wi-Fi порт 8001 не открывается, управление — только по адресу VPN.
+Не проверено: вход с другого устройства через VPN (брандмауэр, п. 5 способа А), `tailscale serve`, автозапуск после перезагрузки
+(документ 18, §12.2).
 
 ## 7. HTTPS для телефонов сотрудников (обязательно: пароли по Wi-Fi без защиты не передаются)
 
@@ -112,7 +127,8 @@
    за компьютером в настройках роутера, иначе после смены адреса сертификат придётся выпускать заново.
 2. `docker compose exec api python -m scripts.make_local_tls --ip 192.168.1.10 --name ИМЯ-КОМПЬЮТЕРА`
 3. В `.env` добавьте `PUBLIC_HTTPS_URL=https://192.168.1.10:8000`
-4. `docker compose -f docker-compose.yml -f docker-compose.https.yml up -d` (с VPN — добавьте и `-f docker-compose.vpn.yml`).
+4. `docker compose -f docker-compose.yml -f docker-compose.https.yml up -d` (с VPN — затем, как в п. 6, отдельно
+   `docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d --no-deps admin-api-vpn`).
 5. **Установите центр магазина на каждый телефон** — файл `secrets/tls/ca.crt` из папки проекта (передайте его на телефон кабелем,
    через мессенджер самому себе или с флешки):
    - **Android:** «Настройки» → «Безопасность» → «Шифрование и учётные данные» → «Установить сертификат» → «Сертификат ЦС» → выбрать

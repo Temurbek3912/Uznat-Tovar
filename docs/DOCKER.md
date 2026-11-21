@@ -23,12 +23,18 @@ frames ─┤ (healthy; кадры «Узнать товар» — только 
 | `admin-api` | тот же образ и та же база, `APP_LISTENER=admin`; порт опубликован только на `127.0.0.1` (VPN — `docker-compose.vpn.yml`). Документ 18, §4 | — |
 | `shop` | вход покупателя (`APP_LISTENER=customer`, порт `SHOP_PORT`, по умолчанию 8080): только «Узнать товар» без входа и страница `/ui/shop.html`; маршрутов и страниц сотрудников нет. Адрес для QR-кода: `http://<IP компьютера>:8080/` | — |
 | `frames` | Redis для кадров «Узнать товар» **без сохранения на диск** (решение D-10а): без тома, `/data` в памяти, порт не публикуется; кадр живёт не дольше 2 минут | только оперативная память |
+| `worker` | Celery, `--concurrency=1` | индекс каталога — `models/index/`, кэш моделей — том `hf_cache` |
 
 **HTTPS для телефонов** (обязательно с 2026-11-08: пароли по Wi-Fi без защиты не передаются, документ 18, §14):
 `docker compose exec api python -m scripts.make_local_tls --ip <адрес в Wi-Fi>`, затем
 `docker compose -f docker-compose.yml -f docker-compose.https.yml up -d` — порт 8000 работает по HTTPS. Инструкция с установкой
 центра магазина на телефоны — `docs/REMOTE_ACCESS_GUIDE.md`, п. 7.
-| `worker` | Celery, `--concurrency=1` | индекс каталога — `models/index/`, кэш моделей — том `hf_cache` |
+
+**Вход через VPN** (служба `admin-api-vpn`, `VPN_BIND_IP` в `.env`) — после обычного запуска **отдельной** командой:
+`docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d --no-deps admin-api-vpn`. Одной общей командой нельзя:
+если VPN не подключён, Compose прервёт и запуск `admin-api` (проверено 2026-11-21 на Windows). Остановка вместе с VPN-входом —
+`docker compose -f docker-compose.yml -f docker-compose.vpn.yml down` (простое `docker compose down` его не останавливает).
+Подробности — `docs/REMOTE_ACCESS_GUIDE.md`, п. 6.
 
 `api` и `worker` не стартуют, пока `bootstrap` не завершится успешно. Если он упал — вы увидите это сразу (`docker compose ps`, `docker compose logs bootstrap`), а не «контейнер Up, но приложение не работает».
 Образ один (собирается сервисом `api`), `worker` и `bootstrap` используют его же.

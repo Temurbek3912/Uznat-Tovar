@@ -135,7 +135,8 @@ services:
 
   # Административный вход (решение владельца В-1, документ 18): тот же образ и та же база, но права управления действуют ТОЛЬКО
   # здесь. Порт опубликован лишь на 127.0.0.1 — с самого компьютера магазина: http://localhost:8001/ui/admin.html.
-  # Через VPN — добавьте адрес компьютера в VPN-сети: docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d
+  # Через VPN — добавьте адрес компьютера в VPN-сети и после обычного запуска:
+  #     docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d --no-deps admin-api-vpn
   # (VPN_BIND_IP в .env; там это отдельная служба admin-api-vpn). В интернет и в локальную сеть магазина этот порт НЕ публикуется.
   admin-api:
     image: retail-shelf-audit:latest

@@ -8,6 +8,7 @@
 
     <место копий>/
       photos/ab/abcdef…            ← ОБЩЕЕ хранилище фото всех копий: файл назван по SHA-256 содержимого и хранится один раз
+                                     (фото из data/catalog-uploads и data/catalog-imported)
       Backup-2026-11-07_213000/
         manifest.json              ← что в копии, SHA-256 каждого файла, результат проверки
         photos.list                ← «sha256<TAB>размер<TAB>путь» — фото, на которые ссылается эта копия
@@ -54,7 +55,11 @@ BACKUP_PREFIX = "Backup-"
 PART_SUFFIX = ".part"
 STORE_DIR = "photos"
 LOCK_NAME = ".full_backup.lock"
-PHOTO_SUBDIR = "catalog-uploads"                 # фото каталога внутри media_root
+PHOTO_SUBDIR = "catalog-uploads"                 # фото каталога внутри media_root (загруженные из браузера)
+# Все папки фото товаров внутри media_root. catalog-imported — копии фото импорта каталога (app/services/product_images.py,
+# IMPORTED_SUBDIR): в них лежат фото товаров из открытой базы и из папок импорта. До 2026-11-21 копия брала только
+# catalog-uploads, и на рабочей машине все 1798 фото (они в catalog-imported) в копию не попадали.
+PHOTO_SUBDIRS = (PHOTO_SUBDIR, "catalog-imported")
 NEVER_COPY = {"identify-tmp"}                    # временные кадры покупателей — никогда
 CONFIG_FILES = ("configs/config.yaml", "docker-compose.yml", "requirements.txt")
 CHUNK = 1024 * 1024
@@ -160,16 +165,17 @@ def store_photo(src: Path, store: Path) -> tuple[str, int, bool]:
 
 def iter_photo_files(media_root: Path) -> Iterable[tuple[Path, str]]:
     """(путь, относительный путь в стиле POSIX от media_root) для всех файлов фото каталога; временные кадры исключены."""
-    base = Path(media_root) / PHOTO_SUBDIR
-    if not base.is_dir():
-        return
-    for path in sorted(base.rglob("*")):
-        rel = path.relative_to(media_root)
-        if any(part in NEVER_COPY for part in rel.parts) or not path.is_file():
+    for sub in PHOTO_SUBDIRS:
+        base = Path(media_root) / sub
+        if not base.is_dir():
             continue
-        if ".part" in path.name or path.name.startswith(".tmp-"):
-            continue                                   # недописанные временные файлы самой программы
-        yield path, rel.as_posix()
+        for path in sorted(base.rglob("*")):
+            rel = path.relative_to(media_root)
+            if any(part in NEVER_COPY for part in rel.parts) or not path.is_file():
+                continue
+            if ".part" in path.name or path.name.startswith(".tmp-"):
+                continue                                   # недописанные временные файлы самой программы
+            yield path, rel.as_posix()
 
 
 def read_photo_list(path: Path) -> list[tuple[str, int, str]]:
@@ -291,7 +297,13 @@ class PgTools:
             fh.flush()
             os.fsync(fh.fileno())
         if proc.returncode != 0:
-            raise BackupError(f"pg_dump завершился с кодом {proc.returncode}: {self._err(proc)}")
+            err = self._err(proc)
+            hint = ""
+            if self.use_compose and re.search(r"is not running|no such service|Cannot connect to the Docker daemon|"
+                                              r"error during connect", err, re.IGNORECASE):
+                hint = (" — база в Docker не запущена: запустите Docker Desktop и программу (или `docker compose up -d db` "
+                        "в папке программы) и повторите копию")
+            raise BackupError(f"pg_dump завершился с кодом {proc.returncode}: {err}{hint}")
         if Path(out).stat().st_size == 0:
             raise BackupError("дамп базы пуст")
 
@@ -520,8 +532,13 @@ def _create_backup(layout: Layout, pg: PgTools, *, now: Callable[[], datetime], 
             warnings.append(disk_note)
             out(f"  внимание: {disk_note}")
 
-        # 1. база — согласованный снимок
-        pg.dump(work / "db.dump")
+        # 1. база — согласованный снимок. Не снялся — в папке «.part» только наш недописанный дамп: убираем её, иначе после
+        # каждой неудачи (база остановлена, Docker не запущен) оставалась бы пустая «незавершённая копия» (испытано 2026-11-21).
+        try:
+            pg.dump(work / "db.dump")
+        except BackupError:
+            shutil.rmtree(work, ignore_errors=True)
+            raise
         tables = listing_tables(pg.listing(work / "db.dump"))
         if not tables:
             raise BackupError("в дампе нет ни одной таблицы")
@@ -642,13 +659,27 @@ def control_checks(pg: PgTools, name: str, counts: dict[str, int], photo_rows: l
                              "AND table_name = 'products' AND column_name = 'sku'").strip() == "1"
     if has_sku and photo_rows:
         skus = set(pg._psql(name, "SELECT sku FROM products").split("\n")) - {""}
-        folders = {rel.split("/")[1] for _, _, rel in photo_rows if rel.count("/") >= 2 and rel.startswith(PHOTO_SUBDIR + "/")}
+        folders = {rel.split("/")[1] for _, _, rel in photo_rows if rel.count("/") >= 2 and rel.split("/")[0] in PHOTO_SUBDIRS}
         orphans = sorted(folders - skus)
         checks["photo_folders"] = len(folders)
         checks["photo_folders_without_product"] = len(orphans)
         if orphans:
             warnings.append(f"фото без товара в базе: папок {len(orphans)} (например, {', '.join(orphans[:3])}) — "
                             "товар удалён после съёмки или копия базы старее фото")
+    # Обратная сверка: файлы фото, записанные в базе (product_images.storage_path), должны быть в копии. Иначе после
+    # восстановления у товаров не будет фото для показа и пересборки индекса.
+    has_storage = pg._psql(name, "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' "
+                                 "AND table_name = 'product_images' AND column_name = 'storage_path'").strip() == "1"
+    if has_storage:
+        db_paths = set(pg._psql(name, "SELECT storage_path FROM product_images WHERE storage_path IS NOT NULL "
+                                      "AND storage_path <> ''").split("\n")) - {""}
+        in_copy = {rel for _, _, rel in photo_rows}
+        lost = sorted(db_paths - in_copy)
+        checks["db_photos"] = len(db_paths)
+        checks["db_photos_missing_in_backup"] = len(lost)
+        if lost:
+            warnings.append(f"в базе записано фото, которого нет в копии: {len(lost)} (например, {', '.join(lost[:3])}) — "
+                            "файл удалён с диска или лежит вне папок фото; после восстановления у этих товаров фото не будет")
     return checks, warnings
 
 

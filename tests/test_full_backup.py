@@ -78,6 +78,55 @@ def test_customer_frames_and_unfinished_files_are_never_copied(tmp_path):
     assert rels == ["catalog-uploads/SKU1/p1.jpg"]
 
 
+def test_imported_catalog_photos_are_copied_too(tmp_path):
+    """Фото импорта каталога (data/catalog-imported, app/services/product_images.py) — тоже фото товаров. До 2026-11-21 копия их
+    пропускала: на рабочей машине все фото лежат именно там."""
+    media = tmp_path / "data"
+    (media / "catalog-imported" / "UZ-1").mkdir(parents=True)
+    (media / "catalog-imported" / "UZ-1" / "0123456789abcdef.jpg").write_bytes(b"i1")
+    (media / "catalog-imported" / "UZ-1" / "fedcba9876543210.jpg.part").write_bytes(b"half")   # недописанная копия импорта
+    (media / "catalog-uploads" / "SKU1").mkdir(parents=True)
+    (media / "catalog-uploads" / "SKU1" / "p1.jpg").write_bytes(b"1")
+    (media / "shelf-images").mkdir()
+    (media / "shelf-images" / "s.jpg").write_bytes(b"shelf")                                  # снимки полок — не фото товаров
+    rels = [rel for _p, rel in fb.iter_photo_files(media)]
+    assert rels == ["catalog-uploads/SKU1/p1.jpg", "catalog-imported/UZ-1/0123456789abcdef.jpg"]
+
+
+class _ChecksPg:
+    """Ответы контрольных запросов restore-check без базы: по началу текста запроса."""
+
+    def __init__(self, *, storage_paths, skus=("UZ-1",)):
+        self.storage_paths, self.skus = storage_paths, skus
+
+    def _psql(self, name, sql):
+        if "column_name = 'sku'" in sql:
+            return "1\n"
+        if "column_name = 'storage_path'" in sql:
+            return "1\n" if self.storage_paths is not None else ""
+        if sql.startswith("SELECT sku"):
+            return "".join(f"{s}\n" for s in self.skus)
+        if sql.startswith("SELECT storage_path"):
+            return "".join(f"{p}\n" for p in self.storage_paths)
+        raise AssertionError(sql)
+
+
+def test_restore_check_warns_about_database_photos_missing_from_the_copy():
+    rows = [("a" * 64, 2, "catalog-imported/UZ-1/0123456789abcdef.jpg")]
+    pg = _ChecksPg(storage_paths=["catalog-imported/UZ-1/0123456789abcdef.jpg", "catalog-imported/UZ-1/ffffffffffffffff.jpg"])
+    checks, warnings = fb.control_checks(pg, "restore_check_x", {}, rows)
+    assert checks["db_photos"] == 2 and checks["db_photos_missing_in_backup"] == 1
+    assert checks["photo_folders"] == 1 and checks["photo_folders_without_product"] == 0   # папка импорта сверена с артикулом
+    assert len(warnings) == 1 and "ffffffffffffffff.jpg" in warnings[0]
+
+
+def test_restore_check_without_photo_table_or_with_all_photos_is_quiet():
+    rows = [("a" * 64, 2, "catalog-imported/UZ-1/0123456789abcdef.jpg")]
+    for pg in (_ChecksPg(storage_paths=None), _ChecksPg(storage_paths=["catalog-imported/UZ-1/0123456789abcdef.jpg"])):
+        _checks, warnings = fb.control_checks(pg, "restore_check_x", {}, rows)
+        assert warnings == []
+
+
 def test_listing_tables_reads_table_entries_only():
     listing = """;
 ; Archive created at 2026-11-07 21:00:00 +05
@@ -194,8 +243,24 @@ def test_failed_dump_leaves_no_finished_backup_and_releases_the_lock(tmp_path):
     with pytest.raises(fb.BackupError):
         fb.create_backup(layout, FakePg(fail_dump=True), now=_clock(datetime(2026, 11, 7, 21, 0)), out=lambda s: None)
     assert not list(layout.dest.glob("Backup-*[0-9]"))                     # готовой копии нет
-    assert list(layout.dest.glob("Backup-*.part"))                         # незавершённая оставлена для разбора
+    # дамп не снялся — в «.part» не было бы ничего, кроме недописанного дампа: папка убрана (2026-11-21; раньше копилась
+    # «незавершённая копия» после каждого запуска при остановленной базе). Неудача ПОСЛЕ дампа оставляет «.part» для разбора.
+    assert not list(layout.dest.glob("Backup-*.part"))
     assert not (layout.dest / fb.LOCK_NAME).exists()
+
+
+def test_dump_failure_in_docker_mode_explains_that_the_database_is_not_running(tmp_path):
+    def run(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 1, stdout=b"", stderr=b'service "db" is not running')
+
+    pg = fb.PgTools(compose_file="dc.yml", runner=run)
+    with pytest.raises(fb.BackupError, match="база в Docker не запущена"):
+        pg.dump(tmp_path / "db.dump")
+    other = fb.PgTools(compose_file="dc.yml", runner=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, stdout=b"",
+                                                                                                  stderr=b"permission denied"))
+    with pytest.raises(fb.BackupError) as info:
+        other.dump(tmp_path / "db2.dump")
+    assert "не запущена" not in str(info.value)
 
 
 def test_concurrent_operation_is_refused_by_the_lock(tmp_path):

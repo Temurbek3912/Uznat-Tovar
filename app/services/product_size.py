@@ -52,9 +52,18 @@ def size_of(text: str) -> tuple[str, float] | None:
     return (main or sizes or [None])[0]
 
 
+_PERCENT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*%")
+
+
 def name_without_size(text: str) -> frozenset[str]:
-    """Слова названия без размера: «Pepsi 0,5 л» и «Пепси 1,5 литра» -> {"pepsi"} (латиница и кириллица — одна запись)."""
-    return frozenset(_tokens(_SIZE_RE.sub(" ", text or "")))
+    """Слова названия без размера: «Pepsi 0,5 л» и «Пепси 1,5 литра» -> {"pepsi"} (латиница и кириллица — одна запись).
+
+    Проценты остаются частью названия: «Сметана 15 %» и «Сметана 20 %» — разные товары (жирность), а не размеры одного
+    (2026-11-22: без этого «Сметана Простоквашино 15% 300» и «… 20% 300г» считались одним товаром разного объёма, и проверка
+    объёма могла заменить верный ответ другой жирностью того же объёма)."""
+    text = text or ""
+    percents = {"%" + m.group(1).replace(",", ".") for m in _PERCENT_RE.finditer(text)}
+    return frozenset(_tokens(_SIZE_RE.sub(" ", text)) | percents)
 
 
 def same_size(a: tuple[str, float] | None, b: tuple[str, float] | None) -> bool:

@@ -116,8 +116,12 @@ def create_embedder(cfg, device: str = "cuda", int8: bool = False):
     (python -m scripts.rebuild_index --compute-missing)."""
     name = getattr(cfg, "name", "") or ""
     cls = SiglipEmbedder if embedder_family(name) == "siglip" else DinoV2Embedder
-    return cls(weights_path=getattr(cfg, "weights_path", "") or "", embedding_dim=int(getattr(cfg, "embedding_dim", 768) or 768),
-               device=device, hub_model=hub_model_for(name), int8=int8)
+    embedder = cls(weights_path=getattr(cfg, "weights_path", "") or "",
+                   embedding_dim=int(getattr(cfg, "embedding_dim", 768) or 768), device=device, hub_model=hub_model_for(name),
+                   int8=int8)
+    # проекция (models.embedder.projection_path, 2026-11-22): пусто или обучена для другой модели — эмбеддер как есть
+    from app.pipeline.projection import with_projection  # noqa: PLC0415
+    return with_projection(embedder, getattr(cfg, "projection_path", "") or "")
 
 
 class DinoV2Embedder:

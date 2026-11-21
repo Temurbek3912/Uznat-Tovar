@@ -27,6 +27,7 @@ models/detector/*.pt
 *.part
 .claude/settings.local.json
 models/index/
+models/projection/
 # Свой движок и модель «зрение + текст» (scripts/vision_engine.py): скачивает установщик
 models/vision/
 

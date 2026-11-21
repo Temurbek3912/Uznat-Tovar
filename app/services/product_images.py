@@ -533,6 +533,15 @@ def build_index(plan: RebuildPlan, signature: dict, embedding_dim: int, *, regis
     left_out: list[tuple[str, str, str]] = []
     computed = 0
     missing = plan.missing
+    from_base = getattr(embedder, "vectors_from_base", None)
+    if missing and from_base is not None and registry is not None:
+        # эмбеддер с проекцией (app/pipeline/projection.py): вектор модели без проекции уже в кэше -> проекция, без пересчёта фото
+        projected = from_base(registry, [i.image_id for i in missing])
+        if projected:
+            vectors.update(projected)
+            computed += len(projected)
+            registry.store_vectors(list(projected.items()), signature)
+            missing = [i for i in missing if i.image_id not in projected]
     if missing and embedder is None and not allow_missing:
         raise RuntimeError(f"у {len(missing)} фото нет вектора этой модели в кэше; нужна модель (--compute-missing)")
     if missing and embedder is not None:

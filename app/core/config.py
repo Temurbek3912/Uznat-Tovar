@@ -44,6 +44,8 @@ class EmbedderConfig(BaseModel):
     name: str
     weights_path: str
     embedding_dim: int = 768
+    # Лёгкая проекция поверх векторов модели (app/pipeline/projection.py, ml/train_projection.py). "" — выключена (как раньше).
+    projection_path: str = ""
 
 
 class MatcherConfig(BaseModel):

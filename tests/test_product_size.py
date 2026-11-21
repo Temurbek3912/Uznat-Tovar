@@ -164,3 +164,24 @@ def test_read_size_is_off_by_setting_and_pauses_when_the_model_is_down(monkeypat
         raise TimeoutError()
     assert pn.read_size(J, ["0,5 л"], SETTINGS, http_post=down) is None
     assert pn.read_size(J, ["0,5 л"], SETTINGS, http_post=down) is None and len(tries) == 1
+
+
+def test_fat_percent_is_part_of_the_name_not_a_size():
+    # 2026-11-22: «Сметана … 15 % 300» и «… 20 % 300г» — разные товары (жирность), а не размеры одного
+    assert name_without_size("Сметана Простоквашино 15% 300") != name_without_size("Сметана Простоквашино 20% 300г")
+    assert name_without_size("Кефир 2,5 % 930 g") == name_without_size("Кефир 2.5% 500 г")
+    first = {"id": "s15", "name": "Сметана Простоквашино 15% 300", "brand": "Простоквашино"}
+    other = {"id": "s20", "name": "Сметана Простоквашино 20% 300г", "brand": "Простоквашино"}
+    assert size_variants(first, [other]) == []
+    same_fat = {"id": "s15b", "name": "Сметана Простоквашино 15% 540 г", "brand": "Простоквашино"}
+    assert size_variants(first, [other, same_fat]) == [same_fat]
+
+
+def test_other_fat_does_not_replace_the_found_product(monkeypatch):
+    asked = []
+    _label(monkeypatch, None, size="300 г", asked=asked)
+    first = {"id": "s15", "name": "Сметана Простоквашино 15% 300", "brand": "Простоквашино", "score": 0.91}
+    other = {"id": "s20", "name": "Сметана Простоквашино 20% 300г", "brand": "Простоквашино", "score": 0.89}
+    res = {"status": "matched", "by": "look", "score": 0.91, "product": first, "candidates": [first, other]}
+    out = routes_catalog.add_outside_name(res, b"j", [], "ru")
+    assert out["product"]["id"] == "s15" and out.get("size") is None and asked == []

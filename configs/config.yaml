@@ -46,6 +46,11 @@ models:
     name: "siglip2-base"
     weights_path: ""
     embedding_dim: 768
+    # Лёгкая проекция поверх векторов SigLIP 2 (замер 2026-11-22, docs/benchmark/projection_report_2026-11-22.md): верный товар
+    # первым 70 % вместо 63 % на товарах, которых проекция не видела. "" — выключена (как раньше). Включить (с согласия владельца):
+    # python -m ml.train_projection, затем здесь "models/projection/siglip2-base.npz", ниже match_threshold 0.83 и
+    # margin_threshold 0.08 (из отчёта обучения), затем python -m scripts.rebuild_index --apply --compute-missing (без пересчёта фото).
+    projection_path: ""
   matcher:
     index_path: "models/index/catalog.faiss"
     top_k: 5

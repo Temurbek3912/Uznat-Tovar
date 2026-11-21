@@ -62,6 +62,36 @@ def test_large_multipart_frame_never_spills_to_a_temporary_file(monkeypatch):
     assert _read(body, ctype) == data and created == []
 
 
+class _Spills:
+    """Следит, не ушёл ли файл формы Starlette во временный файл на диске."""
+
+    def __init__(self, monkeypatch):
+        self.rolled = []
+        real = tempfile.SpooledTemporaryFile
+        spills = self
+
+        class Watch(real):
+            def rollover(self):
+                spills.rolled.append(True)
+                return super().rollover()
+
+        monkeypatch.setattr("starlette.formparsers.SpooledTemporaryFile", Watch)
+
+
+def test_a_form_frame_just_over_the_limit_is_refused_without_touching_the_disk(monkeypatch):
+    """До 2026-11-21 кадр чуть больше предела (общий предел запроса пропускает ещё 256 КБ) успевал уйти во временный файл до 413."""
+    spills = _Spills(monkeypatch)
+    for extra in (1, 2000, 100 * 1024, 250 * 1024):
+        body, ctype = _multipart(b"\xff\xd8" + b"q" * (2 * MB + extra))
+        with pytest.raises(ApiError) as big:
+            _read(body, ctype, limit=2 * MB)
+        assert (big.value.status_code, big.value.code) == (413, "frame_too_large")
+    assert spills.rolled == []
+    exact = b"\xff\xd8" + b"q" * (2 * MB - 2)                      # ровно предел — принимается, тоже в памяти
+    body, ctype = _multipart(exact)
+    assert _read(body, ctype, limit=2 * MB) == exact and spills.rolled == []
+
+
 def test_too_large_missing_and_wrong_type_are_plain_errors():
     with pytest.raises(ApiError) as big:
         _read(b"z" * (2 * MB), "image/jpeg", limit=1 * MB)

@@ -169,6 +169,33 @@ def test_look_path_passes_only_a_frame_number_and_the_frame_is_gone_after_the_an
     assert not (env.tmp_path / "media").exists()                        # ни одного файла кадра
 
 
+def test_a_phone_sized_frame_never_goes_to_disk_and_an_oversized_one_gets_a_plain_refusal(env, monkeypatch):
+    """D-10а: снимок с телефона больше 1 МБ (порог, после которого Starlette пишет файл формы на диск) — и формой, и телом
+    запроса — только в памяти; кадр больше предела — понятный 413 «frame_too_large», тоже без временного файла."""
+    import tempfile
+    rolled = []
+
+    class Watch(tempfile.SpooledTemporaryFile):
+        def rollover(self):
+            rolled.append(True)
+            return super().rollover()
+
+    monkeypatch.setattr("starlette.formparsers.SpooledTemporaryFile", Watch)
+    env.answer = lambda e: {"status": "matched", "product": {"id": e.cola, "name": "x"}, "score": 0.93, "candidates": [], "demo_mode": False}
+    big = jpeg(3) + b"\0" * (3 * 1024 * 1024)                       # 3 МБ: хвост после конца JPEG картинку не портит
+    for multipart in (True, False):
+        resp = identify(env, big, multipart=multipart)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["product"]["name"] == "Кола 0,5 л"
+    huge = jpeg(3) + b"\0" * (env.routes.PUBLIC_IDENTIFY_MAX_MB * 1024 * 1024 + 100 * 1024)
+    for multipart in (True, False):
+        resp = identify(env, huge, multipart=multipart)
+        assert (resp.status_code, resp.json()["code"]) == (413, "frame_too_large"), resp.text
+        assert "Кадр" in resp.json()["detail"] and "Traceback" not in resp.text
+    assert rolled == [] and env.store.count() == 0
+    assert not (env.tmp_path / "media").exists()
+
+
 def test_uncertain_shows_public_candidates_and_unknown_or_demo_say_not_found(env):
     env.answer = lambda e: {"status": "uncertain", "product": {"id": e.cola}, "candidates": [{"id": e.cola}, {"id": e.fanta}, {"id": "ghost"}],
                             "demo_mode": False}

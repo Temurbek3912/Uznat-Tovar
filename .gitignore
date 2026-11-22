@@ -32,6 +32,7 @@ models/projection/*
 !models/projection/siglip2-base.md
 # Свой движок и модель «зрение + текст» (scripts/vision_engine.py): скачивает установщик
 models/vision/
+models/hf/
 
 # Архивы программы для магазинов (scripts/make_package.py)
 dist/

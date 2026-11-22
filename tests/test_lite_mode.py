@@ -220,3 +220,15 @@ def test_copy_files_skips_lock_files(tmp_path):
     assert lite_copy.copy_files(tmp_path / "a", tmp_path / "b") == 2
     assert not (tmp_path / "b" / "catalog.faiss.lock").exists() and (tmp_path / "b" / "x" / "p.jpg").read_bytes() == b"2"
     assert lite_copy.copy_files(tmp_path / "missing", tmp_path / "c") == 0
+
+
+def test_copy_photos_takes_browser_and_import_photos(tmp_path):
+    """Фото импорта каталога (catalog-imported) тоже переносятся: 2026-11-24 весь каталог был из импорта — «фото товаров 0»."""
+    from scripts import lite_copy
+    media, lite = tmp_path / "media", tmp_path / "lite"
+    (media / "catalog-uploads" / "A").mkdir(parents=True)
+    (media / "catalog-uploads" / "A" / "1.jpg").write_bytes(b"1")
+    (media / "catalog-imported" / "UZ-1").mkdir(parents=True)
+    (media / "catalog-imported" / "UZ-1" / "2.jpg").write_bytes(b"2")
+    assert lite_copy.copy_photos(media, lite) == 2
+    assert (lite / "catalog-imported" / "UZ-1" / "2.jpg").read_bytes() == b"2"

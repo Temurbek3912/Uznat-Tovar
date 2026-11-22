@@ -68,6 +68,16 @@ def copy_files(src: Path, dst: Path, skip_suffixes: tuple[str, ...] = (".lock",)
     return n
 
 
+PHOTO_DIRS = ("catalog-uploads", "catalog-imported")
+
+
+def copy_photos(media: Path, lite: Path) -> int:
+    """Фото товаров: добавленные в браузере (catalog-uploads) и копии фото импорта каталога (catalog-imported,
+    app/services/product_images.IMPORTED_SUBDIR) — пути в product_images.storage_path начинаются с них. 2026-11-24 весь
+    каталог (500 товаров) был из импорта, а копировалась только первая папка: «фото товаров 0»."""
+    return sum(copy_files(media / sub, lite / sub) for sub in PHOTO_DIRS)
+
+
 def main(argv: list[str] | None = None, out=print) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--replace", action="store_true", help="прежние данные облегчённого режима отложить в data/lite.bak-<время>")
@@ -106,7 +116,7 @@ def main(argv: list[str] | None = None, out=print) -> int:
     counts = copy_rows(source, target, out)
     index_src = resolve_project_path(settings.matcher.index_path).parent if settings.matcher else ROOT / "models" / "index"
     n_index = copy_files(index_src, LITE / "index")
-    n_photos = copy_files(resolve_project_path(settings.media_root) / "catalog-uploads", LITE / "catalog-uploads")
+    n_photos = copy_photos(resolve_project_path(settings.media_root), LITE)
     out(f"Готово: товаров {counts.get('products', 0)}, пользователей {counts.get('users', 0)}; файлов индекса {n_index}, "
         f"фото товаров {n_photos}. Запуск облегчённого режима: start_lite.bat")
     return 0

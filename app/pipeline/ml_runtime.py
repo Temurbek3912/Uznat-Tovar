@@ -160,11 +160,21 @@ def default_factories() -> Factories:
     def matcher(idx, cfg):
         from app.pipeline.matcher import ProductMatcher
         return ProductMatcher(
-            index=idx, top_k=cfg.top_k if cfg else 5, match_threshold=cfg.match_threshold if cfg else 0.72,
+            index=idx, top_k=cfg.top_k if cfg else 5, match_threshold=effective_match_threshold(cfg),
             unknown_threshold=cfg.unknown_threshold if cfg else 0.45, margin_threshold=cfg.margin_threshold if cfg else 0.0,
+            twin_threshold=float(getattr(cfg, "twin_threshold", 0.0) or 0.0) if cfg else 0.0,
         )
 
     return Factories(face_blurrer, detector, heuristic_detector, embedder, debug_embedder, index, matcher)
+
+
+def effective_match_threshold(cfg) -> float:
+    """Порог «найдено»: в строгом режиме (models.matcher.strict) — не ниже strict_match_threshold."""
+    if cfg is None:
+        return 0.72
+    if getattr(cfg, "strict", False):
+        return max(float(cfg.match_threshold), float(getattr(cfg, "strict_match_threshold", cfg.match_threshold)))
+    return float(cfg.match_threshold)
 
 
 def embedder_device(env: Mapping[str, str]) -> tuple[str, int]:

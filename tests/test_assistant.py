@@ -279,7 +279,7 @@ def test_uzbek_apostrophe_is_the_one_the_pages_use():
 def test_model_calls_a_tool_then_answers_from_the_data(Session):
     model = FakeModel({"action": "tool", "tool": "catalog_overview", "args": {}, "text": ""},
                       {"action": "answer", "tool": "", "args": {}, "text": "Без фото 4 товара."})
-    reply = _ask(Session, model, "Покажи сводку каталога")          # не вопрос — в схеме и propose_* (§10.16)
+    reply = _ask(Session, model, "Сделай сводку каталога")          # есть глагол изменения — в схеме и propose_* (§10.16)
     assert reply.text == "Без фото 4 товара." and reply.tools == [{"name": "catalog_overview", "ok": True}]
     url, first = model.calls[0]
     assert url == "http://127.0.0.1:8090/v1/chat/completions" and first["model"] == "qwen3-vl-4b"
@@ -589,7 +589,9 @@ def test_chat_returns_the_proposal_and_page_actions(Session):
     assert len(model.calls) == 2 and reply.text == ""
     with Session() as db:
         assert db.query(Product).filter_by(sku="COLA").one().expected_price == 9000     # пока не нажали — не изменилось
-    broken = _ask(Session, FakeModel({"action": "tool", "tool": "set_language", "args": {"lang": "en"}, "text": ""}, "не JSON"))
+    # язык — только когда владелец его назвал (command_words.ui_meant, 2026-11-23)
+    broken = _ask(Session, FakeModel({"action": "tool", "tool": "set_language", "args": {"lang": "en"}, "text": ""}, "не JSON"),
+                  "Сделай английский язык")
     assert broken.text == "" and broken.ui == [{"kind": "lang", "value": "en"}]          # дело сделано, хоть модель не договорила
 
 

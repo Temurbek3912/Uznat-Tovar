@@ -56,6 +56,12 @@ class MatcherConfig(BaseModel):
     # Правило запаса: при высоком счёте, но малом отрыве от ВТОРОГО по близости другого товара — в ревью. 0 = выключено.
     # Значение подбирается по реальным данным: python -m ml.evaluate_matching (docs/pilot_plan.md).
     margin_threshold: float = 0.0
+    # Правило двойника: у лучшего товара среди кандидатов есть другой с почти такими же фото в каталоге -> «похоже», не
+    # «найдено» (app/pipeline/matcher.decide_match; замер ml/check_twins.py). 0 = выключено. Зависит от модели, как пороги выше.
+    twin_threshold: float = 0.0
+    # Строгий режим: «найдено» только при счёте >= strict_match_threshold (почти без уверенных ошибок, но чаще «похоже»).
+    strict: bool = False
+    strict_match_threshold: float = 0.88
 
 
 class OSAConfig(BaseModel):

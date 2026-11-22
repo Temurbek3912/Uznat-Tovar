@@ -49,6 +49,8 @@ def settings_view(settings) -> list[dict]:
         ("media_root", "Папка фото", get(settings, "media_root"), ".env / config.yaml: app.media_root"),
         ("detector_confidence", "Порог уверенности детектора", get(detector, "confidence_threshold"), "config.yaml: models.detector"),
         ("matcher_margin", "Запас различимости матчера", get(matcher, "margin_threshold"), "config.yaml: models.matcher (подбирается ml.evaluate_matching)"),
+        ("matcher_twin", "Порог двойника (похожие фото в каталоге -> «похоже»)", get(matcher, "twin_threshold"), "config.yaml: models.matcher (ml.check_twins)"),
+        ("matcher_strict", "Строгий режим «Узнать товар»", get(matcher, "strict"), "config.yaml: models.matcher.strict"),
     ]
     return [{"key": k, "label": label, "value": v, "source": src, "editable": False} for k, label, v, src in items if v is not None]
 

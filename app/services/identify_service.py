@@ -81,7 +81,8 @@ def identify(image: np.ndarray, embedder, matcher, lookup: Lookup) -> dict:
         return {"status": "empty_catalog", "product": None, "score": 0.0, "candidates": []}
     if not ranked:
         return {"status": "unknown", "product": None, "score": 0.0, "candidates": []}
-    decision = decide_match(ranked, matcher.match_threshold, matcher.unknown_threshold, matcher.margin_threshold)
+    decision = decide_match(ranked, matcher.match_threshold, matcher.unknown_threshold, matcher.margin_threshold,
+                            getattr(matcher, "twin_threshold", 0.0), getattr(matcher, "twin_similarity", None))
     candidates = [_as_product(infos[product_id], score) for product_id, score in ranked[:CANDIDATES_SHOWN]]
     if decision.status == DetectionStatus.UNKNOWN:
         return {"status": "unknown", "product": None, "score": round(float(decision.score), 3), "candidates": candidates}

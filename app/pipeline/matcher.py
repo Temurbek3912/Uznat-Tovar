@@ -36,7 +36,7 @@ import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 import numpy as np
 
@@ -147,7 +147,8 @@ def rank_products(candidates: list[tuple[str, float]]) -> list[tuple[str, float]
 
 
 def decide_match(ranked: list[tuple[str, float]], match_threshold: float, unknown_threshold: float,
-                 margin_threshold: float = 0.0) -> MatchResult:
+                 margin_threshold: float = 0.0, twin_threshold: float = 0.0,
+                 twin: Callable[[str, str], float] | None = None) -> MatchResult:
     """Решение «товар / не уверен / неизвестен» по списку (товар, счёт) от лучшего к худшему.
 
     Три правила: счёт >= match_threshold -> MATCHED; между unknown_threshold и match_threshold -> UNCERTAIN (в очередь
@@ -155,7 +156,13 @@ def decide_match(ranked: list[tuple[str, float]], match_threshold: float, unknow
     по близости ДРУГОЙ товар отстаёт меньше чем на margin_threshold, результат — UNCERTAIN. Это защита от уверенных ошибок
     на похожих товарах (один бренд, разные вкусы/объёмы): у обоих сходство высокое, и выбор «лучшего из двух» — подбрасывание
     монетки. 0.0 — правило выключено (прежнее поведение). Единственная реализация решения: оценка и подбор порогов
-    (ml/evaluate_matching.py) вызывают ровно эту функцию, поэтому подобранные значения соответствуют боевому поведению."""
+    (ml/evaluate_matching.py) вызывают ровно эту функцию, поэтому подобранные значения соответствуют боевому поведению.
+
+    Правило ДВОЙНИКА (twin_threshold > 0, замер 2026-11-23, docs/benchmark/twins_report_2026-11-23.md): даже при высоком счёте
+    и большом отрыве — UNCERTAIN, если среди кандидатов есть другой товар, чьи фото в КАТАЛОГЕ почти такие же, как у лучшего
+    (twin(лучший, другой) — наибольшее сходство их эталонных фото, >= twin_threshold). Это вкусы и объёмы одной линейки
+    (Био-С и Био-С Персик, «Антарктик-криль» классический и подкопчёный): снимок с другой стороны упаковки бывает намного ближе
+    к «чужому» близнецу, и запас по счёту такой ошибки не видит. Человек выбирает из вариантов — это лучше уверенной ошибки."""
     if not ranked:
         return MatchResult(product_id=None, score=0.0, status=DetectionStatus.UNKNOWN)
     best_id, best_score = ranked[0]
@@ -163,6 +170,10 @@ def decide_match(ranked: list[tuple[str, float]], match_threshold: float, unknow
     if best_score >= match_threshold:
         crowded = margin_threshold > 0 and runner_score is not None and best_score - runner_score < margin_threshold
         status = DetectionStatus.UNCERTAIN if crowded else DetectionStatus.MATCHED
+        if status == DetectionStatus.MATCHED and twin_threshold > 0 and twin is not None:
+            for other_id, other_score in ranked[1:]:
+                if other_id != best_id and twin(best_id, other_id) >= twin_threshold:
+                    return MatchResult(best_id, best_score, DetectionStatus.UNCERTAIN, other_id, other_score)
         return MatchResult(best_id, best_score, status, runner_id, runner_score)
     if best_score >= unknown_threshold:
         return MatchResult(best_id, best_score, DetectionStatus.UNCERTAIN, runner_id, runner_score)
@@ -237,6 +248,18 @@ def _check_generation(index, current, final: Path) -> None:
         raise IndexChangedError(_changed_message(final))
 
 
+def _rows_of(index, product_id: str) -> list[int]:
+    """Номера векторов товара. Таблица строится один раз и перестраивается, когда векторов стало больше (add)."""
+    cached = getattr(index, "_rows_cache", None)
+    if cached is None or cached[0] != len(index._ids):
+        table: dict[str, list[int]] = {}
+        for n, pid in enumerate(index._ids):
+            table.setdefault(pid, []).append(n)
+        cached = (len(index._ids), table)
+        index._rows_cache = cached
+    return cached[1].get(product_id, [])
+
+
 class NumpyCatalogIndex:
     """Brute-force cosine-similarity поиск. Векторы должны быть L2-нормализованы."""
 
@@ -279,6 +302,12 @@ class NumpyCatalogIndex:
         top_idx = np.argpartition(-sims, top_k - 1)[:top_k]
         top_idx = top_idx[np.argsort(-sims[top_idx])]
         return [(self._ids[i], float(sims[i]), self._sources[i]) for i in top_idx]
+
+    def product_vectors(self, product_id: str) -> tuple[np.ndarray, list[str | None]]:
+        """Все векторы товара и их источники (для правила двойника, decide_match)."""
+        rows = _rows_of(self, product_id)
+        return (np.stack([self._vectors[i] for i in rows]) if rows else np.zeros((0, 0), np.float32),
+                [self._sources[i] for i in rows])
 
     @property
     def dimension(self) -> int | None:
@@ -396,6 +425,12 @@ class FaissCatalogIndex:
         query = np.atleast_2d(query).astype("float32")
         scores, indices = self._index.search(query, min(top_k, self._index.ntotal))
         return [(self._ids[idx], float(score), self._sources[idx]) for idx, score in zip(indices[0], scores[0]) if idx != -1]
+
+    def product_vectors(self, product_id: str) -> tuple[np.ndarray, list[str | None]]:
+        """Все векторы товара и их источники (для правила двойника, decide_match)."""
+        rows = _rows_of(self, product_id)
+        vectors = np.stack([self._index.reconstruct(int(i)) for i in rows]) if rows else np.zeros((0, self._index.d), np.float32)
+        return vectors, [self._sources[i] for i in rows]
 
     @property
     def dimension(self) -> int:
@@ -720,8 +755,12 @@ class ProductMatcher:
     """Применяет пороги match_threshold/unknown_threshold к результатам поиска по индексу."""
 
     def __init__(self, index: CatalogIndex, top_k: int = 5, match_threshold: float = 0.72,
-                 unknown_threshold: float = 0.45, margin_threshold: float = 0.0, candidates_k: int = 25):
+                 unknown_threshold: float = 0.45, margin_threshold: float = 0.0, candidates_k: int = 25,
+                 twin_threshold: float = 0.0):
         self.index = index
+        self.twin_threshold = twin_threshold      # правило двойника (decide_match); 0 — выключено
+        self._twins: dict[tuple[str, str], float] = {}
+        self._twins_key: tuple | None = None
         self.top_k = top_k
         self.match_threshold = match_threshold
         self.unknown_threshold = unknown_threshold
@@ -752,8 +791,32 @@ class ProductMatcher:
                     if pid not in archived and (pid, source) not in self.excluded]
         return rank_products(kept[:k])
 
+    def twin_similarity(self, a: str, b: str) -> float:
+        """Наибольшее сходство эталонных фото товаров a и b в индексе (без выведенных из эталонов фото); -1 — сравнить нечем.
+        Запоминается, пока не сменились индекс, его размер или список исключённых фото."""
+        product_vectors = getattr(self.index, "product_vectors", None)
+        if product_vectors is None:
+            return -1.0
+        key = (id(self.index), len(getattr(self.index, "_ids", ())), self.excluded)
+        if key != self._twins_key:
+            self._twins, self._twins_key = {}, key
+        pair = (a, b) if a <= b else (b, a)
+        if pair not in self._twins:
+            def kept(pid):
+                vectors, sources = product_vectors(pid)
+                rows = [n for n, s in enumerate(sources) if (pid, s) not in self.excluded]
+                return vectors[rows] if rows else None
+            va, vb = kept(a), kept(b)
+            self._twins[pair] = -1.0 if va is None or vb is None else float((va @ vb.T).max())
+        return self._twins[pair]
+
+    def decide(self, ranked: list[tuple[str, float]]) -> MatchResult:
+        """decide_match с порогами и правилом двойника этого матчера."""
+        return decide_match(ranked, self.match_threshold, self.unknown_threshold, self.margin_threshold,
+                            self.twin_threshold, self.twin_similarity)
+
     def match(self, embedding: np.ndarray) -> MatchResult:
-        return decide_match(self.rank(embedding), self.match_threshold, self.unknown_threshold, self.margin_threshold)
+        return self.decide(self.rank(embedding))
 
     def match_batch(self, embeddings: np.ndarray) -> list[MatchResult]:
         return [self.match(vec) for vec in embeddings]

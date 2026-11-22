@@ -119,6 +119,7 @@ def catalog_overview(db, args: dict) -> dict:
     ids = [p.id for p in products]
     photos, codes = _photo_counts(db, ids), _codes_of(db, ids)
     categories = Counter((p.category or DEFAULT_CATEGORY) for p in products)
+    priced = sorted((p for p in products if p.expected_price is not None), key=lambda p: (-p.expected_price, p.sku or ""))
     return {
         "active": len(products),
         "archived": db.query(Product).filter(Product.status == PRODUCT_ARCHIVED).count(),
@@ -129,6 +130,9 @@ def catalog_overview(db, args: dict) -> dict:
         "without_category": sum(1 for p in products if _no_category(p)),
         "categories": [{"name": _cut(name), "count": n} for name, n in categories.most_common(15)],
         "categories_total": len(categories),
+        # «Какой самый дорогой товар?» — живая qwen3-vl-4b (2026-11-24) без этих строк отвечала «у нас нет цен на товары».
+        "most_expensive": [{"name": _cut(p.name), "price": p.expected_price} for p in priced[:3]],
+        "cheapest": [{"name": _cut(p.name), "price": p.expected_price} for p in priced[::-1][:3]],
     }
 
 
@@ -175,6 +179,11 @@ def find_products(db, args: dict) -> dict:
         if cats:
             out["note"] = (f"Товара с таким названием нет, но «{query}» — это категория {', '.join(cats)}. Изменить все её "
                            f"товары — propose_bulk(where=category, query={cats[0]}).")
+            # «Sut qancha turadi?» (молоко): ответ — товары этой категории (2026-11-24); без них модель пересказывала
+            # владельцу подсказку «propose_bulk(…)».
+            in_cat = _active(db).filter(Product.category.in_(cats)).order_by(Product.sku).limit(5).all()
+            out["category"] = cats[0]
+            out["category_items"] = [{"name": _cut(p.name), "price": p.expected_price} for p in in_cat]
     return out
 
 

@@ -120,9 +120,16 @@ _THEME_WORD = ("tem", "fon", "rezhim", "rejim", "theme", "mode", "rang", "dizayn
 
 def ui_meant(said: str | None) -> tuple[str, str] | None:
     """("lang", язык) | ("theme", light|dark) | None — что владелец просит сменить на странице. Оба сразу или ни одного ясно —
-    None (модель тогда язык и фон не меняет)."""
+    None (оба сразу — ui_wanted)."""
+    wanted = ui_wanted(said)
+    return next(iter(wanted.items())) if len(wanted) == 1 else None
+
+
+def ui_wanted(said: str | None) -> dict[str, str]:
+    """{"lang": язык, "theme": light|dark} — что владелец просит сменить на странице (одно, оба или ничего). «Переключи на
+    узбекский и сделай тёмный фон» — оба (замер 2026-11-24: раньше не менялось ничего)."""
     if not said or _QUESTION.search(said) and not wants_change(said):
-        return None
+        return {}
     text = _text(said)
     lang = None
     if _has(said, _LANG_WORD):
@@ -134,8 +141,40 @@ def ui_meant(said: str | None) -> tuple[str, str] | None:
     if _has(said, _THEME_WORD) or _has(said, _DARK + _LIGHT):
         dark, light = _has(said, _DARK), any(s in text if s.endswith(" ") else _has(said, (s,)) for s in _LIGHT)
         theme = "dark" if dark and not light else "light" if light and not dark else None
-    if lang and not theme:
-        return "lang", lang
-    if theme and not lang:
-        return "theme", theme
-    return None
+    return {k: v for k, v in (("lang", lang), ("theme", theme)) if v}
+
+
+# --- разговор: продолжение просьбы (замер 2026-11-24, ml/assistant_dialogs.py) ----------------------------------------------------
+# «Убери пепси в архив» → «нет, не пепси, а фанту»; «Поставь цену фанты 9000» → «и кока-коле тоже 9500»: во второй реплике нет
+# глагола — это не вопрос, а та же просьба о другом товаре. Отрицание «не пепси» / «Pepsi emas» — товар, который владелец НЕ имел
+# в виду.
+_NEGATED = re.compile(r"(?i)(?:^|(?<=[\s,.;:!]))(?:не|ne|not)\s+[\wʻ'’-]+|[\wʻ'’-]+\s+(?:emas|эмас)\b")
+FOLLOW_MAX_WORDS = 8
+
+
+def without_negated(said: str | None) -> str:
+    """Реплика без «не X» / «X emas»: «нет, не пепси, а фанту» → «нет, , а фанту»."""
+    return _NEGATED.sub(" ", said or "")
+
+
+_PRONOUN = ("ego", "ee", "eyo", "ei", "ey", "nee", "ney", "emu", "nego", "nemu", "nei", "neyo", "neye", "on", "ona", "ono", "eto", "etot", "eta",
+            "etu", "etomu", "etoi", "etoy", "tot", "ta", "tu", "tomu", "toi", "toy", "uni", "unga", "uning", "shu", "shuni",
+            "shunga", "ushbu", "it", "its", "this", "that", "him", "her", "them", "tozhe", "ham", "also", "too", "net", "yoq",
+            "da", "ha", "ok", "na", "do", "ga", "dlya", "za", "sum", "som", "soum", "uzs", "tys", "tysyach", "ming", "pozhaluista",
+            "pozhaluysta", "iltimos", "please", "tsenu", "tsena", "tseny", "narx", "narxi", "narxini", "narhi", "narhini",
+            "price", "olin", "oling", "olinglar", "qiling", "qilib", "qoying", "boling", "bolsin")
+
+
+def points_back(said: str | None) -> bool:
+    """В реплике нет слов, которые могут быть товаром: только глагол, число, цена, «её / ему / uni / тоже» — товар тот, о
+    котором шла речь («поменяй её цену на 15000», «подними на 2000», «uni arxivga oling»). «Поставь кефиру 9000» — нет."""
+    stems = _CHANGE + _MORE_CHANGE + _STOCK + _ARCHIVE + _RESTORE + _PRICE_WORD
+    words = [w for w in re.findall(r"[a-z0-9]+", latin(said or "")) if not w.isdigit()]
+    return bool(words) and all(w in _PRONOUN or w.startswith(stems) or len(w) <= 1 for w in words)
+
+
+def follow_up(last: str | None, previous: str | None) -> bool:
+    """Короткая реплика без глагола изменения и без вопроса после просьбы изменить — продолжение той же просьбы."""
+    if not last or not previous or wants_change(last) or _QUESTION.search(last):
+        return False
+    return len(re.findall(r"\w+", last)) <= FOLLOW_MAX_WORDS and wants_change(previous)

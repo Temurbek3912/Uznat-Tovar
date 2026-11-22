@@ -219,6 +219,8 @@ _WRONG_CURRENCY = {
 
 def tidy_text(text: str, lang: str) -> str:
     text = _CJK.sub("", text)
+    if lang == "uz-Cyrl":                                   # «Каталогda», «товарга rasmi» (2026-11-24) — слово целиком кириллицей
+        text = _MIXED.sub(lambda m: _uz_word_cyr(m.group(0)), text)
     if lang == "uz":
         text = _MIXED.sub(lambda m: _to_latin(m.group(0)), text)
         # oʻ и gʻ — с ʻ (U+02BB), как на страницах; модель пишет «qo'shing», «yo'q» обычным апострофом.
@@ -226,8 +228,9 @@ def tidy_text(text: str, lang: str) -> str:
     unit = _CURRENCY.get(lang, _CURRENCY["ru"])
     wrong = _WRONG_CURRENCY["lat" if lang in ("uz", "en") else "cyr"]
     text = wrong.sub(lambda m: (m.group(1) or " ") + unit, text)
-    if lang == "uz-Cyrl":                                   # русское «сум» на узбекской кириллице — «сўм» (§10.17)
+    if lang == "uz-Cyrl":                                   # русское «сум» и латинское «so'm» на кириллице — «сўм» (§10.17)
         text = _SUM_CYR.sub(lambda m: (m.group(1) or " ") + unit, text)
+        text = _SOM_LAT.sub(lambda m: (m.group(1) or " ") + unit, text)
     return re.sub(r"[ \t]{2,}", " ", text).strip()
 
 
@@ -237,6 +240,7 @@ def tidy_text(text: str, lang: str) -> str:
 # остаётся кириллицей целиком. На uz-Cyrl русское «сум» — «сўм» (tidy_text).
 _UZ_CYR_CURRENCY = re.compile(r"(?<=\d)(\s?)(?:тенге|сом(?:а|ов|ы)?|сум(?:а|ов|ы)?|сўм|рубл(?:ь|я|ей)|руб)(?![\wʻ'’])", re.I)
 _SUM_CYR = re.compile(r"(?<=\d)(\s?)(?:сум(?:а|ов|ы)?)(?![\wʻ'’])", re.I)
+_SOM_LAT = re.compile(r"(?<=\d)(\s?)(?:so[ʻ'’‘`]?m|sum)(?![\wʻ'’])", re.I)
 
 
 def uz_currency(db, text: str, question: str) -> str:
@@ -305,8 +309,28 @@ def _known_words(db, question: str) -> set[str]:
     return known
 
 
+_LAT_WORD = re.compile(r"(?<![\wʻ'’])[a-z][a-zʻ'’]+", re.I)
+
+
+def _known_latin(db, question: str) -> set[str]:
+    known = {w.lower() for w in _LAT_WORD.findall(question or "")}
+    for row in db.query(Product.sku, Product.name, Product.brand, Product.category).all():
+        known.update(w.lower() for w in _LAT_WORD.findall(" ".join(v for v in row if v)))
+    return known
+
+
 def wrong_script(db, text: str, lang: str, question: str) -> bool:
-    """Ответ для узбекской латиницы или английского написан в основном кириллицей (не считая слов каталога и вопроса)."""
+    """Ответ для узбекской латиницы или английского написан в основном кириллицей (не считая слов каталога и вопроса), а для
+    узбекской кириллицы — латиницей: живая qwen3-vl-4b (2026-11-24) на «Штрихкоди йўқ товарлар нечта?» отвечала «7 ta mahsulot
+    shtrixkodga ega emas» (2 из 2)."""
+    if lang == "uz-Cyrl":
+        lat = [w.lower() for w in _LAT_WORD.findall(text or "") if len(w) >= 2]
+        words = re.findall(r"\w{2,}", text or "")
+        if len(lat) < 3 or len(lat) * 3 < len(words):
+            return False
+        known = _known_latin(db, question)
+        lat = [w for w in lat if w not in known]
+        return len(lat) >= 3 and len(lat) * 3 >= len(words)
     if lang not in _LATIN_LANGS:
         return False
     cyr = [w.lower() for w in _CYR_WORD.findall(text or "") if len(w) >= 2]
@@ -335,6 +359,36 @@ def latinize(db, text: str, question: str) -> str:
     known = _known_words(db, question)
     return _CYR_WORD.sub(lambda m: m.group(0) if len(m.group(0)) < 2 or m.group(0).lower() in known
                          else _uz_word_latin(m.group(0)), text or "")
+
+
+_UZ_CYR_PAIRS = (*((f"yo{a}", "йў") for a in "ʻ'’‘`"), *((f"o{a}", "ў") for a in "ʻ'’‘`"),
+                 *((f"g{a}", "ғ") for a in "ʻ'’‘`"),
+                 ("sh", "ш"), ("ch", "ч"), ("yo", "ё"), ("yu", "ю"), ("ya", "я"), ("ye", "е"))
+_UZ_CYR = dict(zip("abdefghijklmnopqrstuvxyzcw", "абдефгҳижклмнопқрстувхйзсв"))
+_UZ_CYR["ʼ"] = "ъ"
+
+
+def _uz_word_cyr(word: str) -> str:
+    """Слово узбекской латиницы → кириллица (простые правила; «e» в начале слова — «э»)."""
+    out, i, low = [], 0, word.lower()
+    while i < len(word):
+        pair = next(((lat, c) for lat, c in _UZ_CYR_PAIRS if low.startswith(lat, i)), None)
+        if pair:
+            step, cyr = len(pair[0]), pair[1]
+        else:
+            step = 1
+            ch = low[i]
+            cyr = "э" if ch == "e" and (i == 0 or low[i - 1] in "aeiou") else _UZ_CYR.get(ch, word[i])
+        out.append(cyr.upper() if word[i].isupper() else cyr)
+        i += step
+    return "".join(out)
+
+
+def cyrillize(db, text: str, question: str) -> str:
+    """Ответ для узбекской кириллицы, который и после «перепиши» остался латиницей → кириллица. Слова каталога и вопроса
+    (Pepsi, Nutella, артикул) не трогаются."""
+    known = _known_latin(db, question)
+    return _LAT_WORD.sub(lambda m: m.group(0) if m.group(0).lower() in known else _uz_word_cyr(m.group(0)), text or "")
 
 
 def invented_code(name: str, args: dict, history: list[dict]) -> None:
@@ -421,6 +475,162 @@ def _last_said(history: list[dict]) -> str:
     return next((str(m.get("content") or "") for m in reversed(history) if m.get("role") == "user"), "")
 
 
+# --- разговор из нескольких реплик (замер 2026-11-24, ml/assistant_dialogs.py) ---------------------------------------------------
+# Живая qwen3-vl-4b на «Есть у нас пепси?» → «поменяй её цену на 15000» верно звала propose_update(PEPSI), а программа отказывала:
+# товар сверялся только с последней репликой («Товар владелец не называл») — 9 разговоров из 16 с уточнением. На «Убери пепси в
+# архив» → «нет, не пепси, а фанту» и «Поставь цену фанты 9000» → «и кока-коле тоже 9500» глагола во второй реплике нет, и она
+# считалась вопросом (propose_* модели не давались вовсе).
+
+def _users(history: list[dict]) -> list[str]:
+    return [str(m.get("content") or "") for m in history if m.get("role") == "user"]
+
+
+def intent_said(history: list[dict]) -> str:
+    """Что владелец просит: последняя реплика, а если это продолжение просьбы (command_words.follow_up) — вместе с прошлой."""
+    users = _users(history)
+    last = users[-1] if users else ""
+    if len(users) >= 2 and command_words.follow_up(last, users[-2]):
+        return users[-2] + "\n" + last
+    return last
+
+
+def _context(history: list[dict]) -> str:
+    """О чём шла речь до последней реплики: прошлая реплика владельца и ответ помощника на неё."""
+    users = _users(history)
+    reply = history[-2].get("content") if len(history) >= 2 and history[-2].get("role") == "assistant" else ""
+    return (users[-2] if len(users) >= 2 else "") + "\n" + str(reply or "")
+
+
+def _names_any(db, text: str) -> bool:
+    return any(product_said(db, p, text, brand=False) for p in db.query(Product).all())
+
+
+def product_meant(db, product: Product, history: list[dict]) -> bool:
+    """Товар назван в последней реплике (кроме «не X»), а если в ней товара нет вовсе («поменяй её цену», «uni arxivga oling»,
+    «поставь ему цену 12000») — в прошлой реплике владельца или в ответе помощника на неё."""
+    last = command_words.without_negated(_last_said(history))
+    if product_said(db, product, last):
+        return True
+    return (command_words.points_back(last) and not _names_any(db, last)
+            and product_said(db, product, _context(history)))
+
+
+_AND = re.compile(r"(?i)\s*(?:,(?!\d)|;|\s(?:и|а|va|ва|and|hamda|ҳамда)\s)\s*")
+_LIST_VERB = re.compile(r"(?i)^\s*(?:(?:поставь|сделай|установи|измени|поменяй|смени|укажи|назначь)(?:те)?\s+)?"
+                        r"(?:(?:новые\s+)?цен[уыа]?\s+(?:на\s+)?)?")
+_UZ_PRICE_WORD = re.compile(r"(?i)(?<!\w)(?:narxini|narxi|нархини|нархи)(?!\w)")
+_UZ_TAIL = re.compile(r"(?i)\s*(?:qiling|qilib\s+qo[ʻ'’`]?ying|қилинг|belgilang|qo[ʻ'’`]?ying|қўйинг)\s*[.!]?\s*$")
+_PART_PRICE = re.compile(r"[^\W\d_]{2,}.*\s\d[\d  ]*(?:[.,]\d+)?\s*(?:тыс\w*|ming|минг|сум|сўм|so[ʻ'’`]?m)?\s*$", re.I)
+
+
+def inline_prices(said: str) -> str:
+    """«Поставь цену фанты 9000 и пепси 15000» → «фанты 9000\\nпепси 15000» — список цен для price_list (одна карточка на все
+    товары). Не список — "". Живая модель на такую просьбу предлагала только первую цену, вторая молча терялась."""
+    if not said or "\n" in said.strip() or "?" in said:
+        return ""
+    text = _UZ_TAIL.sub("", _LIST_VERB.sub("", said.strip(), count=1))
+    parts = [p.strip(" .!") for p in _AND.split(_UZ_PRICE_WORD.sub(" ", text)) if p.strip(" .!")]
+    if len(parts) < 2 or not all(_PART_PRICE.search(p) for p in parts):
+        return ""
+    return "\n".join(re.sub(r"\s{2,}", " ", p) for p in parts)
+
+
+_ONE_AT_A_TIME = {
+    "ru": "За один раз — одно изменение: сначала «{name}». Про «{other}» напишите следующим сообщением.",
+    "uz": "Bir martada bitta oʻzgarish: avval «{name}». «{other}» haqida keyingi xabarda yozing.",
+    "uz-Cyrl": "Бир марта битта ўзгариш: аввал «{name}». «{other}» ҳақида кейинги хабарда ёзинг.",
+    "en": "One change at a time: first «{name}». Write about «{other}» in your next message.",
+}
+
+
+def other_named(db, said: str, card: dict | None) -> str:
+    """«Убери в архив пепси и сникерс»: карточка — одна (один товар за раз, правило владельца), а владелец назвал ещё товар.
+    Слова владельца о втором товаре («сникерс») или ""."""
+    if not card or card.get("kind") not in ("update", "status"):
+        return ""
+    parts = [p.strip(" .,!") for p in _AND.split(command_words.without_negated(said)) if p.strip(" .,!")]
+    if len(parts) < 2:
+        return ""
+    mine = db.get(Product, card.get("product_id"))
+    products = db.query(Product).all()
+    for part in parts:
+        if mine is not None and product_said(db, mine, part, brand=False):
+            continue
+        if any(p.id != card.get("product_id") and product_said(db, p, part, brand=False) for p in products):
+            return part[:60]
+    return ""
+
+
+# Вопрос о цене товара, а модель зовёт «товары без цены» или сводку каталога: живая qwen3-vl-4b (2026-11-24) на «Сколько стоит
+# вода?», «Сколько стоит молоко?», «Сколько стоит кефир?» звала products_missing(price) и ВЫДУМЫВАЛА цену («Молоко Nestle 1 л стоит
+# 100 сум»), на «Sut qancha turadi?» — catalog_overview. Тогда товар ищет программа по словам вопроса без «сколько / стоит».
+_STOP = re.compile(r"^(?:skolk\w*|stoi\w*|stoya\w*|tsen\w*|kak(?:aya|oy|oi|ie|ih|ov\w*)?|pochem|nas|est|u|a|i|za|qancha|"
+                   r"turad\w*|narh\w*|nech(?:a|ta|i)|pul|how|much|many|price\w*|cost\w*|what|is|the|of|bor|bormi|sum|som|"
+                   r"tovar\w*|mahsulot\w*|ta|katalog\w*|kategor\w*|qaysi|qanday|vsego|vseh|baz[aeyu]|menya)$")
+_COUNT_Q = re.compile(r"\b(?:nech|skolk|qancha|how many)\w*\b.*\b(?:tovar|mahsulot|product|pozic)|"
+                      r"\b(?:tovar|mahsulot|product)\w*\b.*\b(?:nech|skolk|qancha)")
+_MISSING_Q = re.compile(r"(?:^|\s)(?:bez\w*|net|netu|yoq\w*|without|missing|ne\s+ukaz\w*|kiritilmag\w*|\w+siz)(?:\s|$)")
+
+
+def product_query(said: str) -> str:
+    """Слова вопроса, которые могут быть товаром: «Сколько стоит вода?» → «вода», «Pepsi narxi qancha?» → «Pepsi»."""
+    words = re.findall(r"[^\W_][\w'’ʻ.,-]*[^\W_]|[^\W\d_]", said or "")
+    return " ".join(w for w in words if not _STOP.match(category_words.latin(w).strip("'’ʻ")))[:80]
+
+
+def asks_missing(said: str) -> bool:
+    return bool(_MISSING_Q.search(" " + " ".join(re.findall(r"[a-z]+", category_words.latin(said or ""))) + " "))
+
+
+def question_parts(said: str) -> list[str]:
+    """«Сколько стоят пепси и фанта?» → ["пепси", "фанта"]: что искать (до 3 частей)."""
+    parts = [product_query(p) for p in _AND.split(said or "")]
+    return [p for p in parts if p][:3]
+
+
+# Число с валютой в ответе, которого нет ни в данных инструментов, ни в словах владельца, — выдумано.
+_PRICE_IN_TEXT = re.compile(r"(\d[\d   ]*\d|\d)(?:[.,]\d+)?\s*(?:сум\w*|сўм|so[ʻ'’`]?m|сом\w*|UZS|sum\b)", re.I)
+
+
+def invented_prices(text: str, known: set[float]) -> list[str]:
+    out = []
+    for m in _PRICE_IN_TEXT.finditer(text or ""):
+        value = float(re.sub(r"\D", "", m.group(1)) or 0)
+        if value not in known:
+            out.append(m.group(0).strip())
+    return out
+
+
+_NO_PRICE = {"ru": "цена не указана", "uz": "narxi koʻrsatilmagan", "uz-Cyrl": "нархи кўрсатилмаган", "en": "no price"}
+_NOT_FOUND = {"ru": "Товар «{q}» не найден.", "uz": "«{q}» topilmadi.", "uz-Cyrl": "«{q}» топилмади.", "en": "«{q}» not found."}
+
+
+_COUNT_TEXT = {"ru": "Товаров в каталоге: {n}, в архиве: {a}.", "uz": "Katalogda {n} ta mahsulot, arxivda {a} ta.",
+               "uz-Cyrl": "Каталогда {n} та маҳсулот, архивда {a} та.", "en": "Products in the catalog: {n}, archived: {a}."}
+
+
+def found_text(result: dict, lang: str) -> str:
+    """Готовый ответ по итогу find_products — если модель зациклилась («Пепси борми?»: «биринчи биринчи …» до конца ответа,
+    2026-11-23 и 2026-11-24). «Pepsi 1,5 л — 14 000 сўм.»"""
+    unit = _CURRENCY.get(lang, _CURRENCY["ru"])
+    lines = []
+    for part in result.get("parts") or [result]:
+        items = part.get("items") or []
+        if not items:
+            lines.append(_NOT_FOUND.get(lang, _NOT_FOUND["ru"]).format(q=str(part.get("query") or "")[:40]))
+        for item in items[:3]:
+            price = item.get("price")
+            lines.append(f"{item.get('name')} — " + (f"{price:,.0f}".replace(",", " ") + f" {unit}" if price is not None
+                                                      else _NO_PRICE.get(lang, _NO_PRICE["ru"])) + ".")
+    return " ".join(lines)
+
+
+def _numbers_in(text: str) -> set[float]:
+    flat = re.sub(r"(?<=\d)[\s  ](?=\d{3}\b)", "", text or "")
+    return {float(n.replace(",", ".")) for n in re.findall(r"\d+(?:[.,]\d+)?", flat)} | \
+           {float(n) for n in re.findall(r"\d+", flat)}
+
+
 def product_said(db, product: Product, said: str, brand: bool = True) -> bool:
     """Товар назван в словах владельца: слово названия или бренда (в любом алфавите и падеже), артикул или штрихкод."""
     from app.db.models import ProductBarcodeORM  # noqa: PLC0415
@@ -449,16 +659,17 @@ def product_said(db, product: Product, said: str, brand: bool = True) -> bool:
 def command_check(db, name: str, args: dict, history: list[dict], ui: list) -> tuple[str, dict]:
     """Выбор модели сверяется со словами владельца (app/services/command_words.py). Не то — ToolError (модель увидит причину
     и ответит словами), понятно, что имелось в виду, — исправленные (инструмент, аргументы)."""
-    said = _last_said(history)
+    said = intent_said(history)                         # глагол: «нет, не пепси, а фанту» — из прошлой реплики
+    last = command_words.without_negated(_last_said(history))   # товар и категория — из последней (без «не пепси»)
     args = args if isinstance(args, dict) else {}
     if name in ("set_language", "set_theme"):
-        meant = command_words.ui_meant(said)
+        meant = command_words.ui_wanted(_last_said(history))
         kind, key = ("lang", "lang") if name == "set_language" else ("theme", "theme")
-        if ui:
-            raise ToolError("Язык или фон уже меняется — второй раз не нужно.")
-        if meant is None or meant[0] != kind:
+        if any(u.get("kind") == kind for u in ui):
+            raise ToolError(("Язык" if kind == "lang" else "Фон") + " уже меняется — второй раз не нужно.")
+        if kind not in meant:
             raise ToolError("Владелец не просил менять " + ("язык." if kind == "lang" else "фон."))
-        return name, {key: meant[1]}
+        return name, {key: meant[kind]}
     if not name.startswith("propose_"):
         return name, args
     if name == "propose_bulk":
@@ -466,7 +677,7 @@ def command_check(db, name: str, args: dict, history: list[dict], ui: list) -> t
             # «Хлеб белый больше не продаём, убери» — модель звала «вся категория Хлеб в архив». Назван товар и нет «все» —
             # массовое изменение не предлагается.
             named = [p for p in db.query(Product).filter(Product.status == PRODUCT_ACTIVE).all()
-                     if product_said(db, p, said, brand=False)]
+                     if product_said(db, p, last, brand=False)]
             change = str(args.get("change") or "").lower()
             if len(named) == 1 and change == "archive" and command_words.archive_said(said):
                 return "propose_archive", {"product": named[0].sku, "status": "archived"}
@@ -474,16 +685,21 @@ def command_check(db, name: str, args: dict, history: list[dict], ui: list) -> t
                 raise ToolError(f"Владелец назвал товар «{named[0].name}», а не все товары: меняйте один товар "
                                 "(propose_update / propose_archive) или уточните.")
         query = str(args.get("query") or "")
-        said_words = re.findall(r"[a-z0-9]+", category_words.latin(said))
         own = [w for w in re.findall(r"[a-z0-9]+", category_words.latin(query)) if len(w) >= 3]
-        direct = bool(own) and all(any(s.startswith(w[:5]) or w.startswith(s[:5]) for s in said_words if len(s) >= 3)
-                                   for w in own)
-        # По словарю («кефир» — молочные) — только со словом «все»: «Поставь цену кефиру 9000» — один товар (его нет),
-        # а не вся категория «Молочные» (живая модель, 2026-11-23).
         groups = set(category_words.groups_of(query))
-        by_word = [w for w in said_words if set(category_words.groups_of(w)) & groups]
-        group = bool(by_word) and (command_words.all_said(said) or any(command_words.plural(w) for w in by_word))
-        if not (direct or group):
+
+        def named_in(text: str) -> bool:
+            said_words = re.findall(r"[a-z0-9]+", category_words.latin(text))
+            direct = bool(own) and all(any(s.startswith(w[:5]) or w.startswith(s[:5]) for s in said_words if len(s) >= 3)
+                                       for w in own)
+            # По словарю («кефир» — молочные) — только со словом «все»: «Поставь цену кефиру 9000» — один товар (его нет),
+            # а не вся категория «Молочные» (живая модель, 2026-11-23).
+            by_word = [w for w in said_words if set(category_words.groups_of(w)) & groups]
+            return direct or (bool(by_word) and (command_words.all_said(said) or any(command_words.plural(w) for w in by_word)))
+        # «нет, не напитки, а все сладости» — категория из последней реплики; «нет, на 5%» — из прошлой просьбы.
+        cats = [c for (c,) in db.query(Product.category).filter(Product.status == PRODUCT_ACTIVE).distinct().all() if c]
+        if not (named_in(last) or (said != _last_said(history) and not category_words.matching_categories(last, cats)
+                                   and named_in(said))):
             raise ToolError(f"Категорию или бренд «{query}» владелец не называл: уточните, какие товары менять.")
         return name, args
     if name == "propose_add":
@@ -496,13 +712,15 @@ def command_check(db, name: str, args: dict, history: list[dict], ui: list) -> t
     if product is None:
         # «Пепсини архивга олинг»: модель передаёт слово владельца в падеже («Пепсини») — товар не находится. Если в словах
         # владельца назван ровно один товар, берётся он.
-        named = [p for p in db.query(Product).all() if product_said(db, p, said, brand=False)]
+        named = [p for p in db.query(Product).all() if product_said(db, p, last, brand=False)]
+        if not named and command_words.points_back(last):     # «uni arxivga oling» — товар, о котором шла речь
+            named = [p for p in db.query(Product).all() if product_said(db, p, _context(history), brand=False)]
         if len(named) > 1 and name == "propose_archive":
             wanted = PRODUCT_ACTIVE if str(args.get("status") or "archived").lower() == "active" else "archived"
             named = [p for p in named if (p.status or PRODUCT_ACTIVE) != wanted]
         if len(named) == 1:
             product, args = named[0], {**args, "product": named[0].sku}
-    if product is not None and not product_said(db, product, said):
+    if product is not None and not product_meant(db, product, history):
         raise ToolError(f"Товар «{product.name}» владелец не называл: уточните, какой товар.")
     if name == "propose_archive":
         status = str(args.get("status") or "archived").lower()
@@ -545,6 +763,12 @@ def command_check(db, name: str, args: dict, history: list[dict], ui: list) -> t
             except ValueError:
                 said_value = None
             moved = price_words._direction(category_words.latin(said)) != 0 and _numbers_said(history)
+            own = sorted(n for n in _numbers_said([{"role": "user", "content": _last_said(history)}]) if n >= 100)
+            if said_value != (own[0] if len(own) == 1 else said_value) and not moved and product is not None \
+                    and (price_words.meant(_last_said(history), own[0]) or ("",))[0] == "price_set":
+                # «Поставь цену Coca-Cola Classic 1,5 л 15000»: модель дала цену 12000 (2026-11-24) — новая цена одна, в
+                # словах владельца (не меньше 100); «1,5» — объём, а не цена.
+                said_value, args = own[0], {**args, "value": own[0]}
             if (said_value is None or said_value not in _numbers_said(history)) and not moved:
                 raise ToolError("Цену помощник не придумывает: напишите число (например, «цена 8000»).")
         if field == "in_stock" and not command_words.stock_said(said) and not command_words.wants_change(said):
@@ -789,6 +1013,9 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
         # Список «товар — цена» столбиком разбирает программа, модель не нужна вовсе (app/services/price_list.py): в длинном
         # списке 4B-модель пропустила бы строку или перепутала цену. Берётся реплика целиком — не обрезанная для модели.
         listed = price_list.card(db, _raw_last(messages))
+        if listed is None and inline_prices(history[-1]["content"]):    # «фанте 9000 и пепси 15000» — тоже список (2026-11-24)
+            listed = price_list.card(db, inline_prices(history[-1]["content"]))
+            listed = listed if listed and listed.get("rows") else None
         if listed is not None:
             return Reply(text="", tools=[{"name": "price_list", "ok": True}], seconds=round(clock() - started, 1),
                          proposal=listed)
@@ -805,10 +1032,14 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                          proposal=proposals.items[0] if proposals.items else None)
     # Вопрос без глагола изменения («Nutella qancha turadi?») — предлагать нечего: propose_* в шаге модели нет вовсе (§10.16).
     # Нет глагола изменения вовсе («Есть у нас пепси?», «кока кола скока стоит») — тоже вопрос (command_words, 2026-11-23).
+    # «нет, не пепси, а фанту», «и кока-коле тоже 9500» — продолжение просьбы, а не вопрос (intent_said, 2026-11-24).
     asking = can_propose and (price_words.asks_only(history[-1]["content"])
-                              or not command_words.wants_change(history[-1]["content"]))
+                              or not command_words.wants_change(intent_said(history)))
     step_tools = [t for t in tools if t.kind != "propose"] if asking else tools
     asks_price = asking and price_words.asks_price(history[-1]["content"])
+    parts = question_parts(history[-1]["content"]) if asking else []
+    known_numbers = _numbers_in(" ".join(_users(history)))    # числа ответа — из данных инструментов и слов владельца
+    price_checked = False
     nudged = False
     spare = ""                            # ответ не тем алфавитом (wrong_script) — если переписать не вышло, отдаётся он
     redirected = False                      # «ПРОВЕРКА ПРОГРАММЫ» о смене категории — не больше одного раза
@@ -820,6 +1051,9 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
         card = proposals.items[0] if proposals.items else None
         if scanned:
             text = scan_words(text, scanned)
+        other = other_named(db, history[-1]["content"], card) if card is not None and not text else ""
+        if other:                       # «пепси и сникерс»: карточка одна — о втором товаре сказать, а не потерять молча
+            text = _ONE_AT_A_TIME.get(lang, _ONE_AT_A_TIME["ru"]).format(name=card.get("name") or "", other=other)
         return Reply(text=text[:MAX_REPLY_CHARS], tools=used, seconds=round(clock() - started, 1), proposal=card, ui=ui,
                      proposal_error="" if card else failed["error"],
                      no_card=can_propose and card is None and not failed["error"] and claims_change(text))
@@ -843,6 +1077,20 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                                       "вызвал propose_*. Найди товар (find_products) и вызови нужный propose_*, или честно "
                                       "ответь, что не сделал."})
                         continue
+                    looked = any(u["ok"] and not u["name"].startswith(("propose_", "set_")) for u in used)
+                    bad_prices = invented_prices(text, known_numbers) if text and looked else []
+                    if bad_prices and not price_checked and step <= MAX_STEPS:
+                        # «Молоко Nestle 1 л стоит 100 сум» — цены нет в данных (2026-11-24): один раз — «только по данным».
+                        price_checked = True
+                        convo.append({"role": "assistant", "content": json.dumps(
+                            {"tool": "", "text": text[:300]}, ensure_ascii=False)})
+                        convo.append({"role": "user", "content": f"ПРОВЕРКА ПРОГРАММЫ: «{bad_prices[0]}» нет в данных "
+                                      "инструментов. Напиши ответ только по данным; если цены у товара нет (price: null) или "
+                                      "товар не найден — так и скажи."})
+                        answer_now = True
+                        continue
+                    if bad_prices and price_checked and ready:
+                        text = ready
                     if text and not spare and step <= MAX_STEPS and wrong_script(db, text, lang, history[-1]["content"]):
                         spare = text            # один раз: «перепиши на нужном языке»
                         convo.append({"role": "assistant", "content": json.dumps(
@@ -850,12 +1098,15 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                         convo.append({"role": "user", "content": f"ПРОВЕРКА ПРОГРАММЫ: ответ не на {LANGS[lang]} языке. "
                                       f"Напиши тот же ответ на {LANGS[lang]} языке"
                                       + (" латинскими буквами (oʻ, gʻ, sh, ch), не кириллицей" if lang == "uz" else "")
+                                      + (" кириллицей (ў, қ, ғ, ҳ), не латиницей" if lang == "uz-Cyrl" else "")
                                       + "; названия товаров — как в данных."})
                         answer_now = True
                         continue
                     if (text and spare and lang == "uz" and _UZ_CYRILLIC.search(text)
                             and wrong_script(db, text, lang, history[-1]["content"])):
                         text = tidy_text(latinize(db, text, history[-1]["content"]), lang)  # узбекской кириллицей; «сом» → «soʻm»
+                    if text and spare and lang == "uz-Cyrl" and wrong_script(db, text, lang, history[-1]["content"]):
+                        text = tidy_text(cyrillize(db, text, history[-1]["content"]), lang)  # и после «перепиши» латиницей
                     if text and lang == "uz":
                         text = uz_currency(db, text, history[-1]["content"])  # «45000 сом» → «45000 soʻm» (§10.17)
                     if text:
@@ -863,7 +1114,16 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                     break
                 name = str(step_answer.get("tool") or "")
                 args = step_answer.get("args") if isinstance(step_answer.get("args"), dict) else {}
-                redirect = ""
+                redirect, counted = "", False
+                if (asks_price and name in ("products_missing", "catalog_overview", "similar_names")
+                        and not asks_missing(history[-1]["content"]) and parts):
+                    name, args = "find_products", {"query": parts[0]}      # «Сколько стоит вода?» — ищем воду (2026-11-24)
+                elif (asking and name in ("find_products", "products_missing") and not parts
+                      and _COUNT_Q.search(category_words.latin(history[-1]["content"]))
+                      and not asks_missing(history[-1]["content"])):
+                    # «Нечта товар бор?» («сколько товаров?») — товара в вопросе нет: живая модель искала товар «товар» и
+                    # отвечала о другом (2026-11-23, 2026-11-24). Сколько товаров — в сводке каталога.
+                    name, args, counted = "catalog_overview", {}, True
                 try:
                     if asking and name.startswith("propose_"):
                         raise ToolError("Владелец спрашивает, а не меняет: ответьте по данным, карточку не предлагайте.")
@@ -879,6 +1139,13 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                     if redirect:                # не тот инструмент: карточку не создаём, просим нужный (один раз)
                         redirected = True
                         result, ok = {"error": "Не тот инструмент: владелец меняет категорию товара."}, False
+                    elif asking and name == "find_products" and len(parts) >= 2:
+                        # «Сколько стоят пепси и фанта?»: после первого поиска модель отвечала только о пепси (2026-11-24) —
+                        # программа ищет каждый названный товар сама, модель отвечает по всем.
+                        result = {"parts": [{k: v for k, v in assistant_tools.run_tool(
+                            db, user, name, {"query": q, "limit": 3}, proposals, ui, lang).items() if k != "note"}
+                            for q in parts]}
+                        ok = True
                     else:
                         result, ok = assistant_tools.run_tool(db, user, name, args, proposals, ui, lang), True
                 except ToolError as exc:
@@ -891,17 +1158,30 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                     db.rollback()
                     result, ok = {"error": "Данные сейчас недоступны."}, False
                 used.append({"name": name, "ok": ok})
+                if asking and isinstance(result, dict) and result.get("category_items") is not None:
+                    # вопрос, а не изменение: подсказка «propose_bulk(…)» модели не нужна — она пересказывала её владельцу
+                    result["note"] = (f"Товара «{result.get('query')}» в каталоге нет. Похожие товары категории "
+                                      f"{result.get('category')} — в category_items.")
+                known_numbers |= _numbers_in(json.dumps(result, ensure_ascii=False, default=str))
                 # «Почему не узнал» (scan_problems) уже содержит и товары, и советы: живая qwen3-vl-4b (2026-11-17) после него
                 # «перепроверяла» его же данные find_products/products_missing и по-узбекски отвечала уже о другом.
                 answer_now = ok and getattr(assistant_tools.get_tool(name), "answer_next", False)
                 if answer_now and isinstance(result, dict):
                     ready = str(result.get("summary") or "")
-                if ok and asking and name == "find_products" and isinstance(result, dict) and (result.get("total") or 0) >= 1:
+                if ok and asking and name == "find_products" and isinstance(result, dict):
+                    ready = found_text(result, lang)    # модель зациклится — ответит программа по тем же данным
+                if ok and counted and isinstance(result, dict):
+                    # «Нечта товар бор?»: после сводки модель снова звала поиск, а потом писала «бор бор бор …» (2026-11-24)
+                    answer_now = True
+                    ready = _COUNT_TEXT.get(lang, _COUNT_TEXT["ru"]).format(n=result.get("active"), a=result.get("archived"))
+                if ok and asking and name == "find_products" and isinstance(result, dict) and (
+                        (result.get("total") or 0) >= 1 or result.get("parts")):
                     # «Pepsi bormi?»: товар найден — дальше только ответ. Живая qwen3-vl-4b (2026-11-23) после поиска шла в
                     # product_details и products_missing и отвечала о штрихкодах.
                     answer_now = True
                 priced = ok and asks_price and isinstance(result, dict) and (
-                    result.get("found") is True or (name == "find_products" and result.get("total") == 1))
+                    result.get("found") is True or (name == "find_products" and (result.get("total") == 1
+                                                                                 or bool(result.get("parts")))))
                 if priced:
                     answer_now = True       # цена найденного товара уже в данных — дальше только ответ (§10.16)
                 if ok and name == "scan_problems" and isinstance(result, dict):

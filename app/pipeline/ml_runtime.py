@@ -222,7 +222,10 @@ def build_runtime(settings, env: Mapping[str, str] | None = None, factories: Fac
             return value
         except Exception as exc:  # noqa: BLE001 — граница компонента: причина уходит в статус и лог, остальные компоненты продолжают
             comp.status, comp.error = (FAILED if required else SKIPPED), _describe(exc)
-            logger.error("Компонент «%s»: %s", name, comp.error, exc_info=True)
+            if required:
+                logger.error("Компонент «%s»: %s", name, comp.error, exc_info=True)
+            else:   # необязательный (детектор полок): без него программа работает — не пугать владельца ошибкой с трассировкой
+                logger.warning("Компонент «%s» пропущен (программа работает без него): %s", name, comp.error)
             return None
 
     # 1) Приватность: размытие лиц обязательно и ничем не заменяется

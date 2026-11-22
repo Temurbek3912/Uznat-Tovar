@@ -7,6 +7,7 @@ import types
 import numpy as np
 import pytest
 
+from app.db.models import ProductImage
 from app.pipeline import embedder as E
 from app.pipeline import matcher as M
 from app.pipeline.embedder import model_signature, model_version
@@ -78,10 +79,28 @@ def test_create_embedder_applies_the_configured_projection(tmp_path, monkeypatch
     assert isinstance(E.create_embedder(types.SimpleNamespace(name="siglip2-base", weights_path="", embedding_dim=3)), Fake)
 
 
-def test_projection_is_off_in_the_shipped_config():
+def test_projection_is_off_in_code_and_on_in_config_with_its_thresholds():
     from app.core.config import EmbedderConfig, get_settings
-    assert EmbedderConfig(name="x", weights_path="").projection_path == ""
-    assert get_settings().embedder.projection_path == ""      # включает владелец: сначала пересборка индекса
+    assert EmbedderConfig(name="x", weights_path="").projection_path == ""     # без строки в config.yaml — как раньше
+    s = get_settings()                                          # включена владельцем 2026-11-22 вместе с порогами 0.83 / 0.08
+    assert s.embedder.projection_path == "models/projection/siglip2-base.npz"
+    assert (s.matcher.match_threshold, s.matcher.margin_threshold) == (0.83, 0.08)
+    from app.core.config import resolve_project_path
+    shipped = Projection.load(resolve_project_path(s.embedder.projection_path))   # файл хранится вместе с программой
+    assert shipped.base_signature["name"] == E.SIGLIP2_HUB_MODEL and shipped.dim == s.embedder.embedding_dim
+    assert shipped.info["thresholds"] == [0.83, 0.08] and shipped.info["base_thresholds"] == [0.86, 0.04]
+
+
+def test_retraining_compares_with_thresholds_without_projection(tmp_path):
+    from ml.train_projection import base_thresholds
+    path = Projection(A, BASE, {"base_thresholds": [0.86, 0.04]}).save(tmp_path / "p.npz")
+
+    def settings(projection_path):
+        return types.SimpleNamespace(embedder=types.SimpleNamespace(projection_path=projection_path),
+                                     matcher=types.SimpleNamespace(match_threshold=0.83, margin_threshold=0.08))
+    assert base_thresholds(settings(str(path))) == (0.86, 0.04)     # проекция включена — сравнение с порогами без неё
+    assert base_thresholds(settings("")) == (0.83, 0.08)
+    assert base_thresholds(settings(str(tmp_path / "нет.npz"))) == (0.83, 0.08)
 
 
 def test_rebuild_with_projection_takes_model_vectors_from_cache_without_the_model(env):
@@ -89,18 +108,24 @@ def test_rebuild_with_projection_takes_model_vectors_from_cache_without_the_mode
     _add_with_photos(env, "p1", "KOLA", [(200, 10, 10), (190, 20, 10)])
     _add_with_photos(env, "p2", "FANTA", [(10, 10, 200)])
     raw = M.open_catalog_index(env.path, 3, SIG)
+    rows = {r.source_ref: r for r in env.db.query(ProductImage).all()}
+    gone = rows[raw._sources[1]]
+    env.registry.set_active(gone.id, False)                                        # выведено из эталонов
     projection = Projection(A, SIG)
     projected = ProjectedEmbedder(env.embedder, projection)
     calls = env.embedder.calls
     lines, kw = _script_kw(env, make_embedder=lambda settings: projected)
-    assert rebuild_index.main(["--apply", "--yes", "--compute-missing"], **kw) == 0, "\n".join(lines)
+    assert rebuild_index.main(["--apply", "--yes", "--compute-missing", "--allow-missing"], **kw) == 0, "\n".join(lines)
     assert env.embedder.calls == calls                                            # фото не пересчитывались
     new = M.open_catalog_index(env.path, 3, projection.signature())
     assert new.model == projection.signature()
     got = {(pid, src): vec for pid, src, vec in zip(new._ids, new._sources, new._vectors)}
+    assert len(got) == 2 and (gone.product_id, gone.source_ref) not in got
     for pid, src, vec in zip(raw._ids, raw._sources, raw._vectors):
-        assert np.allclose(got[pid, src], projection.apply(np.asarray(vec)[None])[0], atol=1e-6)
-    assert len(env.registry.cached_vectors(model_version(projection.signature()))) == 3    # и в кэше: вернуть — без пересчёта
+        if src != gone.source_ref:
+            assert np.allclose(got[pid, src], projection.apply(np.asarray(vec)[None])[0], atol=1e-6)
+    cached = env.registry.cached_vectors(model_version(projection.signature()))
+    assert len(cached) == 3 and gone.id in cached          # и выведенное фото: «Вернуть в эталоны» — из кэша, без пересчёта
     assert len(env.registry.cached_vectors(model_version(SIG))) == 3                       # векторы модели остались
 
 

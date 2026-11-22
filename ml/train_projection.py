@@ -278,6 +278,23 @@ def load_catalog_vectors(settings, make_session=None):
     return vectors, owners, front, signature, len(plan.missing)
 
 
+def base_thresholds(settings) -> tuple[float, float]:
+    """Пороги программы БЕЗ проекции — с ними сравнивается проекция. Проекция уже включена (в config.yaml её пороги) —
+    пороги без проекции берутся из её файла (base_thresholds записываются при обучении)."""
+    m = settings.matcher
+    path = getattr(settings.embedder, "projection_path", "") or ""
+    if path:
+        from app.core.config import resolve_project_path  # noqa: PLC0415
+        from app.pipeline.projection import Projection  # noqa: PLC0415
+        try:
+            saved = Projection.load(resolve_project_path(path)).info.get("base_thresholds")
+        except (OSError, ValueError, KeyError):
+            saved = None
+        if saved:
+            return float(saved[0]), float(saved[1])
+    return float(m.match_threshold), float(m.margin_threshold)
+
+
 def main(argv: Sequence[str] | None = None, settings=None, make_session=None, out=print) -> int:
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -305,8 +322,9 @@ def main(argv: Sequence[str] | None = None, settings=None, make_session=None, ou
         out(f"Слишком мало товаров для проверки (нужно хотя бы {2 * PARTS}).")
         return 2
     m = settings.matcher
+    now = base_thresholds(settings)
     out("Честная проверка (обучение на части товаров, замер на других):")
-    check = cross_check(vectors, owners, front, (m.match_threshold, m.margin_threshold), m.unknown_threshold, log=out)
+    check = cross_check(vectors, owners, front, now, m.unknown_threshold, log=out)
     report = render(check, len(owners), n_products, RECIPE)
     out(report)
     gain = check.after["top1"] - check.before["top1"]
@@ -318,6 +336,7 @@ def main(argv: Sequence[str] | None = None, settings=None, make_session=None, ou
     from app.pipeline.projection import Projection  # noqa: PLC0415
     matrix = train_matrix(vectors, owners)
     info = {"trained": date.today().isoformat(), "vectors": len(owners), "products": n_products, "recipe": RECIPE,
+            "base_thresholds": list(now),
             "thresholds": list(check.thresholds) if check.thresholds else None,
             "check": {k: dict(getattr(check, k)) for k in ("before", "after_now", "after")}}
     path = Projection(matrix, signature, info).save(a.out)

@@ -27,7 +27,9 @@ models/detector/*.pt
 *.part
 .claude/settings.local.json
 models/index/
-models/projection/
+models/projection/*
+!models/projection/siglip2-base.npz
+!models/projection/siglip2-base.md
 # Свой движок и модель «зрение + текст» (scripts/vision_engine.py): скачивает установщик
 models/vision/
 

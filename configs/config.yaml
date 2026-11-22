@@ -47,16 +47,17 @@ models:
     weights_path: ""
     embedding_dim: 768
     # Лёгкая проекция поверх векторов SigLIP 2 (замер 2026-11-22, docs/benchmark/projection_report_2026-11-22.md): верный товар
-    # первым 70 % вместо 63 % на товарах, которых проекция не видела. "" — выключена (как раньше). Включить (с согласия владельца):
-    # python -m ml.train_projection, затем здесь "models/projection/siglip2-base.npz", ниже match_threshold 0.83 и
-    # margin_threshold 0.08 (из отчёта обучения), затем python -m scripts.rebuild_index --apply --compute-missing (без пересчёта фото).
-    projection_path: ""
+    # первым 70 % вместо 63 % на товарах, которых проекция не видела. ВКЛЮЧЕНА с согласия владельца 2026-11-22; копия до
+    # включения — D:/uznat_tovar/backups-projection-2026-11-22. Файл обучается командой python -m ml.train_projection (переобучать,
+    # когда товаров заметно прибавится). Выключить: "" и пороги ниже 0.86 / 0.04, затем
+    # python -m scripts.rebuild_index --apply --compute-missing (векторы без проекции — в кэше базы, фото не пересчитываются).
+    projection_path: "models/projection/siglip2-base.npz"
   matcher:
     index_path: "models/index/catalog.faiss"
     top_k: 5
-    match_threshold: 0.86       # SigLIP 2 вместе с запасом 0.04 (замер 2026-11-21, ml/benchmark_similar.py); ниже -> "uncertain", в очередь на ручную проверку. Было 0.88 / 0.0
+    match_threshold: 0.83       # SigLIP 2 с проекцией, вместе с запасом 0.08 (ml/train_projection.py, 2026-11-22); ниже -> "uncertain", в очередь на ручную проверку. Без проекции — 0.86 / 0.04
     unknown_threshold: 0.70     # SigLIP 2; ниже -> "unknown" (товар не из каталога). У DINOv2 были 0.72 / 0.45
-    margin_threshold: 0.04      # второй товар ближе 0.04 к первому -> "uncertain" (похожие товары одной марки): уверенных ошибок втрое меньше. 0 = выключено (прежнее поведение)
+    margin_threshold: 0.08      # второй товар ближе 0.08 к первому -> "uncertain" (похожие товары одной марки). С проекцией векторы разных товаров дальше друг от друга — запас шире. 0 = выключено
 
 # «Назвать любой товар» (документ 07, §10.6): если товара нет в базе — назвать его и попросить обратиться к сотруднику.
 naming:

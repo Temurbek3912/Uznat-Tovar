@@ -107,15 +107,15 @@ class ProjectedEmbedder:
     def embed(self, crops) -> np.ndarray:
         return self.projection.apply(self.base.embed(crops))
 
-    def vectors_from_base(self, registry, image_ids) -> dict:
-        """Векторы с проекцией для фото, у которых в кэше базы есть вектор самой модели (без пересчёта фото)."""
+    def vectors_from_base(self, registry, image_ids=None) -> dict:
+        """Векторы с проекцией для фото, у которых в кэше базы есть вектор самой модели (без пересчёта фото); image_ids=None —
+        для всех таких фото."""
         from app.pipeline.embedder import model_version  # noqa: PLC0415
         version = model_version(self.projection.base_signature)
-        wanted = set(image_ids)
-        if version is None or not wanted:
+        if version is None:
             return {}
         cache = registry.cached_vectors(version)
-        ids = [i for i in wanted if i in cache]
+        ids = list(cache) if image_ids is None else [i for i in set(image_ids) if i in cache]
         if not ids:
             return {}
         projected = self.projection.apply(np.stack([cache[i] for i in ids]))

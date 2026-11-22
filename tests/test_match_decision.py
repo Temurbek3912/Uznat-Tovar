@@ -117,9 +117,12 @@ def test_margin_is_on_in_config_off_in_code_default_and_passed_by_the_worker():
     # Замер 2026-11-21 (ml/benchmark_similar.py, 1290 снимков каталога): при 0.88 без запаса каждый пятый ответ «найдено» —
     # другой товар (93 из 455), при 0.86 с запасом 0.04 — 30 из 429, а товар не из базы «узнаётся» реже (3,4 % против 8,2 %).
     # Запасное значение в коде — 0.0 (прежнее поведение, если в config.yaml строки нет).
+    # С 2026-11-22 пороги идут парой с проекцией (ml/train_projection.py): с ней — 0.83 / 0.08, без неё — 0.86 / 0.04.
     import yaml
-    cfg = yaml.safe_load((ROOT / "configs" / "config.yaml").read_text(encoding="utf-8"))["models"]["matcher"]
-    assert (cfg["match_threshold"], cfg["margin_threshold"]) == (0.86, 0.04)
+    models = yaml.safe_load((ROOT / "configs" / "config.yaml").read_text(encoding="utf-8"))["models"]
+    cfg = models["matcher"]
+    expected = (0.83, 0.08) if models["embedder"].get("projection_path") else (0.86, 0.04)
+    assert (cfg["match_threshold"], cfg["margin_threshold"]) == expected
     assert "margin_threshold: float = 0.0" in (ROOT / "app" / "core" / "config.py").read_text(encoding="utf-8")
     runtime = (ROOT / "app" / "pipeline" / "ml_runtime.py").read_text(encoding="utf-8")        # матчер строится в ml_runtime
     assert "margin_threshold=cfg.margin_threshold if cfg else 0.0" in runtime

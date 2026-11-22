@@ -55,3 +55,17 @@ def test_decision_grid_margin_turns_close_wrong_answer_into_doubt():
     text = bs.render(bs.summarize(queries, ITEMS, [False, True], sib, set()), [no_margin, margin], (0.88, 0.04), 0.70, 4, 4,
                      sib, ITEMS)
     assert "**(сейчас)**" in text and "Coca-Cola Classic 0,5 л — Coca-Cola Classic 1,5 л" in text
+
+
+def test_projected_index_is_flagged_as_not_honest(tmp_path):
+    # 2026-11-22: проекция обучена на фото каталога — замер «оставить одно» на её индексе завышен
+    import json
+    from ml.benchmark_similar import projected_index
+    path = tmp_path / "catalog.faiss"
+    model = {"name": "m", "weights": "w", "dim": 3, "normalization": "l2", "preprocess": "p/v1"}
+    (tmp_path / "catalog.faiss.ids.json").write_text(json.dumps({"manifest": {"model": model}}), encoding="utf-8")
+    assert not projected_index(str(path))
+    model["preprocess"] = "p/v1+proj-abc"
+    (tmp_path / "catalog.faiss.ids.json").write_text(json.dumps({"manifest": {"model": model}}), encoding="utf-8")
+    assert projected_index(str(path))
+    assert not projected_index(str(tmp_path / "нет.faiss"))

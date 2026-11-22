@@ -253,6 +253,25 @@ def _load_from_service(index_path: str):
     return vectors[keep], owners, front, items
 
 
+PROJECTION_WARNING = (
+    "> **ВНИМАНИЕ: индекс построен с проекцией (models.embedder.projection_path), а проекция обучена на этих же фото — цифры "
+    "ниже завышены и для оценки точности не годятся.** Честная проверка — `python -m ml.train_projection --check-only` "
+    "(замер на товарах, которых проекция не видела).")
+
+
+def projected_index(index_path: str) -> bool:
+    """Индекс с векторами после проекции (паспорт модели с отметкой +proj-, app/pipeline/projection.py)."""
+    import json  # noqa: PLC0415
+    from app.pipeline.projection import PROJ_MARK  # noqa: PLC0415
+    sidecar = Path(str(index_path) + ".ids.json")
+    try:
+        raw = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    model = ((raw.get("manifest") or {}).get("model") or raw.get("model")) if isinstance(raw, dict) else None
+    return isinstance(model, dict) and PROJ_MARK in str(model.get("preprocess", ""))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -279,6 +298,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     grid = decision_grid(queries, strangers, front, siblings, cfg.unknown_threshold)
     text = render(summary, grid, (cfg.match_threshold, cfg.margin_threshold), cfg.unknown_threshold, len(owners),
                   len(items), siblings, items)
+    if projected_index(index_path):
+        text = PROJECTION_WARNING + "\n\n" + text
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / "report.md").write_text(text, encoding="utf-8")

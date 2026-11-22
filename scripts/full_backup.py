@@ -14,6 +14,7 @@
         photos.list                ← «sha256<TAB>размер<TAB>путь» — фото, на которые ссылается эта копия
         db.dump                    ← pg_dump -Fc (согласованный снимок базы)
         index/                     ← файл индекса и его список id (производные данные: экономят время восстановления)
+        models/projection/         ← проекция поверх векторов модели, обученная на этом каталоге (если есть)
         config/                    ← configs/config.yaml, docker-compose.yml, requirements.txt (БЕЗ .env и паролей камер)
 
 Порядок (документ 09, §3): сначала дамп базы, затем фото (каждое новое — с проверкой хеша), затем индекс.
@@ -64,6 +65,9 @@ PHOTO_SUBDIR = "catalog-uploads"                 # фото каталога в�
 PHOTO_SUBDIRS = (PHOTO_SUBDIR, "catalog-imported")
 NEVER_COPY = {"identify-tmp"}                    # временные кадры покупателей — никогда
 CONFIG_FILES = ("configs/config.yaml", "docker-compose.yml", "requirements.txt")
+# Файлы моделей, которые обучены на каталоге этого магазина и в git не хранятся: без проекции (models.embedder.projection_path,
+# 2026-11-22) индекс, построенный с ней, после восстановления не открылся бы. Большие общие модели (SigLIP 2, YOLO) не копируются.
+MODEL_DIRS = ("models/projection",)
 CHUNK = 1024 * 1024
 KEEP_DAILY, KEEP_WEEKLY, KEEP_MONTHLY = 7, 4, 6
 # Срок ПОДКЛЮЧЕНИЯ утилит PostgreSQL к серверу (не срок всей копии: большой дамп может идти долго). Без него при недоступном
@@ -621,6 +625,17 @@ def _create_backup(layout: Layout, pg: PgTools, *, now: Callable[[], datetime], 
                 _copy_with_hash(src, dst)
                 config_files.append(rel)
 
+        # 5. обученные на каталоге файлы моделей (MODEL_DIRS)
+        model_files = []
+        for rel_dir in MODEL_DIRS:
+            root = layout.project / rel_dir
+            for src in sorted(p for p in root.rglob("*") if p.is_file()) if root.is_dir() else ():
+                rel = src.relative_to(layout.project).as_posix()
+                dst = work / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                _copy_with_hash(src, dst)
+                model_files.append(rel)
+
         manifest = {
             "format": FORMAT,
             "kind": "full",
@@ -632,6 +647,7 @@ def _create_backup(layout: Layout, pg: PgTools, *, now: Callable[[], datetime], 
                        "store": f"../{STORE_DIR}"},
             "index": index_info,
             "config": config_files,
+            "models": model_files,
             "excluded": sorted(NEVER_COPY) + [".env", "configs/agent.yaml", "cameras.yaml"],
             "warnings": warnings,
             "files": _files_with_hashes(work, skip=set()),
@@ -804,7 +820,8 @@ def _safe_relpath(rel: str) -> Path:
 
 
 def materialize_files(backup_dir: Path, store: Path, out_dir: Path, *, out: Callable[[str], None] = print) -> dict:
-    """Раскладывает файлы копии в НОВУЮ пустую папку: data/<путь фото>, models/index/…, config/…; каждое фото сверяется по хешу.
+    """Раскладывает файлы копии в НОВУЮ пустую папку: data/<путь фото>, models/index/…, models/projection/…, config/…; каждое
+    фото сверяется по хешу.
     Существующую непустую папку не трогает (ничего не перезаписывается)."""
     backup_dir, store, out_dir = Path(backup_dir), Path(store), Path(out_dir)
     problems = verify_backup(backup_dir, store)
@@ -820,7 +837,8 @@ def materialize_files(backup_dir: Path, store: Path, out_dir: Path, *, out: Call
         got, _ = _copy_with_hash(store_path(store, sha), target)
         if got != sha:
             raise BackupError(f"фото {target.relative_to(out_dir)} в хранилище копий повреждено (хеш не совпал)")
-    for sub, dest in (("index", out_dir / "models" / "index"), ("config", out_dir / "config")):
+    for sub, dest in (("index", out_dir / "models" / "index"), ("config", out_dir / "config"),
+                      ("models", out_dir / "models")):
         src_root = backup_dir / sub
         if src_root.is_dir():
             for src in sorted(p for p in src_root.rglob("*") if p.is_file()):

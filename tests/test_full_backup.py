@@ -612,6 +612,20 @@ def test_materialize_rebuilds_the_photo_tree_index_and_config_with_verified_hash
     assert not (out_dir / "data" / "identify-tmp").exists()
 
 
+def test_projection_trained_on_the_catalog_is_in_the_backup_and_restored(tmp_path):
+    # 2026-11-22: индекс с проекцией без её файла после восстановления не открылся бы (файл в git не хранится)
+    layout = _project(tmp_path)
+    (layout.project / "models/projection").mkdir(parents=True)
+    (layout.project / "models/projection/siglip2-base.npz").write_bytes(b"projection-bytes")
+    final = fb.create_backup(layout, FakePg(), now=_clock(datetime(2026, 11, 7, 21, 0)), out=lambda s: None)
+    manifest = json.loads((final / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["models"] == ["models/projection/siglip2-base.npz"] and manifest["verification"]["ok"] is True
+    out_dir = tmp_path / "restored"
+    fb.materialize_files(final, layout.store, out_dir, out=lambda s: None)
+    assert (out_dir / "models/projection/siglip2-base.npz").read_bytes() == b"projection-bytes"
+    assert (out_dir / "models/index/catalog.faiss").read_bytes() == b"faiss-bytes"
+
+
 def test_materialize_refuses_a_non_empty_folder_and_overwrites_nothing(tmp_path):
     layout = _project(tmp_path)
     final = fb.create_backup(layout, FakePg(), now=_clock(datetime(2026, 11, 7, 21, 0)), out=lambda s: None)

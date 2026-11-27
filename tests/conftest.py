@@ -26,6 +26,7 @@ def _no_vision_download(monkeypatch):
         raise OSError("tests: no downloads")
     monkeypatch.setattr(vision_engine, "http_download", refuse)
     monkeypatch.setattr(vision_engine, "lmstudio_copy", lambda part, home=None: None)
+    monkeypatch.setattr(vision_engine, "nvidia_info", lambda run=None: None)    # не качать CUDA-сборку из-за этой видеокарты
 
 
 @pytest.fixture(autouse=True, scope="module")

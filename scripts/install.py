@@ -14,7 +14,8 @@
      Пакеты не кэшируются на системном диске (--no-cache-dir).
   3. Файл настроек .env: ключи шифрования создаются, если пустые; заполненное не меняется.
   4. Модели распознавания — в папку программы models/hf (scripts/fetch_models.py), чтобы магазин работал без интернета. Если
-     компьютер тянет модель «зрение + текст» — ещё и её с её движком в models/vision (scripts/vision_engine.py, около 3,1 ГБ):
+     компьютер тянет модель «зрение + текст» — ещё и её с её движком в models/vision (scripts/vision_engine.py, около 3,1 ГБ;
+     с видеокартой NVIDIA — ещё ~0,6 ГБ быстрый движок CUDA, остальным хватает Vulkan):
      программа запускает её сама, LM Studio и другие программы не нужны.
   5. Ярлык «Узнать товар» на рабочем столе и автозапуск при входе в Windows (окно свёрнуто, без браузера). Запуск —
      облегчённый режим (start_lite.bat: без Docker, база в data/lite): он сам подстраивается под компьютер при каждом запуске.
@@ -126,7 +127,8 @@ def what_will_work(plan: "hardware.LitePlan", hw: "hardware.Hardware") -> list[s
              "вид любого товара («это напиток», «это обувь») — да"]
     if plan.vision:
         lines.append("название товара не из базы по фото — да (модель скачается сейчас, около "
-                     f"{vision_engine.DOWNLOAD_GB:.1f} ГБ; программа запускает её сама)")
+                     f"{vision_engine.DOWNLOAD_GB:.1f} ГБ, с NVIDIA ещё {vision_engine.CUDA_DOWNLOAD_GB:.1f} ГБ движка CUDA; "
+                     "программа запускает её сама)")
     else:
         lines.append("название товара не из базы по фото — нет (нужна видеокарта NVIDIA от 6 ГБ и память от 12 ГБ)")
     lines.append("распознавание по виду на " + ("видеокарте" if plan.device == "auto" and hw.gpu_name else "процессоре"))
@@ -345,7 +347,8 @@ def step_models(opts: Options, d: Deps, rep: Report, vision: bool = False) -> No
         rep.warnings.append("Модели не скачались (нет интернета?). Программа скачает их сама при первом запуске с интернетом.")
     if not vision:
         return
-    d.out(f"  модель «зрение + текст» и её движок (около {vision_engine.DOWNLOAD_GB:.1f} ГБ, в models/vision) — "
+    d.out(f"  модель «зрение + текст» и её движок (около {vision_engine.DOWNLOAD_GB:.1f} ГБ, с NVIDIA ещё "
+          f"{vision_engine.CUDA_DOWNLOAD_GB:.1f} ГБ, в models/vision) — "
           "при медленном интернете это долго; оборвётся — следующий запуск установки докачает:")
     if d.fetch_vision(opts.root, d.out):
         rep.done.append("модель «зрение + текст» (models/vision): название товара не из базы по фото")

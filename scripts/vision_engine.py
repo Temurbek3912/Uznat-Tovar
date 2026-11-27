@@ -4,8 +4,9 @@
     python -m scripts.vision_engine            # скачать движок и модель в models/vision (установщик и «Обновить.bat» делают это сами)
     python -m scripts.vision_engine --check    # всё ли на месте (код 0 — да)
 
-Что это. Движок — llama.cpp (`llama-server.exe`, сборка Vulkan: одна сборка для видеокарт NVIDIA, AMD, Intel, без CUDA, 37,5 МБ
-архив; без видеокарты считает на процессоре). Модель — Qwen3-VL-4B (та же, что была в LM Studio: те же файлы GGUF, 2,5 ГБ + 0,8 ГБ).
+Что это. Движок — llama.cpp (`llama-server.exe`), две сборки одной версии: CUDA — для видеокарт NVIDIA (в 1,6 раза быстрее,
+документ 11; архивы ~589 МБ, качаются только там, где есть NVIDIA с драйвером от 580) и Vulkan — для всех остальных и запасная
+(37,5 МБ). Выбор при запуске (pick_engine): CUDA видит видеокарту → CUDA; нет — Vulkan; нет видеокарты — процессор. Модель — Qwen3-VL-4B (та же, что была в LM Studio: те же файлы GGUF, 2,5 ГБ + 0,8 ГБ).
 Движок отвечает на том же OpenAI-совместимом входе, что LM Studio (app/services/product_namer.py не меняется), только на своём
 свободном порту и только на 127.0.0.1 — кадр с этого компьютера не уходит.
 
@@ -49,13 +50,24 @@ class Part:
 ENGINE = Part(f"llama-{ENGINE_TAG}-bin-win-vulkan-x64.zip",
               f"https://github.com/ggml-org/llama.cpp/releases/download/{ENGINE_TAG}/llama-{ENGINE_TAG}-bin-win-vulkan-x64.zip",
               "d77921a0084e2d326cd78d0a1c9a166958e2678a370c4ff0504c9bf8bbfede56", 37515510)
+# CUDA 13.4: в ней есть Blackwell (RTX 50xx, нужна CUDA от 12.8 — сборка 12.4 её не знает); видеокарты от RTX 20xx / GTX 16xx
+# (вычислительная версия от 7.5), драйвер от 580. Старее — Vulkan.
+_GH = f"https://github.com/ggml-org/llama.cpp/releases/download/{ENGINE_TAG}/"
+CUDA_ENGINE = Part(f"llama-{ENGINE_TAG}-bin-win-cuda-13.4-x64.zip", _GH + f"llama-{ENGINE_TAG}-bin-win-cuda-13.4-x64.zip",
+                   "3eb6c22fb0aa53085c5d26d62f83c631b16defcce513590b76fff20cb9901049", 165156551)
+CUDA_RT = Part("cudart-llama-bin-win-cuda-13.4-x64.zip", _GH + "cudart-llama-bin-win-cuda-13.4-x64.zip",
+               "738f8c251ac22b70c3ae6f83a10cf222725df0395246a2cf58f32bdb85fbe668", 423535356)
+CUDA_DIR_NAME = f"llama-{ENGINE_TAG}-cuda"
+CUDA_MIN_DRIVER = 580
+CUDA_MIN_CC = 7.5
+CUDA_DOWNLOAD_GB = (CUDA_ENGINE.size + CUDA_RT.size) / 2**30
 _HF = "https://huggingface.co/lmstudio-community/Qwen3-VL-4B-Instruct-GGUF/resolve/main/"
 MODEL = Part("Qwen3-VL-4B-Instruct-Q4_K_M.gguf", _HF + "Qwen3-VL-4B-Instruct-Q4_K_M.gguf",
              "aa18af1fdda59081005319536eebff9406d556ce8a753d9a3aa81cf635eadde7", 2497281568)
 MMPROJ = Part("mmproj-Qwen3-VL-4B-Instruct-F16.gguf", _HF + "mmproj-Qwen3-VL-4B-Instruct-F16.gguf",
               "1b70e983d69dd424eb16e0ed2104d0b2a58bf01d866657f4de5da6c963620f19", 836180160)
 DOWNLOAD_GB = (ENGINE.size + MODEL.size + MMPROJ.size) / 2**30      # ≈ 3,1 ГБ; на диске ≈ 3,3 ГБ (движок распакован)
-DISK_GB = 4.0
+DISK_GB = 5.0                   # + распакованный движок CUDA (~1 ГБ) на компьютере с NVIDIA
 
 
 def vision_dir(root: Path) -> Path:
@@ -64,6 +76,26 @@ def vision_dir(root: Path) -> Path:
 
 def engine_exe(root: Path) -> Path:
     return vision_dir(root) / ENGINE_DIR_NAME / "llama-server.exe"
+
+
+def cuda_exe(root: Path) -> Path:
+    return vision_dir(root) / CUDA_DIR_NAME / "llama-server.exe"
+
+
+def nvidia_info(run=subprocess.run) -> tuple[int, float] | None:
+    """(старший номер драйвера, вычислительная версия) первой видеокарты NVIDIA или None (нет NVIDIA / нет nvidia-smi)."""
+    try:
+        res = run(["nvidia-smi", "--query-gpu=driver_version,compute_cap", "--format=csv,noheader"],
+                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+        driver, cc = (res.stdout or "").splitlines()[0].split(",")[:2]
+        return int(driver.strip().split(".")[0]), float(cc.strip())
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        return None
+
+
+def wants_cuda(info: tuple[int, float] | None) -> bool:
+    """Нужна ли сборка CUDA на этом компьютере (иначе её 589 МБ не качаем)."""
+    return info is not None and info[0] >= CUDA_MIN_DRIVER and info[1] >= CUDA_MIN_CC
 
 
 def model_path(root: Path, part: Part) -> Path:
@@ -159,29 +191,51 @@ def fetch_part(part: Part, dest: Path, out: Callable[[str], None], *, download=N
     return True
 
 
-def unpack_engine(zip_path: Path, target: Path) -> None:
-    """Только сам движок: llama-server.exe и его библиотеки (остальные программы архива не нужны)."""
+def unpack_engine(zip_path: Path | list[Path], target: Path) -> None:
+    """Только сам движок: llama-server.exe и его библиотеки (остальные программы архива не нужны). Несколько архивов —
+    в одну папку (CUDA: движок + библиотеки CUDA)."""
     tmp = target.with_name(target.name + ".tmp")
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
-    with zipfile.ZipFile(zip_path) as z:
-        for info in z.infolist():
-            name = Path(info.filename).name
-            if info.is_dir() or not (name == "llama-server.exe" or name.lower().endswith(".dll") or name.startswith("LICENSE")):
-                continue
-            with z.open(info) as src, open(tmp / name, "wb") as dst:
-                shutil.copyfileobj(src, dst)
+    for zp in (zip_path if isinstance(zip_path, list) else [zip_path]):
+        with zipfile.ZipFile(zp) as z:
+            for info in z.infolist():
+                name = Path(info.filename).name
+                if info.is_dir() or not (name == "llama-server.exe" or name.lower().endswith(".dll")
+                                         or name.startswith("LICENSE")):
+                    continue
+                with z.open(info) as src, open(tmp / name, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
     shutil.rmtree(target, ignore_errors=True)
     os.replace(tmp, target)
 
 
+def fetch_cuda(root: Path, out: Callable[[str], None], *, download=None) -> bool:
+    """Сборка CUDA в models/vision/llama-b…-cuda. Не скачалась — не беда: работает Vulkan, следующий запуск докачает."""
+    if cuda_exe(root).is_file():
+        return True
+    vdir = vision_dir(root)
+    out(f"  движок для видеокарты NVIDIA (CUDA, около {CUDA_DOWNLOAD_GB * 1024:.0f} МБ; быстрее в 1,6 раза):")
+    zips = [vdir / p.name for p in (CUDA_ENGINE, CUDA_RT)]
+    if not all([fetch_part(p, z, out, download=download) for p, z in zip((CUDA_ENGINE, CUDA_RT), zips)]):
+        out("    пока работает запасной движок (Vulkan); при следующей установке или «Обновить.bat» докачается")
+        return False
+    unpack_engine(zips, vdir / CUDA_DIR_NAME)
+    for z in zips:
+        z.unlink(missing_ok=True)
+    return True
+
+
 def fetch(root: Path, out: Callable[[str], None] = print, *, download=None, home: Path | None = None,
-          platform: str = sys.platform) -> bool:
-    """Движок и модель в models/vision. True — всё на месте."""
+          platform: str = sys.platform, cuda: bool | None = None) -> bool:
+    """Движок и модель в models/vision, а на компьютере с NVIDIA — ещё и сборка CUDA (cuda=None — определить по nvidia-smi).
+    True — всё нужное для работы на месте (без CUDA тоже: тогда работает Vulkan)."""
     if not platform.startswith("win"):
         out("  свой движок модели «зрение + текст» есть только для Windows — пропускаю")
         return False
-    if is_installed(root):
+    if cuda is None:
+        cuda = wants_cuda(nvidia_info())
+    if is_installed(root) and (not cuda or cuda_exe(root).is_file()):
         out("  движок и модель «зрение + текст» уже на месте")
         return True
     vdir = vision_dir(root)
@@ -195,15 +249,17 @@ def fetch(root: Path, out: Callable[[str], None] = print, *, download=None, home
             ok = False
     for part in (MODEL, MMPROJ):
         ok = fetch_part(part, model_path(root, part), out, download=download, local=lmstudio_copy(part, home)) and ok
+    if cuda:
+        fetch_cuda(root, out, download=download)
     for old in vdir.glob("llama-b*"):          # прежние версии движка после обновления
-        if old.is_dir() and old.name != ENGINE_DIR_NAME:
+        if old.is_dir() and old.name not in (ENGINE_DIR_NAME, CUDA_DIR_NAME):
             shutil.rmtree(old, ignore_errors=True)
     return ok and is_installed(root)
 
 
-def pick_device(exe: Path, gpu_name: str | None, run=subprocess.run) -> str:
+def pick_device(exe: Path, gpu_name: str | None, run=subprocess.run, kind: str = "Vulkan") -> str:
     """Устройство для -dev: видеокарта с этим названием (на ноутбуке первой в списке стоит встроенная Intel — она медленнее и
-    отнимает общую память) или "none" (только процессор)."""
+    отнимает общую память) или "none" (только процессор). kind — "Vulkan" или "CUDA" (какая сборка спрашивается)."""
     if not gpu_name:
         return "none"
     try:
@@ -213,14 +269,25 @@ def pick_device(exe: Path, gpu_name: str | None, run=subprocess.run) -> str:
         return "none"
     for line in text.splitlines():
         head, _, rest = line.strip().partition(":")
-        if head.startswith("Vulkan") and gpu_name.lower() in rest.lower():
+        if head.startswith(kind) and gpu_name.lower() in rest.lower():
             return head
     return "none"
 
 
-def server_argv(root: Path, port: int, device: str) -> list[str]:
+def pick_engine(root: Path, gpu_name: str | None, run=subprocess.run) -> tuple[Path, str]:
+    """Какой сборкой и на каком устройстве считать: (llama-server.exe, -dev).
+    1) есть сборка CUDA и она видит эту видеокарту → CUDA (не видит: драйвер стар, библиотеки не грузятся — идём дальше);
+    2) сборка Vulkan видит видеокарту → Vulkan; 3) иначе процессор."""
+    if gpu_name and cuda_exe(root).is_file():
+        dev = pick_device(cuda_exe(root), gpu_name, run, kind="CUDA")
+        if dev != "none":
+            return cuda_exe(root), dev
+    return engine_exe(root), pick_device(engine_exe(root), gpu_name, run)
+
+
+def server_argv(root: Path, port: int, device: str, exe: Path | None = None) -> list[str]:
     gpu = device != "none"
-    return [str(engine_exe(root)), "-m", str(model_path(root, MODEL)), "--mmproj", str(model_path(root, MMPROJ)),
+    return [str(exe or engine_exe(root)), "-m", str(model_path(root, MODEL)), "--mmproj", str(model_path(root, MMPROJ)),
             "--host", "127.0.0.1", "--port", str(port), "--alias", MODEL_NAME, "-c", str(CTX_SIZE), "-np", "1",
             "-dev", device, "-ngl", "99" if gpu else "0", *([] if gpu else ["--no-mmproj-offload"]), "--no-ui"]
 

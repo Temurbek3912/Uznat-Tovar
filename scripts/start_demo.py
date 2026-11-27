@@ -204,11 +204,14 @@ def builtin_vision(d: "Deps", settings, gpu_name: str | None) -> tuple[Service, 
     None — модель выключена, указан другой компьютер или движок не установлен (тогда — LM Studio, если она есть)."""
     if not _local_vision_url(settings) or not vision_engine.is_installed(d.root):
         return None
-    device = d.pick_device(vision_engine.engine_exe(d.root), gpu_name)
+    exe, device = d.pick_engine(d.root, gpu_name)
     port = d.free_port()
-    d.out("Модель «зрение + текст»: свой движок программы, " + ("на видеокарте" if device != "none" else "на процессоре")
-          + " (первый ответ — после загрузки модели, около 10 с; журнал logs/vision.log).")
-    return Service("vision", vision_engine.server_argv(d.root, port, device), optional=True), f"http://127.0.0.1:{port}/v1"
+    where = ("на видеокарте (CUDA)" if device.startswith("CUDA") else "на видеокарте (Vulkan)" if device != "none"
+             else "на процессоре")
+    d.out(f"Модель «зрение + текст»: свой движок программы, {where}"
+          " (первый ответ — после загрузки модели, около 10 с; журнал logs/vision.log).")
+    return (Service("vision", vision_engine.server_argv(d.root, port, device, exe), optional=True),
+            f"http://127.0.0.1:{port}/v1")
 
 
 def vision_service(d: "Deps", settings, gpu_name: str | None, child_env: dict) -> Service | None:
@@ -295,7 +298,7 @@ class Deps:
     render_qr: Callable[[str], str | None] = phone_url.render_qr
     worker_status: Callable[[Path], dict | None] = _worker_status
     find_lms: Callable = _find_lms
-    pick_device: Callable = vision_engine.pick_device
+    pick_engine: Callable = vision_engine.pick_engine
     free_port: Callable[[], int] = _free_port
     tie_child: Callable = child_tie.tie_to_this_process
     probe_hw: Callable[[], object] = _probe_hw

@@ -3208,6 +3208,19 @@ OAuth-клиент в Google Cloud и вход через браузер с хр
   NVIDIA и хорошим интернетом. Отчёт — `docs/benchmark/assistant_report_2026-11-24.md`, журналы —
   `D:\uznat_tovar\assistant-2026-11-24\naming_cuda.log`, `naming_vk.log`.
 
+### 2026-11-27. Движок «зрение + текст» на CUDA там, где есть NVIDIA; Vulkan — запасной
+
+* **Владелец:** перейти на CUDA (согласился скачать ~589 МБ). Решение от 2026-11-24 пересмотрено.
+* Сборка llama.cpp **b12022 CUDA 13.4** (та же версия, что Vulkan; в CUDA 12.4 нет Blackwell / RTX 50xx — нужна от 12.8):
+  `llama-b12022-bin-win-cuda-13.4-x64.zip` (157 МБ) + `cudart-llama-bin-win-cuda-13.4-x64.zip` (404 МБ), SHA-256 закреплены
+  (из официального релиза GitHub), распакованы в `models/vision/llama-b12022-cuda` (720 МБ на диске).
+* `scripts/vision_engine.py`: `nvidia_info`/`wants_cuda` (nvidia-smi: драйвер от 580, вычислительная версия от 7.5) — только
+  тогда установщик и «Обновить.bat» качают CUDA (`fetch_cuda`, докачка и проверка как у остальных файлов; не скачалась —
+  работает Vulkan, предупреждение). `pick_engine`: CUDA-сборка видит эту видеокарту (`--list-devices` → `CUDA0`) → CUDA;
+  не видит или не запускается → Vulkan на NVIDIA (не встроенная Intel); иначе процессор. `start_demo` пишет, что выбрано.
+* Тесты: `tests/test_vision_engine.py` (+5: выбор CUDA/Vulkan/процессор, условия CUDA, скачивание CUDA только на NVIDIA,
+  обрыв CUDA не мешает Vulkan, запуск на CUDA). В `conftest` видеокарта этого компьютера на тесты не влияет.
+
 ## 5. Противоречия и открытые вопросы
 
 | № | Что | Как решено или что нужно |

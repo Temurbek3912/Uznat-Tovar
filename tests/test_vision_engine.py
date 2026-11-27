@@ -15,6 +15,7 @@ from scripts import vision_engine as ve
 from tests.test_start_demo import Env
 
 REAL_DOWNLOAD = ve.http_download          # до запрета скачивания в conftest: проверяется с подменённым urlopen
+REAL_NVIDIA_INFO = ve.nvidia_info      # то же: в conftest подменён (видеокарта этого компьютера не влияет на тесты)
 
 
 def _part(name: str, data: bytes) -> ve.Part:
@@ -133,7 +134,7 @@ def test_model_files_from_lm_studio_are_copied_instead_of_downloaded(tmp_path, s
     (lm / "mmproj.gguf").write_bytes(small.blobs["mmproj.gguf"])
     lines = []
     root = tmp_path / "app"
-    assert ve.fetch(root, lines.append, download=small.download, home=home, platform="win32")
+    assert ve.fetch(root, lines.append, download=small.download, home=home, platform="win32", cuda=False)
     assert small.calls == ["engine.zip"] and any("LM Studio" in ln for ln in lines)
     assert (lm / "model.gguf").is_file()                                      # у LM Studio ничего не забрали
 
@@ -183,7 +184,7 @@ def _vision(env):
 def test_lite_mode_starts_the_own_engine_and_points_the_program_at_it(tmp_path, small):
     _installed(tmp_path, small)
     tied = []
-    env = Env(tmp_path, settings=VISION_SETTINGS, pick_device=lambda exe, gpu: "Vulkan1", free_port=lambda: 51234,
+    env = Env(tmp_path, settings=VISION_SETTINGS, pick_engine=lambda root, gpu: (ve.engine_exe(root), "Vulkan1"), free_port=lambda: 51234,
               find_lms=lambda which: pytest.fail("LM Studio не нужна"), tie_child=tied.append)
     assert sd.run(sd.Options(no_browser=True, lite=True), env.deps) == 0
     (argv, kw), = _vision(env)
@@ -191,14 +192,14 @@ def test_lite_mode_starts_the_own_engine_and_points_the_program_at_it(tmp_path, 
     assert "Vulkan1" in argv and "51234" in argv and (tmp_path / "logs" / "vision.log").exists()
     api_env = env.started[0][2]["env"]
     assert api_env["NAMING_VISION_URL"] == "http://127.0.0.1:51234/v1"
-    assert "свой движок программы, на видеокарте" in env.text
+    assert "свой движок программы, на видеокарте (Vulkan)" in env.text
     assert "terminate" in env.procs["worker"].events or env.procs["worker"].returncode is not None   # остановлен с программой
 
 
 def test_lite_mode_on_a_weak_computer_does_not_start_the_engine(tmp_path, small):
     _installed(tmp_path, small)
     env = Env(tmp_path, settings=VISION_SETTINGS, probe_hw=lambda: hardware.Hardware(ram_gb=8, cores=4),
-              pick_device=lambda exe, gpu: pytest.fail("не запускать"))
+              pick_engine=lambda root, gpu: pytest.fail("не запускать"))
     assert sd.run(sd.Options(no_browser=True, lite=True), env.deps) == 0
     assert _vision(env) == [] and env.started[0][2]["env"]["NAMING_VISION_URL"] == ""
 
@@ -210,14 +211,14 @@ def test_without_the_engine_lm_studio_is_still_used_and_a_remote_model_is_left_a
 
     _installed(tmp_path, small)
     remote = NS(**{**vars(VISION_SETTINGS), "naming_vision_url": "https://example.org/v1"})
-    env = Env(tmp_path, settings=remote, pick_device=lambda exe, gpu: pytest.fail("не запускать"))
+    env = Env(tmp_path, settings=remote, pick_engine=lambda root, gpu: pytest.fail("не запускать"))
     assert sd.run(sd.Options(no_browser=True, lite=True), env.deps) == 0
     assert _vision(env) == []
 
 
 def test_full_mode_starts_the_own_engine_next_to_api_and_worker(tmp_path, small):
     _installed(tmp_path, small)
-    env = Env(tmp_path, settings=VISION_SETTINGS, pick_device=lambda exe, gpu: "Vulkan0", free_port=lambda: 51235)
+    env = Env(tmp_path, settings=VISION_SETTINGS, pick_engine=lambda root, gpu: (ve.engine_exe(root), "Vulkan0"), free_port=lambda: 51235)
     assert sd.run(sd.Options(no_browser=True), env.deps) == 0
     assert len(_vision(env)) == 1
     assert all(kw["env"]["NAMING_VISION_URL"] == "http://127.0.0.1:51235/v1" for _, _, kw in env.started)
@@ -254,3 +255,107 @@ def test_the_engine_dies_with_the_program_even_after_a_crash():
 
 def test_not_windows_is_not_tied():
     assert ve.tie_to_this_process(NS(pid=1), platform="linux") is False
+
+
+# ----------------------------------------------------------------------- CUDA для NVIDIA, Vulkan запасной, процессор
+
+def _fake_exe(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"exe")
+    return path
+
+
+def _lister(cuda: str = "", vulkan: str = ""):
+    """llama-server --list-devices: свой список у каждой сборки."""
+    def run(argv, **kw):
+        return NS(stdout=cuda if ve.CUDA_DIR_NAME in argv[0] else vulkan, stderr="", returncode=0)
+    return run
+
+
+RTX = "NVIDIA GeForce RTX 5060 Laptop GPU"
+VULKAN_LIST = f"Available devices:\n  Vulkan0: Intel(R) Graphics (18347 MiB)\n  Vulkan1: {RTX} (7899 MiB)\n"
+CUDA_LIST = f"Available devices:\n  CUDA0: {RTX} (8150 MiB, 7000 MiB free)\n"
+
+
+def test_engine_choice_cuda_then_vulkan_then_cpu(tmp_path):
+    _fake_exe(ve.engine_exe(tmp_path))
+    # нет CUDA-сборки — Vulkan на NVIDIA (не встроенная Intel)
+    assert ve.pick_engine(tmp_path, RTX, run=_lister(vulkan=VULKAN_LIST)) == (ve.engine_exe(tmp_path), "Vulkan1")
+    _fake_exe(ve.cuda_exe(tmp_path))
+    # есть CUDA-сборка и она видит видеокарту — CUDA
+    assert ve.pick_engine(tmp_path, RTX, run=_lister(CUDA_LIST, VULKAN_LIST)) == (ve.cuda_exe(tmp_path), "CUDA0")
+    # CUDA не запустилась (старый драйвер, библиотеки не грузятся: устройств нет) — запасной Vulkan
+    assert ve.pick_engine(tmp_path, RTX, run=_lister("", VULKAN_LIST)) == (ve.engine_exe(tmp_path), "Vulkan1")
+
+    def cuda_crashes(argv, **kw):
+        if ve.CUDA_DIR_NAME in argv[0]:
+            raise OSError("не запускается")
+        return NS(stdout=VULKAN_LIST, stderr="", returncode=0)
+    assert ve.pick_engine(tmp_path, RTX, run=cuda_crashes) == (ve.engine_exe(tmp_path), "Vulkan1")
+    # видеокарты нет — процессор (CUDA даже не спрашиваем)
+    assert ve.pick_engine(tmp_path, None, run=lambda a, **k: pytest.fail("не спрашивать")) == (ve.engine_exe(tmp_path), "none")
+    # видеокарта есть, но ни одна сборка её не видит — процессор
+    assert ve.pick_engine(tmp_path, RTX, run=_lister()) == (ve.engine_exe(tmp_path), "none")
+    argv = ve.server_argv(tmp_path, 51234, "CUDA0", ve.cuda_exe(tmp_path))
+    assert argv[0] == str(ve.cuda_exe(tmp_path)) and argv[argv.index("-dev") + 1] == "CUDA0"
+
+
+def test_cuda_build_only_for_nvidia_with_a_new_enough_driver():
+    smi = lambda out: (lambda argv, **kw: NS(stdout=out, stderr="", returncode=0))
+    assert REAL_NVIDIA_INFO(smi("621.24, 12.0" + chr(10))) == (621, 12.0)
+    assert ve.wants_cuda((621, 12.0)) and ve.wants_cuda((580, 7.5))
+    assert not ve.wants_cuda((552, 8.6))          # драйвер старше 580 — CUDA 13 не пойдёт
+    assert not ve.wants_cuda((621, 6.1))          # GTX 10xx — CUDA 13 её не поддерживает
+    assert not ve.wants_cuda(None)
+
+    def missing(argv, **kw):
+        raise FileNotFoundError("nvidia-smi")
+    assert ve.nvidia_info(missing) is None and REAL_NVIDIA_INFO(smi("")) is None
+
+
+def _cuda_zip(name: str) -> bytes:
+    import io
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr(name, b"x")
+        if name == "llama-server.exe":
+            z.writestr("ggml-cuda.dll", b"x")
+    return buf.getvalue()
+
+
+def test_installer_on_nvidia_also_fetches_the_cuda_build(tmp_path, small, monkeypatch):
+    small.blobs.update({"cuda.zip": _cuda_zip("llama-server.exe"), "cudart.zip": _cuda_zip("cublas64_13.dll")})
+    monkeypatch.setattr(ve, "CUDA_ENGINE", _part("cuda.zip", small.blobs["cuda.zip"]))
+    monkeypatch.setattr(ve, "CUDA_RT", _part("cudart.zip", small.blobs["cudart.zip"]))
+    assert ve.fetch(tmp_path, lambda s: None, download=small.download, home=tmp_path / "nohome", platform="win32", cuda=False)
+    assert not ve.cuda_exe(tmp_path).exists() and "cuda.zip" not in small.calls       # без NVIDIA — не качаем
+    # NVIDIA: докачивается только CUDA-сборка, в свою папку, рядом с Vulkan (её не удаляет чистка старых версий)
+    assert ve.fetch(tmp_path, lambda s: None, download=small.download, home=tmp_path / "nohome", platform="win32", cuda=True)
+    assert sorted(p.name for p in ve.cuda_exe(tmp_path).parent.iterdir()) == ["cublas64_13.dll", "ggml-cuda.dll",
+                                                                            "llama-server.exe"]
+    assert ve.engine_exe(tmp_path).is_file() and not list(ve.vision_dir(tmp_path).glob("*.zip"))
+    small.calls.clear()
+    assert ve.fetch(tmp_path, lambda s: None, download=small.download, platform="win32", cuda=True) and small.calls == []
+
+
+def test_cuda_download_failure_leaves_vulkan_working(tmp_path, small, monkeypatch):
+    monkeypatch.setattr(ve, "CUDA_ENGINE", _part("cuda.zip", b"z"))
+    monkeypatch.setattr(ve, "CUDA_RT", _part("cudart.zip", b"z"))
+
+    def no_cuda(url, part_file, total, tick):
+        if "cuda" in url:
+            raise OSError("обрыв")
+        small.download(url, part_file, total, tick)
+    lines = []
+    assert ve.fetch(tmp_path, lines.append, download=no_cuda, home=tmp_path / "nohome", platform="win32", cuda=True)
+    assert ve.is_installed(tmp_path) and not ve.cuda_exe(tmp_path).exists()
+    assert any("Vulkan" in line for line in lines)
+
+
+def test_start_demo_says_it_runs_on_cuda(tmp_path, small):
+    _installed(tmp_path, small)
+    cuda = _fake_exe(ve.cuda_exe(tmp_path))
+    env = Env(tmp_path, settings=VISION_SETTINGS, pick_engine=lambda root, gpu: (cuda, "CUDA0"), free_port=lambda: 51236)
+    assert sd.run(sd.Options(no_browser=True, lite=True), env.deps) == 0
+    (argv, _), = _vision(env)
+    assert argv[0] == str(cuda) and "CUDA0" in argv and "на видеокарте (CUDA)" in env.text

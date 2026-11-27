@@ -187,11 +187,28 @@ def find_products(db, args: dict) -> dict:
     return out
 
 
+def categories_in(text: str, categories) -> list[str]:
+    """Категории каталога, названные в тексте: прямо («Сладости») или словом на другом языке («shirinliklar»,
+    app/services/category_words.py). «Без категории» не считается."""
+    from app.services import category_words  # noqa: PLC0415
+    from app.services.catalog_upload import DEFAULT_CATEGORY  # noqa: PLC0415
+    cats = sorted({c for c in categories if c and c != DEFAULT_CATEGORY})
+    said = category_words.latin(text)
+    direct = [c for c in cats if category_words.latin(c) in said]
+    return sorted(set(direct) | set(category_words.matching_categories(text, cats)))[:5]
+
+
 def products_missing(db, args: dict) -> dict:
     field = _text(args, "field").lower()
     if field not in MISSING_FIELDS:
         raise ToolError("Аргумент field: одно из " + ", ".join(MISSING_FIELDS) + ".")
     products = _active(db).order_by(Product.sku).all()
+    asked = _text(args, "category")
+    cats: list[str] = []
+    if asked and field != "category":
+        # «Какие сладости без цены?» — только товары названной категории (2026-11-27: помощник называл и не сладости).
+        cats = categories_in(asked, [p.category for p in products])
+        products = [p for p in products if p.category in cats]
     ids = [p.id for p in products]
     photos, codes = _photo_counts(db, ids), _codes_of(db, ids)
     test = {
@@ -206,13 +223,16 @@ def products_missing(db, args: dict) -> dict:
     # Готовая фраза с числом: живая qwen3-vl-4b (2026-11-17) на «Сколько товаров без штрихкода?» брала первый товар списка,
     # смотрела его карточку и предлагала ему выдуманный штрихкод — вместо ответа числом.
     summary = f"Товаров {MISSING_LABELS[field]}: {len(found)} из {len(products)}."
+    if asked and field != "category":
+        summary = (f"В категории {', '.join(cats)} товаров {MISSING_LABELS[field]}: {len(found)} из {len(products)}." if cats
+                   else f"Категории «{_cut(asked)}» в каталоге нет.")
     if len(found) > limit:
         summary += f" Ниже первые {limit}; весь список — на странице «Товары»."
     if field in ("category", "brand"):
         # «Убери в архив все газированные напитки» модель уводила сюда и отвечала «нет товаров без категории» (2026-11-17)
         summary += (f" Это товары БЕЗ {'категории' if field == 'category' else 'бренда'}. Если владелец просит изменить все "
                     f"товары какой-то {'категории' if field == 'category' else 'бренда'} — propose_bulk(where={field}, …).")
-    return {"field": field, "total": len(found), "summary": summary,
+    return {"field": field, "total": len(found), "summary": summary, **({"category": cats} if asked else {}),
             "items": [{"sku": p.sku, "name": _cut(p.name)} for p in found[:limit]]}
 
 
@@ -548,7 +568,7 @@ TOOLS: tuple[Tool, ...] = (
          {"query": "", "limit": "до 20"}, find_products, required=("query",)),
     Tool("products_missing", Permission.CATALOG_READ,
          "Товары без фото, штрихкода, цены, бренда или категории.",
-         {"field": "|".join(MISSING_FIELDS), "limit": "до 20"}, products_missing,
+         {"field": "|".join(MISSING_FIELDS), "category": "", "limit": "до 20"}, products_missing,
          required=("field",), choices={"field": list(MISSING_FIELDS)}, answer_next=True),
     Tool("similar_names", Permission.CATALOG_READ,
          "Дубли: товары с одинаковым названием.",

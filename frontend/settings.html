@@ -104,6 +104,22 @@
           </div>
           <p class="hint" data-i18n="bkp.restore_hint">Вернуть данные из копии: закройте программу и запустите «Восстановить из копии.bat» в папке программы.</p>
         </div>
+        <div class="settings__group" id="geminiGroup" hidden>
+          <h2 class="ticket__title" data-i18n="gem.title">Глобальный ИИ (Google Gemini)</h2>
+          <p class="hint" data-i18n="gem.hint">Необязательно. Помощник и распознавание спрашивают одновременно свою модель и Gemini и берут лучший ответ. Без интернета или без ключа всё работает на своей модели.</p>
+          <p id="gemState" role="status"></p>
+          <p class="hint" id="gemUsage" hidden></p>
+          <form class="settings__form" id="gemKeyForm" novalidate>
+            <label class="field"><span class="field__label" data-i18n="gem.key_label">Ключ Gemini (бесплатно на aistudio.google.com → Get API key)</span><input class="input" id="gemKey" type="password" autocomplete="off" spellcheck="false" maxlength="300"></label>
+            <div class="row"><button class="btn btn--primary" id="gemKeySave" type="submit" data-i18n="gem.key_save">Сохранить ключ</button><button class="btn btn--secondary" id="gemKeyRemove" type="button" data-i18n="gem.key_remove" hidden>Удалить ключ</button></div>
+          </form>
+          <div id="gemOptions" hidden>
+            <label class="check"><input class="check__box" id="gemEnabled" type="checkbox"><span data-i18n="gem.enabled">Спрашивать Gemini</span></label>
+            <label class="check"><input class="check__box" id="gemPhotos" type="checkbox"><span data-i18n="gem.photos">Отправлять в Gemini фото товаров, которые показывают покупатели</span></label>
+            <p class="hint" data-i18n="gem.privacy">В Gemini уходят вопросы помощнику (с найденными данными каталога) и номер штрихкода неизвестного товара. Фото покупателей — только если включено выше.</p>
+          </div>
+          <p class="notice" id="gemMsg" role="status" hidden></p>
+        </div>
         <div class="settings__group" id="pinGroup" hidden>
           <h2 class="ticket__title" data-i18n="pin.title">ПИН-код для входа на этом компьютере</h2>
           <p class="hint" id="pinStatus" role="status"></p>

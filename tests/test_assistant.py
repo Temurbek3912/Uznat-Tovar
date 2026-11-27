@@ -457,7 +457,7 @@ def test_routes_are_for_the_owner_only(client, monkeypatch):
               "max_message_chars": A.MAX_MESSAGE_CHARS}
     status = client.get("/api/v1/assistant/status", headers=client.owner).json()
     assert isinstance(status.pop("customers_busy"), bool)
-    assert status == {"available": True, "mode": "change", "reason": None, "memory": memory}
+    assert status == {"available": True, "mode": "change", "reason": None, "memory": memory, "local": True, "gemini": False}
 
     model = FakeModel({"action": "answer", "tool": "", "args": {}, "text": "Здравствуйте!"})
     real_chat = A.chat

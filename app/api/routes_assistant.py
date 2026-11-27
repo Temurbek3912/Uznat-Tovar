@@ -53,11 +53,13 @@ class ActIn(BaseModel):
 
 @router.get("/status")
 def assistant_status(user: CurrentUser = Depends(require_permission(Permission.ASSISTANT_USE))) -> dict:
-    available = bool(assistant.model_address(get_settings()))
+    settings = get_settings()
+    available = assistant.available(settings)
     can_change = any(t.kind == "propose" for t in assistant_tools.allowed_tools(user))      # право catalog:write
     return {"available": available, "mode": "change" if can_change else "read",
             "reason": None if available else "disabled", "memory": assistant.memory_limits(),
-            "customers_busy": model_gate.identify_recent()}
+            "customers_busy": model_gate.identify_recent(),
+            "local": bool(assistant.model_address(settings)), "gemini": assistant.cloud_for(settings) is not None}
 
 
 @router.get("/scans")
@@ -100,7 +102,7 @@ async def assistant_chat(
     except assistant.AssistantUnavailable as exc:
         raise ApiError(503, f"assistant_{exc.reason}", _UNAVAILABLE.get(exc.reason, _UNAVAILABLE["bad_answer"])) from exc
     return {"reply": reply.text, "tools": reply.tools, "seconds": reply.seconds, "proposal": reply.proposal, "ui": reply.ui,
-            "proposal_error": reply.proposal_error, "no_card": reply.no_card}
+            "proposal_error": reply.proposal_error, "no_card": reply.no_card, "engine": reply.engine}
 
 
 @router.post("/act")

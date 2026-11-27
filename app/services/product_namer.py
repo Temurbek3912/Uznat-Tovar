@@ -385,27 +385,91 @@ def _small_available(settings) -> bool:
         return False
 
 
+_SEARCH_PROMPT = (
+    "Use Google Search to find the retail product with the barcode (EAN/UPC) {code}. Reply with JSON only, no other text: "
+    '{{"found": true or false, "name": "product name with size, as sold", "brand": "brand", "confidence": "high" or "low"}}. '
+    "found=true and confidence=high only if a search result explicitly shows this exact barcode number {code} for the product; "
+    "otherwise found=false. Do not guess. Write the name in {lang}; keep brand names as printed.")
+
+
+def search_barcode(code: str, lang: str, cloud) -> Guess | None:
+    """Штрихкода нет в открытых базах -> поиск Google через Gemini (app/services/gemini.py). Уходит ТОЛЬКО номер штрихкода.
+    Принимается лишь «нашёл именно этот номер, уверен»; ошибка, нет сети, лимит — None."""
+    if cloud is None or not _CODE_RE.match(code or ""):
+        return None
+    hit, cached = _barcode_cache.get((code, lang, "gemini"))
+    if hit:
+        return cached
+    try:
+        text = cloud.search(_SEARCH_PROMPT.format(code=code, lang=LANG_NAMES.get(lang, "Russian")))
+    except Exception as exc:  # noqa: BLE001 — нет сети, лимит, ключ не принят: товар назовёт своя модель (или никто)
+        logger.info("Gemini: штрихкод не проверен (%s)", getattr(exc, "code", type(exc).__name__))
+        return None
+    answer = _parse_answer(text) or {}
+    name = _clean(answer.get("name"))
+    guess = None
+    if answer.get("found") is True and str(answer.get("confidence") or "").lower() == "high" and name:
+        guess = Guess(name=name, brand=_clean(answer.get("brand")), source="gemini_search")
+    _barcode_cache.put((code, lang, "gemini"), guess)
+    return guess
+
+
+def _cloud_post(cloud) -> HttpPost:
+    """http_post для ask_vision, который спрашивает Gemini (тот же запрос, что своей модели) — только с разрешением на фото."""
+    return lambda _url, payload, _timeout: cloud.chat(payload, photo=True)
+
+
+def _future_result(future, timeout: float):
+    if future is None:
+        return None
+    try:
+        return future.result(timeout=timeout)
+    except Exception:  # noqa: BLE001 — Gemini не успел или не ответил: своя модель
+        return None
+
+
 def name_product(jpeg: bytes | None, codes: list[str], lang: str, settings,
                  http_get: HttpGet | None = None, http_post: HttpPost | None = None,
-                 classify: KindFn | None = None) -> Guess | None:
+                 classify: KindFn | None = None, cloud=None) -> Guess | None:
     """Товара нет в базе: штрихкод -> открытые базы; иначе -> локальная модель по кадру (название и вид товара; вид — если с
     ним согласна малая модель); большая модель недоступна -> малая модель (только вид); иначе None («не удалось определить»).
-    Догадка может быть «только вид» (name пустое, kind заполнен): «Это напиток» (документ 07, §10.7)."""
+    Догадка может быть «только вид» (name пустое, kind заполнен): «Это напиток» (документ 07, §10.7).
+    Подключён Gemini (app/services/gemini.py; cloud — для тестов) — одновременно со своей моделью: номер штрихкода — в поиск
+    Google; кадр — только если владелец разрешил отправлять фото. Название от Gemini предпочитается, если он уверен."""
     if not getattr(settings, "naming_enabled", False):
         return None
+    code = ""
     if getattr(settings, "naming_barcode_lookup", False):
-        for code in codes:
-            guess = lookup_barcode(code, lang, http_get=http_get)
+        for code_ in codes:
+            guess = lookup_barcode(code_, lang, http_get=http_get)
             if guess is not None:
                 return guess
+        code = next((c for c in codes if _CODE_RE.match(c or "")), "")
+    from app.services import gemini  # noqa: PLC0415
+    if cloud is None and (code or jpeg):
+        cloud = gemini.usable(settings)
+    wait = float(getattr(cloud, "timeout", 20.0)) + 2
+    by_code = gemini.submit(search_barcode, code, lang, cloud) if cloud is not None and code else None
     if not jpeg:
-        return None
+        return _future_result(by_code, wait)
+    timeout = float(getattr(settings, "naming_vision_timeout_seconds", 40.0))
+    by_photo = gemini.submit(ask_vision, jpeg, lang, "gemini", "", min(timeout, wait), _cloud_post(cloud))         if cloud is not None and cloud.usable(photo=True) else None
     url = getattr(settings, "naming_vision_url", "") or ""
-    answer = ask_vision(jpeg, lang, url, getattr(settings, "naming_vision_model", "") or "",
-                        float(getattr(settings, "naming_vision_timeout_seconds", 40.0)), http_post=http_post) if url else None
+    answer = ask_vision(jpeg, lang, url, getattr(settings, "naming_vision_model", "") or "", timeout,
+                        http_post=http_post) if url else None
+    floor = str(getattr(settings, "naming_min_confidence", "high") or "high")
+    cloud_answer = _future_result(by_photo, wait)
+    named = accept_answer(cloud_answer, floor)
+    if named is not None:
+        return _agreed_kind(replace(named, source="gemini", kind=answer_kind(answer) or named.kind), jpeg, settings, classify)
+    local = accept_answer(answer, floor, with_kind=True)
+    if local is not None and local.name:
+        return _agreed_kind(local, jpeg, settings, classify)
+    found = _future_result(by_code, wait)
+    if found is not None:
+        return found
     if answer is not None:          # большая модель ответила — её «не товар» окончательное
-        guess = accept_answer(answer, str(getattr(settings, "naming_min_confidence", "high") or "high"), with_kind=True)
-        return _agreed_kind(guess, jpeg, settings, classify)
+        return _agreed_kind(local, jpeg, settings, classify)
     return kind_by_small_model(jpeg, settings, classify)
 
 

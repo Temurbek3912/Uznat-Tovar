@@ -248,3 +248,75 @@ def backup_google_disconnect(db: Session = Depends(get_db), user: CurrentUser = 
     audit.record(db, "backup.google_disconnect", actor=audit.AuditActor(user.id, "api"), target_type="backup")
     db.commit()
     return service.status()
+
+
+# ----------------------------------------------------------------------------------------------------- «глобальный ИИ» Gemini
+
+class GeminiKeyIn(BaseModel):
+    key: str = ""
+
+
+class GeminiOptionsIn(BaseModel):
+    enabled: bool | None = None
+    photos: bool | None = None
+
+
+def _gemini():
+    from app.services import gemini
+    service = gemini.from_settings(get_settings())
+    if service is None:
+        raise ApiError(409, "gemini_unavailable", "Gemini в этой версии программы недоступен.")
+    return service
+
+
+@router.get("/gemini")
+def gemini_status(_user: CurrentUser = Depends(_admin)) -> dict:
+    """Подключён ли Gemini (app/services/gemini.py): состояние, сколько запросов сегодня, переключатели. Ключ не возвращается —
+    только последние 4 знака."""
+    return _gemini().status()
+
+
+@router.put("/gemini/key")
+def gemini_key(body: GeminiKeyIn, db: Session = Depends(get_db), user: CurrentUser = Depends(_admin)) -> dict:
+    """Ключ Gemini вводит сам владелец. Сохраняется зашифрованным и сразу проверяется у Google (без расхода лимита): ключ не
+    принят — не сохраняется; нет интернета — сохраняется, проверится при первом вопросе."""
+    from app.services.gemini import GeminiError
+    service = _gemini()
+    try:
+        service.save_key(body.key[:300])
+    except ValueError:
+        raise ApiError(400, "gemini_bad_format", "Это не похоже на ключ Gemini: скопируйте его целиком из aistudio.google.com.") from None
+    except GeminiError:
+        raise ApiError(409, "gemini_no_secret", "Ключ негде сохранить зашифрованным: в файле .env нет AUTH_SECRET_KEY.") from None
+    checked = True
+    try:
+        service.check_key()
+    except GeminiError as exc:
+        if exc.code == "bad_key":
+            service.remove_key()
+            raise ApiError(400, "gemini_bad_key", "Google не принял этот ключ. Проверьте, что он скопирован целиком.") from None
+        checked = False
+    audit.record(db, "gemini.key_saved", actor=audit.AuditActor(user.id, "api"), target_type="settings",
+                 after={"checked": checked})
+    db.commit()
+    return {**service.status(), "checked": checked}
+
+
+@router.delete("/gemini/key")
+def gemini_key_remove(db: Session = Depends(get_db), user: CurrentUser = Depends(_admin)) -> dict:
+    service = _gemini()
+    service.remove_key()
+    audit.record(db, "gemini.key_removed", actor=audit.AuditActor(user.id, "api"), target_type="settings")
+    db.commit()
+    return service.status()
+
+
+@router.put("/gemini/options")
+def gemini_options(body: GeminiOptionsIn, db: Session = Depends(get_db), user: CurrentUser = Depends(_admin)) -> dict:
+    """Включить/выключить Gemini и отдельно — отправку фото покупателей (по умолчанию фото не отправляются)."""
+    service = _gemini()
+    service.set_options(enabled=body.enabled, photos=body.photos)
+    audit.record(db, "gemini.options", actor=audit.AuditActor(user.id, "api"), target_type="settings",
+                 after={k: v for k, v in {"enabled": body.enabled, "photos": body.photos}.items() if v is not None})
+    db.commit()
+    return service.status()

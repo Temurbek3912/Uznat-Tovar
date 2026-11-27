@@ -735,11 +735,27 @@ def restore_copy(copy_dir: Path, *, media_root: Path, db_name: str = "shop.db", 
             "db_photos_missing": missing}
 
 
+def _carry_gemini(old_media: Path, new_media: Path, old_key: str, new_key: str) -> None:
+    """Ключ Gemini (app/services/gemini.py) тоже переходит в восстановленные данные; AUTH_SECRET_KEY из копии — перешифровать."""
+    from app.services import gemini
+    data = read_json(old_media / gemini.SETTINGS_FILE)
+    if not data.get("key") or (new_media / gemini.SETTINGS_FILE).exists():
+        return
+    if old_key and new_key and old_key != new_key:
+        from app.core.auth_secrets import decrypt_text, encrypt_text
+        try:
+            data["key"] = encrypt_text(decrypt_text(data["key"], old_key, gemini.KEY_LABEL), new_key, gemini.KEY_LABEL)
+        except Exception:  # noqa: BLE001 — не расшифровался: ключ владелец введёт заново
+            return
+    write_json(new_media / gemini.SETTINGS_FILE, data)
+
+
 def _carry_settings(old_media: Path | None, new_media: Path, old_key: str, new_key: str) -> None:
     """Выбор папки и подключение Google Диска не входят в копию — они переходят из прежних данных в восстановленные.
     Ключ Google перешифровывается, если AUTH_SECRET_KEY взят из копии."""
     if old_media is None:
         return
+    _carry_gemini(old_media, new_media, old_key, new_key)
     data = read_settings(old_media)
     if not data:
         return

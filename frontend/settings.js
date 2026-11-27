@@ -103,7 +103,7 @@
           loadSecurity().catch(report);
           loadPin().catch(report);
           loadCustomerQr().catch(report);
-          if (Array.isArray(me.permissions) && me.permissions.indexOf("store:manage") >= 0) loadBackup().catch(report); else bkp.data = null;
+          if (Array.isArray(me.permissions) && me.permissions.indexOf("store:manage") >= 0) { loadBackup().catch(report); loadGemini().catch(report); } else { bkp.data = null; gem.data = null; renderGemini(); }
         } else {
           account.name = null; revealRail([]); resetSecurity(); cqr.data = null; bkp.data = null;
           loginMsg = r.status === "expired" ? { key: "login.expired" } : r.status === "error" ? { key: r.key } : null;
@@ -275,6 +275,41 @@
         renderBackup();
         return r.res.ok ? loadBackup() : null;
       }, function () { bkp.msg = { key: "error.network" }; renderBackup(); return null; });
+    }
+    // «Глобальный ИИ» Gemini (app/services/gemini.py): ключ вводит сам владелец; сервер его не показывает — только 4 последних знака.
+    var gem = { data: null, msg: null };
+    function renderGemini() {
+      var d = gem.data, shown = account.name !== null && !!d;
+      setHidden($("geminiGroup"), !shown);
+      if (!shown) return;
+      var st = String(d.state || "no_key");
+      $("gemState").textContent = d.configured ? t("gem.state_" + (I18N.has("gem.state_" + st) ? st : "failed"), { tail: String(d.key_tail || "") }) : t("gem.state_no_key");
+      var usage = d.configured ? t("gem.usage", { n: Number(d.used_today) || 0, limit: Number(d.daily_limit) || 0 }) : "";
+      $("gemUsage").textContent = usage; setHidden($("gemUsage"), !usage);
+      setHidden($("gemKeyRemove"), !d.configured);
+      setHidden($("gemOptions"), !d.configured);
+      $("gemEnabled").checked = !!d.enabled;
+      $("gemPhotos").checked = !!d.photos;
+      $("gemPhotos").disabled = !d.enabled;
+      var m = gem.msg ? t(gem.msg.key, gem.msg.params) : "";
+      $("gemMsg").textContent = m; setHidden($("gemMsg"), !m);
+      $("gemMsg").className = gem.msg && gem.msg.bad ? "notice notice--danger" : "notice";
+    }
+    function loadGemini() {
+      return api("/api/v1/admin/gemini").then(function (r) {
+        gem.data = r.res.ok && r.data && typeof r.data === "object" ? r.data : null;
+        renderGemini();
+      });
+    }
+    function geminiCall(path, method, body, okKey) {
+      gem.msg = null; renderGemini();
+      return api(path, method, body).then(function (r) {
+        if (!r.res.ok) { var p = problemOf(r); gem.msg = { key: p.key, params: p.params, bad: true }; renderGemini(); return null; }
+        gem.data = r.data;
+        gem.msg = okKey ? { key: r.data && r.data.checked === false ? "gem.saved_unchecked" : okKey } : null;
+        renderGemini();
+        return null;
+      }, function () { gem.msg = { key: "error.network", bad: true }; renderGemini(); return null; });
     }
     // ПИН-код для входа на этом компьютере (сервер принимает его только отсюда — app/core/local_pin.py).
     var pinState = { shown: false, has: false, msg: null, pwOpen: false, pwMsg: null };
@@ -584,6 +619,18 @@
     $("logoutBtn").addEventListener("click", guard(doLogout));
     $("cqrPrintBtn").addEventListener("click", guard(downloadCustomerQr));
     $("bkpNowBtn").addEventListener("click", guard(backupNow));
+    $("gemKeyForm").addEventListener("submit", guard(function (evt) {
+      if (evt && evt.preventDefault) evt.preventDefault();
+      var key = String($("gemKey").value || "").trim();
+      if (!key) { gem.msg = { key: "gem.key_empty", bad: true }; renderGemini(); return Promise.resolve(null); }
+      return geminiCall("/api/v1/admin/gemini/key", "PUT", { key: key }, "gem.saved").then(function (x) { $("gemKey").value = ""; return x; });
+    }));
+    $("gemKeyRemove").addEventListener("click", guard(function () {
+      if (win.confirm && !win.confirm(t("gem.remove_confirm"))) return Promise.resolve(null);
+      return geminiCall("/api/v1/admin/gemini/key", "DELETE", undefined, "gem.removed");
+    }));
+    $("gemEnabled").addEventListener("change", guard(function () { return geminiCall("/api/v1/admin/gemini/options", "PUT", { enabled: !!$("gemEnabled").checked }); }));
+    $("gemPhotos").addEventListener("change", guard(function () { return geminiCall("/api/v1/admin/gemini/options", "PUT", { photos: !!$("gemPhotos").checked }); }));
     $("bkpDirForm").addEventListener("submit", guard(function (evt) { if (evt && evt.preventDefault) evt.preventDefault(); return saveBackupDir(String($("bkpDir").value || "").trim()); }));
     $("bkpDirReset").addEventListener("click", guard(function () { $("bkpDir").value = ""; return saveBackupDir(""); }));
     $("bkpGConnect").addEventListener("click", guard(function () { return googleCall("/api/v1/admin/backup/google/connect", "POST"); }));

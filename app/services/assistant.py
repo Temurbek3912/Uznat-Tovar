@@ -21,12 +21,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 
 from app.core.security import CurrentUser
 from app.db.models import PRODUCT_ACTIVE, Product
-from app.services import (assistant_actions, assistant_tools, category_words, command_words, model_gate, price_list,
+from app.services import (assistant_actions, assistant_tools, category_words, command_words, gemini, model_gate, price_list,
                           price_words)
 from app.services.assistant_tools import ToolError
 from app.services.catalog_upload import DEFAULT_CATEGORY
@@ -69,6 +70,7 @@ class Reply:
     proposal_error: str = ""                             # предложить не вышло (и почему) — страница скажет это прямо, даже если
                                                          # модель в ответе пообещала карточку
     no_card: bool = False                                # модель пишет «сделано/нажмите «Сделать»», а карточки нет
+    engine: str = ""                                     # кто ответил последним шагом: local | gemini ("" — программа сама)
 
 
 def model_address(settings) -> str:
@@ -76,6 +78,17 @@ def model_address(settings) -> str:
     if not getattr(settings, "assistant_enabled", True) or not getattr(settings, "naming_enabled", True):
         return ""
     return (getattr(settings, "naming_vision_url", "") or "").strip()
+
+
+def cloud_for(settings):
+    """Gemini, если владелец его подключил и его можно спросить сейчас (app/services/gemini.py); иначе None — только своя модель."""
+    if not getattr(settings, "assistant_enabled", True):
+        return None
+    return gemini.usable(settings)
+
+
+def available(settings) -> bool:
+    return bool(model_address(settings)) or cloud_for(settings) is not None
 
 
 # --- фильтр чувствительных данных (документ 16, §13.3) -------------------------------------------------------------------------
@@ -464,11 +477,26 @@ def named_categories(db, name: str, args: dict, history: list[dict]) -> list[str
     said = next((m["content"] for m in reversed(history) if m.get("role") == "user"), "")
     if _uz_category(said):          # «Фанта категориясини газаклар қилинг» — смена категории, а не «все снеки в архив»
         return []
-    cats = [c for (c,) in db.query(Product.category).filter(Product.status == PRODUCT_ACTIVE).distinct().all()
-            if c and c != DEFAULT_CATEGORY]
-    text = category_words.latin(said)
-    direct = [c for c in cats if category_words.latin(c) in text]
-    return sorted(set(direct) | set(category_words.matching_categories(said, cats)))[:5]
+    return _categories_said(db, said)
+
+
+def _categories_said(db, said: str) -> list[str]:
+    cats = [c for (c,) in db.query(Product.category).filter(Product.status == PRODUCT_ACTIVE).distinct().all()]
+    return assistant_tools.categories_in(said, cats)
+
+
+def missing_in_category(db, name: str, args: dict, history: list[dict]) -> dict:
+    """«Какие сладости без цены?»: владелец назвал категорию — products_missing смотрит только её, даже если модель категорию
+    не передала (2026-11-27: помощник называл и не сладости)."""
+    if name != "products_missing" or str(args.get("field") or "").lower() in ("category", "brand"):
+        return args
+    said = next((m["content"] for m in reversed(history) if m.get("role") == "user"), "")
+    named = _categories_said(db, said)
+    if named:
+        return {**args, "category": ", ".join(named)}
+    if args.get("category") and not _categories_said(db, str(args["category"])):
+        return {k: v for k, v in args.items() if k != "category"}     # модель придумала категорию, которой нет
+    return args
 
 
 def _last_said(history: list[dict]) -> str:
@@ -957,22 +985,69 @@ def _parse(content) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
-def _ask_model(post, url: str, model: str, messages: list[dict], schema: dict) -> dict | None:
-    payload = {
-        "model": model, "temperature": 0.2, "max_tokens": MAX_ANSWER_TOKENS, "messages": messages,
-        "response_format": {"type": "json_schema", "json_schema": {"name": "assistant_step", "strict": True, "schema": schema}},
-    }
-    if not model_gate.wait_for_identify(WAIT_FOR_IDENTIFY):
-        raise AssistantBusy()
-    try:
-        reply = post(url.rstrip("/") + "/chat/completions", payload, CALL_TIMEOUT)
-    except Exception as exc:  # noqa: BLE001 — движок не запущен, модель загружается, не ответила вовремя
-        logger.warning("ИИ-помощник: модель не ответила (%s)", type(exc).__name__)
-        raise AssistantUnavailable("model_unreachable") from exc
+def _reply_answer(reply) -> dict | None:
     try:
         return _parse(reply["choices"][0]["message"]["content"])
     except (KeyError, IndexError, TypeError):
         return None
+
+
+def _post_local(post, url: str, payload: dict):
+    try:
+        return post(url.rstrip("/") + "/chat/completions", payload, CALL_TIMEOUT)
+    except Exception as exc:  # noqa: BLE001 — движок не запущен, модель загружается, не ответила вовремя
+        logger.warning("ИИ-помощник: модель не ответила (%s)", type(exc).__name__)
+        raise AssistantUnavailable("model_unreachable") from exc
+
+
+def _ask_local(post, url: str, payload: dict) -> dict | None:
+    if not url:
+        raise AssistantUnavailable("model_unreachable")
+    if not model_gate.wait_for_identify(WAIT_FOR_IDENTIFY):
+        raise AssistantBusy()
+    return _reply_answer(_post_local(post, url, payload))
+
+
+def _post_local_free(post, url: str, payload: dict):
+    try:
+        return _post_local(post, url, payload)
+    finally:
+        _local_free.release()
+
+
+# Своя модель отвечает одному запросу помощника за раз. Ответ Gemini пришёл раньше — запрос своей модели досчитывается сам, а
+# следующий шаг её не нагружает, пока тот не закончится (видеокарта нужна покупателям — model_gate).
+_local_free = threading.Lock()
+
+
+def _ask_model(post, url: str, model: str, messages: list[dict], schema: dict, cloud=None, seen: dict | None = None
+               ) -> dict | None:
+    """Один шаг модели. cloud (app/services/gemini.Gemini) — спросить одновременно и Gemini: его годный ответ предпочитается,
+    ошибка/нет сети/лимит — ответ своей модели, как без Gemini."""
+    payload = {
+        "model": model, "temperature": 0.2, "max_tokens": MAX_ANSWER_TOKENS, "messages": messages,
+        "response_format": {"type": "json_schema", "json_schema": {"name": "assistant_step", "strict": True, "schema": schema}},
+    }
+    seen = seen if seen is not None else {}
+    if cloud is None:
+        seen["engine"] = "local"
+        return _ask_local(post, url, payload)
+    asked = gemini.submit(cloud.chat, payload)
+    local = None
+    if url and not model_gate.identify_busy() and _local_free.acquire(blocking=False):
+        local = gemini.submit(_post_local_free, post, url, payload)
+    try:
+        answer = _reply_answer(asked.result(timeout=cloud.timeout + 2))
+    except Exception as exc:  # noqa: BLE001 — нет сети, нет лимита, ключ не принят: отвечает своя модель
+        logger.info("ИИ-помощник: Gemini не ответил (%s) — отвечает своя модель", getattr(exc, "code", type(exc).__name__))
+        answer = None
+    if answer is not None:
+        seen["engine"] = "gemini"
+        return answer
+    seen["engine"] = "local"
+    if local is None:
+        return _ask_local(post, url, payload)
+    return _reply_answer(local.result())
 
 
 def _result_text(name: str, result) -> str:
@@ -993,8 +1068,10 @@ def _raw_last(messages) -> str:
 def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, clock=time.monotonic) -> Reply:
     """Один вопрос пользователя -> ответ помощника. Ошибки: ValueError (пустой вопрос), AssistantUnavailable, AssistantBusy."""
     url = model_address(settings)
-    if not url:
+    cloud = cloud_for(settings)
+    if not url and cloud is None:
         raise AssistantUnavailable("disabled")
+    seen: dict = {}
     history = clean_history(messages)
     from app.services.product_namer import _http_post_json       # noqa: PLC0415 — тот же HTTP-клиент, что у распознавания
     post = http_post or _http_post_json
@@ -1056,13 +1133,14 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
             text = _ONE_AT_A_TIME.get(lang, _ONE_AT_A_TIME["ru"]).format(name=card.get("name") or "", other=other)
         return Reply(text=text[:MAX_REPLY_CHARS], tools=used, seconds=round(clock() - started, 1), proposal=card, ui=ui,
                      proposal_error="" if card else failed["error"],
-                     no_card=can_propose and card is None and not failed["error"] and claims_change(text))
+                     no_card=can_propose and card is None and not failed["error"] and claims_change(text),
+                     engine=str(seen.get("engine") or ""))
 
     try:
         with model_gate.assistant_slot(WAIT_FOR_SLOT):
             for step in range(MAX_STEPS + 2):   # +1 — переписать ответ (wrong_script)
                 final = step >= MAX_STEPS or answer_now
-                step_answer = _ask_model(post, url, model, convo, answer_schema(step_tools, final=final))
+                step_answer = _ask_model(post, url, model, convo, answer_schema(step_tools, final=final), cloud, seen)
                 if step_answer is None:
                     break
                 is_tool = bool(step_answer.get("tool")) and step_answer.get("action", "tool") == "tool"
@@ -1130,6 +1208,7 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                     invented_code(name, args, history)
                     invented_number(name, args, history)
                     args = price_meant(db, name, args, history)
+                    args = missing_in_category(db, name, args, history)
                     other, instead, redirect = category_meant(db, name, args, history) if not redirected else ("", None, "")
                     if instead:                 # что нужно — понятно: карточку смены категории готовит программа
                         name, args, redirected = other, instead, True

@@ -210,6 +210,12 @@ class Settings(BaseSettings):
     # ИИ-помощник владельца (документ 16, этап A1 «только смотреть»): та же модель, что naming_vision_url, — второй модели нет.
     # Нет модели на этом компьютере (адрес пуст) — помощник выключен сам. ENV ASSISTANT_ENABLED=false — выключить вручную.
     assistant_enabled: bool = True
+    # «Глобальный ИИ» Google Gemini (выбор владельца 2026-11-27, app/services/gemini.py) — необязательное дополнение к своей модели:
+    # ключ вводит сам владелец в «Настройках» (хранится зашифрованным AUTH_SECRET_KEY). Нет ключа или интернета — всё на своей
+    # модели. gemini_daily_limit — сколько запросов в сутки программа себе позволяет (бесплатный лимит Google не перерасходовать).
+    gemini_model: str = "gemini-flash-latest"
+    gemini_daily_limit: int = 200
+    gemini_timeout_seconds: float = 20.0
 
     # ML-конфиги подтягиваются из YAML (см. load_yaml_config), но могут быть
     # переопределены через ENV вида MODELS__DETECTOR__CONFIDENCE_THRESHOLD=0.4

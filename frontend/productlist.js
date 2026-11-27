@@ -35,7 +35,11 @@
     var el = {};                                              // ссылки на части страницы
 
     function icon(name, size) { return Icons ? Icons.make(doc, name, { size: size || 18 }) : null; }
-    function labelOf(kind, value) { return value || t(kind === "category" ? "list.no_category" : "list.no_brand"); }
+    function catName(v) { var I = root.I18N; return I && I.category ? I.category(v) : v; }   // «Сладости» -> на языке человека
+    function labelOf(kind, value) {
+      if (!value) return t(kind === "category" ? "list.no_category" : "list.no_brand");
+      return kind === "category" ? catName(value) : value;
+    }
 
     function select(id, labelKey, values, keyOf, current, onChange) {
       var wrap = node(doc, "label", "field field--select");
@@ -193,7 +197,7 @@
       b.appendChild(thumb);
       var text = node(doc, "span", "prow__text");
       text.appendChild(node(doc, "span", "prow__name", p.name || ""));
-      text.appendChild(node(doc, "span", "prow__meta", [p.brand, p.category].filter(Boolean).join(" · ") || p.sku || ""));
+      text.appendChild(node(doc, "span", "prow__meta", [p.brand, p.category ? catName(p.category) : ""].filter(Boolean).join(" · ") || p.sku || ""));
       b.appendChild(text);
       var price = Ticket.formatPrice(p.expected_price);
       var amount = node(doc, "span", price ? "prow__price" : "prow__price prow__price--none");

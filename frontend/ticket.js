@@ -17,6 +17,7 @@
   var NBSP = "\u00A0";
   var STATES = ["idle", "searching", "matched", "uncertain", "not_in_catalog", "unknown", "empty_catalog", "camera_error", "error"];
   var MAX_SPECS = 4;
+  function catName(v) { var I = root.I18N; return I && I.category ? I.category(v) : v; }   // «Сладости» -> на языке человека
   var MAX_CANDIDATES = 3;
 
   /** 249000 -> «249 000» (неразрывный пробел: число не рвётся на строки). Цена без значения — пустая строка. */
@@ -75,7 +76,7 @@
       if (!deps.browse) head.appendChild(chip("ok", "check", t("ticket.match")));
       card.appendChild(head);
       card.appendChild(node(doc, "h2", "ticket__name", product.name || ""));
-      if (product.category) card.appendChild(node(doc, "p", "ticket__category", product.category));
+      if (product.category) card.appendChild(node(doc, "p", "ticket__category", catName(product.category)));
       var fields = Array.isArray(product.fields) ? product.fields : [];
       if (fields.length) {
         var specs = node(doc, "dl", "ticket__specs");

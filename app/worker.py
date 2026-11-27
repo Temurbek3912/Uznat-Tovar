@@ -358,6 +358,33 @@ def _excluded_sources(db: Session) -> frozenset:
         raise
 
 
+def _auto_category(db: Session, product_id: str, image) -> None:
+    """Новый товар «Без категории» -> категория по названию, похожим товарам и виду по фото (app/services/category_guess.py).
+    Не уверены — остаётся «Без категории». Любой сбой — только в журнал: товар уже добавлен, категория — удобство."""
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    from app.services.categories import DEFAULT_CATEGORY  # noqa: PLC0415
+    from app.services.category_guess import guess_for_new_product  # noqa: PLC0415
+    try:
+        product = db.get(Product, product_id)
+        if product is None or (product.category or DEFAULT_CATEGORY) != DEFAULT_CATEGORY:
+            return
+        rows = db.query(Product.id, Product.category).filter(Product.status != PRODUCT_ARCHIVED).all()
+        guess = guess_for_new_product(product.name, product_id, _matcher.index, {r.id: r.category for r in rows}, image,
+                                      settings)
+        if guess is None:
+            return
+        product.category = guess.category
+        product.version = (product.version or 1) + 1                 # как при правке владельцем (routes_catalog)
+        product.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        db.commit()
+        logger.info("Категория нового товара %s: %s (подсказка: %s, уверенность %.2f)", product.sku, guess.category,
+                    guess.source, guess.confidence)
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.exception("Категория нового товара %s не определена", product_id)
+
+
 # БАГФИКС (вычитка после F12): декоратор был потерян при вставке соседней задачи выше, и
 # функция превратилась в обычную — routes_catalog.py вызывал бы .delay() у функции (AttributeError, 500).
 # Тесты это не ловили, т.к. подменяют задачу заглушкой; см. tests/test_worker_static.py.
@@ -397,6 +424,8 @@ def add_catalog_product_task(self, product_in_dict: dict) -> str:
                               note_indexed=lambda refs: _note_indexed(index_path, refs),
                               remember=_remember_photos(db, digests))
         not_linked = _link_barcodes(db, outcome.product_id, product_in.barcodes)
+        if outcome.created:
+            _auto_category(db, outcome.product_id, images[0] if images else None)
 
         logger.info("%s SKU %s -> product_id=%s (векторов добавлено: %d, уже были: %d)",
                     "Добавлен" if outcome.created else "Уже был в базе (повтор)", product_in.sku, outcome.product_id,

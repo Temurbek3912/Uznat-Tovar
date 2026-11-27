@@ -34,6 +34,7 @@ class KindScore:
     kind: str | None          # None — «не товар» (ближе всего описания «не товар»)
     score: float              # доля уверенности 0..1 (softmax по видам и «не товар»)
     runner_up: str | None = None
+    probs: dict[str, float] | None = None   # доля уверенности по каждому виду (и NONE) — для сочетания с другими подсказками
 
 
 def _family(repo: str) -> str:
@@ -90,7 +91,8 @@ def scores_from_logits(groups: list[str], logits: np.ndarray) -> KindScore:
     top = names[order[0]]
     second = names[order[1]] if len(order) > 1 else None
     return KindScore(kind=None if top == NONE else top, score=float(probs[order[0]]),
-                     runner_up=None if second in (None, NONE) else second)
+                     runner_up=None if second in (None, NONE) else second,
+                     probs={n: float(p) for n, p in zip(names, probs)})
 
 
 class KindClassifier:

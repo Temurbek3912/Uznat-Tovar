@@ -309,7 +309,7 @@ async function renderProducts(main) {
       const d = await call(`/api/v1/admin/products?${new URLSearchParams({q: q.value, limit: LIMIT, offset})}`);
       clear(body);
       body.appendChild(table([tr("admin.col_sku"), tr("admin.col_name"), tr("admin.col_brand"), tr("admin.col_category"), tr("admin.col_price")],
-        d.items.map((p) => [h("code", {}, p.sku), p.name, p.brand, p.category, p.expected_price === null ? "—" : String(p.expected_price)]),
+        d.items.map((p) => [h("code", {}, p.sku), p.name, p.brand, i18n() && i18n().category ? i18n().category(p.category) : p.category, p.expected_price === null ? "—" : String(p.expected_price)]),
         q.value ? tr("admin.nothing_found") : tr("admin.catalog_empty")));
       const pages = Math.max(1, Math.ceil(d.total / LIMIT)), page = Math.floor(offset / LIMIT) + 1;
       body.appendChild(h("div", {class: "toolbar mt-10"}, h("span", {class: "mute"}, tr("admin.total_pages", {total: d.total, page, pages})),

@@ -6,6 +6,7 @@
   "use strict";
 
   var PAGE = 30;
+  function catName(v) { var I = root.I18N; return I && I.category ? I.category(v) : v; }   // «Сладости» -> на языке человека
   var SEARCH_DELAY_MS = 300;
 
   /** Адрес запроса списка: пустые параметры не отправляются. */
@@ -47,7 +48,7 @@
     function drawCategories() {
       var host = $("catHost");
       clear(host);
-      var all = [{ name: "", label: t("shoplist.all") }].concat(state.categories.map(function (c) { return { name: c.name, label: c.name + " · " + c.count }; }));
+      var all = [{ name: "", label: t("shoplist.all") }].concat(state.categories.map(function (c) { return { name: c.name, label: catName(c.name) + " · " + c.count }; }));
       all.forEach(function (c) {
         var b = el("button", "chip chip--filter", c.label);
         b.setAttribute("type", "button");

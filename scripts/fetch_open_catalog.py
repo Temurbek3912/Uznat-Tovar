@@ -135,14 +135,8 @@ def _photo_kind(path: Path) -> str:
         return ""
 
 
-RU_KINDS = {
-    "drink": "Напитки", "dairy": "Молочные продукты", "sweets": "Сладости", "snack": "Снеки", "tea_coffee": "Чай и кофе",
-    "grocery": "Бакалея", "sauce": "Соусы и специи", "canned": "Консервы", "bakery": "Хлеб и выпечка",
-    "meat_fish": "Мясо и рыба", "fruit_veg": "Овощи и фрукты", "frozen": "Заморозка", "baby": "Детские товары",
-    "medicine": "Лекарства", "cosmetics": "Косметика и гигиена", "cleaning": "Бытовая химия", "home": "Товары для дома",
-    "pet": "Товары для животных", "tobacco": TOBACCO_CATEGORY, "clothing": "Одежда", "footwear": "Обувь", "bags": "Сумки",
-    "accessories": "Аксессуары", "electronics": "Электроника", "stationery": "Канцтовары", "toy": "Игрушки",
-}
+# вид -> русская категория: единый список программы (app/services/categories.py)
+from app.services.categories import RU_BY_KIND as RU_KINDS  # noqa: E402
 
 
 def search_off(query: str, sort_by: str = "", max_pages: int = 0) -> list[dict]:

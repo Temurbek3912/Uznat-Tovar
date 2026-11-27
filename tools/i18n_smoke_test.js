@@ -305,6 +305,22 @@ function make(opts) {
     assert.strictEqual(ctx.I18N.t("nav.products"), "Products");
   });
 
+  await test("категория каталога — на языке человека; своя категория владельца — как есть; «Без категории» переводится", async () => {
+    const i = make();
+    i.setLang("uz");
+    assert.strictEqual(i.category("Сладости"), "Shirinliklar");
+    assert.strictEqual(i.category(" Снеки "), "Gazaklar");
+    assert.strictEqual(i.category("Моя полка"), "Моя полка");
+    assert.strictEqual(i.category("Без категории"), UZ["list.no_category"]);
+    i.setLang("en");
+    assert.strictEqual(i.category("Молочные продукты"), "Dairy");
+    i.setLang("uz-Cyrl");
+    assert.strictEqual(i.category("Сладости"), "Ширинликлар");
+    i.setLang("ru");
+    assert.strictEqual(i.category("Сладости"), "Сладости");
+    assert.strictEqual(i.category(""), "");
+  });
+
   await test("в i18n.js нет innerHTML/outerHTML/insertAdjacentHTML/eval — страница меняется только через textContent и setAttribute", async () => {
     const src = fs.readFileSync(path.join(FRONT, "i18n.js"), "utf-8");
     for (const bad of ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function"]) {

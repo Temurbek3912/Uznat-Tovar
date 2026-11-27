@@ -27,6 +27,9 @@
   var NAMES = { ru: "Русский", uz: "O\u02BBzbekcha", "uz-Cyrl": "\u040E\u0437\u0431\u0435\u043A\u0447\u0430", en: "English" };
   // Короткая подпись кнопки на узком экране.
   var SHORT = { ru: "RU", uz: "UZ", "uz-Cyrl": "\u040E\u0417", en: "EN" };
+  // Категории каталога хранятся по-русски («Сладости»); подпись на странице — на языке человека (ключи category.<вид>).
+  // Тот же список, что app/services/categories.py (сверяет tests/test_categories.py). Своя категория владельца — как есть.
+  var CATEGORY_KINDS = {"Напитки": "drink", "Молочные продукты": "dairy", "Сладости": "sweets", "Снеки": "snack", "Чай и кофе": "tea_coffee", "Бакалея": "grocery", "Соусы и специи": "sauce", "Консервы": "canned", "Хлеб и выпечка": "bakery", "Мясо и рыба": "meat_fish", "Овощи и фрукты": "fruit_veg", "Заморозка": "frozen", "Детские товары": "baby", "Лекарства": "medicine", "Косметика и гигиена": "cosmetics", "Бытовая химия": "cleaning", "Товары для дома": "home", "Товары для животных": "pet", "Одежда": "clothing", "Обувь": "footwear", "Сумки": "bags", "Аксессуары": "accessories", "Электроника": "electronics", "Канцтовары": "stationery", "Игрушки": "toy", "Табак (21+)": "tobacco"};
   // Если строки нет на языке человека: узбекскому читателю русский понятнее английского, остальным — наоборот.
   // Кириллице сначала — та же строка латиницей (тот же язык), и только потом русский.
   var FALLBACKS = { ru: ["en"], uz: ["ru", "en"], "uz-Cyrl": ["uz", "ru", "en"], en: ["ru"] };
@@ -227,8 +230,16 @@
       return group;
     }
 
+    /** Подпись категории каталога на языке человека: «Сладости» -> «Shirinliklar»; своя категория владельца — без изменений. */
+    function category(name) {
+      var value = typeof name === "string" ? name.trim() : "";
+      var kind = Object.prototype.hasOwnProperty.call(CATEGORY_KINDS, value) ? CATEGORY_KINDS[value] : "";
+      if (value === "Без категории") return t("list.no_category");   // «Без категории»
+      return kind ? t("category." + kind) : (name || "");
+    }
+
     return {
-      t: t, has: has, add: add, apply: apply, getLang: getLang, setLang: setLang, onChange: onChange, mountSwitcher: mountSwitcher,
+      t: t, category: category, has: has, add: add, apply: apply, getLang: getLang, setLang: setLang, onChange: onChange, mountSwitcher: mountSwitcher,
       langs: LANGS.slice(), names: NAMES, pluralCategory: pluralCategory
     };
   }

@@ -467,8 +467,9 @@ def run(opts: Options, d: Deps | None = None) -> int:
     variant, why = torch_variant(hw.gpu_name, driver, opts.cpu)
     need = MIN_FREE_GB if variant == "cpu" else MIN_FREE_GB_GPU
     plan = hardware.plan_lite(hw, force_cpu=variant == "cpu")
-    if plan.vision and not vision_engine.is_installed(opts.root):
-        need += vision_engine.DISK_GB
+    if plan.vision:             # модель «зрение + текст» только на NVIDIA; CUDA — при драйвере от 580
+        major = driver_major(driver)
+        need += vision_engine.disk_need_gb(opts.root, cuda=major is not None and major >= vision_engine.CUDA_MIN_DRIVER)
     items = check_computer(hw, free_gb=d.free_gb(opts.root), windows=d.windows(), is_64bit=d.is_64bit, need_gb=need)
     for level, text in items:
         out(f"  [{level}] {text}")

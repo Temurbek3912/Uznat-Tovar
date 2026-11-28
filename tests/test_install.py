@@ -358,5 +358,38 @@ def test_disk_space_counts_the_vision_model_only_when_it_will_be_downloaded(tmp_
     d = ins.Deps(run=Recorder(), probe_hw=lambda: gpu, driver=lambda: "581.57", windows=lambda: (10, 26100),
                  free_gb=lambda p: ins.MIN_FREE_GB_GPU + 1, out=lines.append, fetch_vision=lambda root, out: True)
     assert ins.run(ins.Options(root=root, check=False), d) == 1                 # 15 ГБ мало: ещё 5 ГБ на модель и CUDA
-    need = f"{ins.MIN_FREE_GB_GPU + ins.vision_engine.DISK_GB:.0f}"             # 14 + 5 = 19
-    assert any("[НЕЛЬЗЯ]" in ln and f"не меньше {need} ГБ" in ln for ln in lines)
+    need = ins.MIN_FREE_GB_GPU + ins.vision_engine.DISK_GB + ins.vision_engine.CUDA_DISK_GB      # 14 + 4 + 1 = 19
+    assert any("[НЕЛЬЗЯ]" in ln and f"не меньше {need:.0f} ГБ" in ln for ln in lines)
+
+
+def _need_line(lines):
+    return next(ln for ln in lines if "на диске свободно" in ln)
+
+
+def test_disk_space_counts_cuda_only_when_it_will_be_downloaded(tmp_path, monkeypatch):
+    ve = ins.vision_engine
+    root = _root(tmp_path)
+    gpu = Hardware(ram_gb=16, cores=8, gpu_name="NVIDIA GeForce RTX 4060", vram_gb=8)   # PyTorch есть и для драйвера 566
+
+    def run_with(driver):
+        lines = []
+        d = ins.Deps(run=Recorder(), probe_hw=lambda: gpu, driver=lambda: driver, windows=lambda: (10, 26100),
+                     free_gb=lambda p: ins.MIN_FREE_GB_GPU + 4.5, out=lines.append, fetch_vision=lambda root, out: True)
+        return ins.run(ins.Options(root=root, check=False), d), lines
+
+    # старый драйвер (ниже 580): CUDA не качается — хватает 14 + 4
+    code, lines = run_with("566.36")
+    assert "[НЕЛЬЗЯ]" not in _need_line(lines)
+    assert "название товара не из базы по фото — да" in "\n".join(lines)          # модель ставится, только без CUDA
+    # новый драйвер: нужно ещё 1 ГБ под CUDA
+    code, lines = run_with("581.57")
+    assert code == 1 and "[НЕЛЬЗЯ]" in _need_line(lines)
+    # модель (Vulkan) уже стоит, а CUDA нет: считается только CUDA
+    monkeypatch.setattr(ve, "is_installed", lambda root: True)
+    code, lines = run_with("581.57")
+    assert "[НЕЛЬЗЯ]" not in _need_line(lines)
+    assert ve.disk_need_gb(root, cuda=True) == ve.CUDA_DISK_GB
+    # всё на месте — ничего не добавляется
+    ve.cuda_exe(root).parent.mkdir(parents=True)
+    ve.cuda_exe(root).write_bytes(b"x")
+    assert ve.disk_need_gb(root, cuda=True) == 0

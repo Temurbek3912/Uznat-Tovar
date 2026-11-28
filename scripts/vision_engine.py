@@ -67,7 +67,8 @@ MODEL = Part("Qwen3-VL-4B-Instruct-Q4_K_M.gguf", _HF + "Qwen3-VL-4B-Instruct-Q4_
 MMPROJ = Part("mmproj-Qwen3-VL-4B-Instruct-F16.gguf", _HF + "mmproj-Qwen3-VL-4B-Instruct-F16.gguf",
               "1b70e983d69dd424eb16e0ed2104d0b2a58bf01d866657f4de5da6c963620f19", 836180160)
 DOWNLOAD_GB = (ENGINE.size + MODEL.size + MMPROJ.size) / 2**30      # ≈ 3,1 ГБ; на диске ≈ 3,3 ГБ (движок распакован)
-DISK_GB = 5.0                   # + распакованный движок CUDA (~1 ГБ) на компьютере с NVIDIA
+DISK_GB = 4.0                   # движок Vulkan и модель на диске, с запасом
+CUDA_DISK_GB = 1.0              # распакованный движок CUDA (только на NVIDIA, где он нужен)
 
 
 def vision_dir(root: Path) -> Path:
@@ -100,6 +101,14 @@ def wants_cuda(info: tuple[int, float] | None) -> bool:
 
 def model_path(root: Path, part: Part) -> Path:
     return vision_dir(root) / part.name
+
+
+def disk_need_gb(root: Path, cuda: bool) -> float:
+    """Сколько места ещё займёт скачивание: модель с движком — если их нет, движок CUDA — если он нужен и его нет."""
+    need = 0.0 if is_installed(root) else DISK_GB
+    if cuda and not cuda_exe(root).is_file():
+        need += CUDA_DISK_GB
+    return need
 
 
 def is_installed(root: Path) -> bool:

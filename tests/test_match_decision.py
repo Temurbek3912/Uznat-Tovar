@@ -121,7 +121,9 @@ def test_margin_is_on_in_config_off_in_code_default_and_passed_by_the_worker():
     import yaml
     models = yaml.safe_load((ROOT / "configs" / "config.yaml").read_text(encoding="utf-8"))["models"]
     cfg = models["matcher"]
-    expected = (0.83, 0.08) if models["embedder"].get("projection_path") else (0.86, 0.04)
+    # С 2026-11-28 — дообученный SigLIP 2 со своей проекцией: 0.84 / 0.08 (docs/benchmark/finetune_report_2026-11-28.md).
+    with_projection = (0.84, 0.08) if models["embedder"].get("weights_path") else (0.83, 0.08)
+    expected = with_projection if models["embedder"].get("projection_path") else (0.86, 0.04)
     assert (cfg["match_threshold"], cfg["margin_threshold"]) == expected
     assert "margin_threshold: float = 0.0" in (ROOT / "app" / "core" / "config.py").read_text(encoding="utf-8")
     runtime = (ROOT / "app" / "pipeline" / "ml_runtime.py").read_text(encoding="utf-8")        # матчер строится в ml_runtime

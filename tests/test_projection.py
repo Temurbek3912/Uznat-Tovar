@@ -82,11 +82,13 @@ def test_create_embedder_applies_the_configured_projection(tmp_path, monkeypatch
 def test_projection_is_off_in_code_and_on_in_config_with_its_thresholds():
     from app.core.config import EmbedderConfig, get_settings
     assert EmbedderConfig(name="x", weights_path="").projection_path == ""     # без строки в config.yaml — как раньше
-    s = get_settings()                                          # включена владельцем 2026-11-22 вместе с порогами 0.83 / 0.08
-    assert s.embedder.projection_path == "models/projection/siglip2-base.npz"
-    assert (s.matcher.match_threshold, s.matcher.margin_threshold) == (0.83, 0.08)
+    s = get_settings()          # 2026-11-28: дообученный SigLIP 2 и его проекция (обе — на диске, не в git), пороги 0.84 / 0.08
+    assert s.embedder.weights_path == "models/embedder/siglip2-base-shop-ft"
+    assert s.embedder.projection_path == "models/projection/siglip2-base-shop-ft.npz"
+    assert (s.matcher.match_threshold, s.matcher.margin_threshold) == (0.84, 0.08)
     from app.core.config import resolve_project_path
-    shipped = Projection.load(resolve_project_path(s.embedder.projection_path))   # файл хранится вместе с программой
+    # проекция прежней модели хранится вместе с программой — чтобы вернуть как было (включена 2026-11-22, 0.83 / 0.08)
+    shipped = Projection.load(resolve_project_path("models/projection/siglip2-base.npz"))
     assert shipped.base_signature["name"] == E.SIGLIP2_HUB_MODEL and shipped.dim == s.embedder.embedding_dim
     assert shipped.info["thresholds"] == [0.83, 0.08] and shipped.info["base_thresholds"] == [0.86, 0.04]
 
@@ -172,3 +174,20 @@ def test_check_splits_by_products_and_finds_copies_by_raw_vectors():
     owners = np.array(["a", "a", "b"])
     assert 0 not in ranked_lists(z, raw, owners, [0])              # копия убрана по исходным векторам — снимка нет
     assert ranked_lists(z, raw, owners, [0], stranger=True)[0][0][0] == "b"
+
+
+def test_skip_check_writes_projection_without_cross_check(tmp_path, monkeypatch):
+    """--skip-check (дообученная модель видела все товары — её проверка в ml.finetune_check): файл пишется без проверки."""
+    from ml import train_projection as tp
+    vectors, owners = _clusters()
+    lines = []
+    settings = types.SimpleNamespace(embedder=types.SimpleNamespace(projection_path=""),
+                                     matcher=types.SimpleNamespace(match_threshold=0.84, margin_threshold=0.08,
+                                                                   unknown_threshold=0.70))
+    sig = {**BASE, "dim": vectors.shape[1]}
+    monkeypatch.setattr(tp, "load_catalog_vectors", lambda *a, **k: (vectors, owners, [True] * len(owners), sig, 0))
+    monkeypatch.setattr(tp, "cross_check", lambda *a, **k: pytest.fail("проверки быть не должно"))
+    assert tp.main(["--skip-check", "--out", str(tmp_path / "p.npz")], settings=settings, out=lines.append) == 0
+    saved = Projection.load(tmp_path / "p.npz")
+    assert saved.base_signature == sig and saved.info["thresholds"] is None and saved.info["base_thresholds"] is None
+    assert (tmp_path / "p.md").exists()

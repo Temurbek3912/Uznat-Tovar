@@ -5,6 +5,9 @@ docs/benchmark/projection_report_2026-11-22.md).
     .venv/Scripts/python.exe -m ml.train_projection                       # проверка + файл models/projection/siglip2-base.npz
     .venv/Scripts/python.exe -m ml.train_projection --check-only          # только честная проверка, файл не пишется
     .venv/Scripts/python.exe -m ml.train_projection --out D:/опыт/p.npz   # файл в другое место
+    .venv/Scripts/python.exe -m ml.train_projection --skip-check --out models/projection/siglip2-base-shop-ft.npz
+        # для дообученной модели (ml/finetune_embedder.py): она видела все товары каталога, и проверка здесь была бы
+        # нечестной (завышенной) — честная проверка проекции поверх неё — ml.finetune_check (векторы cv_*.npy)
 
 Только ЧИТАЕТ базу и индекс: векторы фото — из кэша базы (image_embeddings) для модели рабочего индекса, без видеокарты и
 без пересчёта фото. Пишет только файл проекции и отчёт рядом с ним. Индекс, база и config.yaml не меняются.
@@ -305,6 +308,8 @@ def main(argv: Sequence[str] | None = None, settings=None, make_session=None, ou
     ap.add_argument("--out", default=str(PROJECT_ROOT / "models" / "projection" / "siglip2-base.npz"))
     ap.add_argument("--check-only", action="store_true", help="только проверка, файл проекции не пишется")
     ap.add_argument("--threads", type=int, default=4, help="потоков процессора (ноутбук не перегружается)")
+    ap.add_argument("--skip-check", action="store_true",
+                    help="без проверки здесь: для дообученной модели, её проверка — ml.finetune_check")
     a = ap.parse_args(argv)
     import torch  # noqa: PLC0415
     torch.set_num_threads(max(1, a.threads))
@@ -323,6 +328,17 @@ def main(argv: Sequence[str] | None = None, settings=None, make_session=None, ou
         return 2
     m = settings.matcher
     now = base_thresholds(settings)
+    if a.skip_check:
+        from app.pipeline.projection import Projection  # noqa: PLC0415
+        info = {"trained": date.today().isoformat(), "vectors": len(owners), "products": n_products, "recipe": RECIPE,
+                "base_thresholds": None, "thresholds": None, "check": "ml.finetune_check"}
+        path = Projection(train_matrix(vectors, owners), signature, info).save(a.out)
+        Path(path).with_suffix(".md").write_text(
+            f"# Проекция для {signature.get('name')} ({date.today().isoformat()})\n\nВекторов: {len(owners)}, товаров: "
+            f"{n_products}. Проверка здесь не делалась (--skip-check): модель дообучена на этих товарах, честный замер "
+            "проекции поверх неё — ml.finetune_check.\n", encoding="utf-8")
+        out(f"Файл проекции: {path} (без проверки здесь: --skip-check)")
+        return 0
     out("Честная проверка (обучение на части товаров, замер на других):")
     check = cross_check(vectors, owners, front, now, m.unknown_threshold, log=out)
     report = render(check, len(owners), n_products, RECIPE)

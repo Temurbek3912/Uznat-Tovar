@@ -119,7 +119,7 @@ def load_images(data: Path, rows: list[dict]):
     from PIL import Image  # noqa: PLC0415
     out = []
     for r in rows:
-        with Image.open(data / "images" / r["image"]) as im:
+        with Image.open(data / "images" / r["image"]) as im:  # exif-ok: фото датасета ml.shop_dataset уже повёрнуты и пересохранены без EXIF
             out.append(im.convert("RGB"))
     return out
 

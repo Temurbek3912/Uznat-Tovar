@@ -43,19 +43,25 @@ models:
     # Замер 2026-11-18 (docs/benchmark/models_report_2026-11-18.md, §6): SigLIP 2 точнее. Чтобы включить — с согласия владельца:
     #   name: "siglip2-base", weights_path: "", пороги ниже — match 0.88, unknown 0.70; затем копия базы и models/index и
     #   python -m scripts.rebuild_index --compute-missing (индекс старой модели программа не загрузит).
+    # Дообученный SigLIP 2 (LoRA на фото каталога, ml/finetune_embedder.py) ВКЛЮЧЁН 2026-11-28: честная проверка по 5 частям
+    # (docs/benchmark/finetune_report_2026-11-28.md) — верный первым 73,6 % вместо 70,1 %, с правилом двойника «найдено» 424
+    # вместо 356, неверно 0 вместо 2. Копия до включения — D:/uznat_tovar/backups-finetune-2026-11-28. Папки модели в git нет:
+    # python -m ml.finetune_check --install <lora_final.pt>. Вернуть: weights_path "", projection_path
+    # "models/projection/siglip2-base.npz", match_threshold 0.83, затем python -m scripts.rebuild_index --apply --compute-missing
+    # (векторы прежней модели — в кэше базы). Нет папки на диске — программа возьмёт публичную модель и попросит пересборки.
     name: "siglip2-base"
-    weights_path: ""
+    weights_path: "models/embedder/siglip2-base-shop-ft"
     embedding_dim: 768
     # Лёгкая проекция поверх векторов SigLIP 2 (замер 2026-11-22, docs/benchmark/projection_report_2026-11-22.md): верный товар
     # первым 70 % вместо 63 % на товарах, которых проекция не видела. ВКЛЮЧЕНА с согласия владельца 2026-11-22; копия до
     # включения — D:/uznat_tovar/backups-projection-2026-11-22. Файл обучается командой python -m ml.train_projection (переобучать,
     # когда товаров заметно прибавится). Выключить: "" и пороги ниже 0.86 / 0.04, затем
     # python -m scripts.rebuild_index --apply --compute-missing (векторы без проекции — в кэше базы, фото не пересчитываются).
-    projection_path: "models/projection/siglip2-base.npz"
+    projection_path: "models/projection/siglip2-base-shop-ft.npz"   # для дообученной: python -m ml.train_projection --skip-check --out <этот файл>
   matcher:
     index_path: "models/index/catalog.faiss"
     top_k: 5
-    match_threshold: 0.83       # SigLIP 2 с проекцией, вместе с запасом 0.08 (ml/train_projection.py, 2026-11-22); ниже -> "uncertain", в очередь на ручную проверку. Без проекции — 0.86 / 0.04
+    match_threshold: 0.84       # дообученный SigLIP 2 с проекцией, запас 0.08 (ml.finetune_check, 2026-11-28). Прежняя модель — 0.83. SigLIP 2 с проекцией, вместе с запасом 0.08 (ml/train_projection.py, 2026-11-22); ниже -> "uncertain", в очередь на ручную проверку. Без проекции — 0.86 / 0.04
     unknown_threshold: 0.70     # SigLIP 2; ниже -> "unknown" (товар не из каталога). У DINOv2 были 0.72 / 0.45
     margin_threshold: 0.08      # второй товар ближе 0.08 к первому -> "uncertain" (похожие товары одной марки). С проекцией векторы разных товаров дальше друг от друга — запас шире. 0 = выключено
     # Правило двойника (2026-11-23, docs/benchmark/twins_report_2026-11-23.md): среди кандидатов есть товар, чьи фото в каталоге

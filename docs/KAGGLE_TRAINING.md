@@ -2,7 +2,13 @@
 
 «Узнать товар» уже ищет товар по векторам: модель SigLIP 2 превращает фото в вектор, а индекс FAISS находит ближайшие
 векторы фото каталога. Дообучение — научить саму модель лучше отличать **ваши** товары друг от друга. Замер, что это даёт, —
-`docs/benchmark/finetune_report_2026-11-27.md`.
+`docs/benchmark/finetune_report_2026-11-28.md`.
+
+**Итог 2026-11-28: включено.** Обучали на RTX 5060 ноутбука: ключа Kaggle на компьютере нет. Честная проверка по 5 частям:
+«верный первым» 73,6 % вместо 70,1 %. С правилом двойника «найдено» 424 вместо 356 из 1290, из них неверно 0 вместо 2,
+«не узнан» 187 вместо 280. В программе: `models/embedder/siglip2-base-shop-ft` + проекция
+`models/projection/siglip2-base-shop-ft.npz`, `match_threshold` 0.84. Копия до включения —
+`D:\uznat_tovar\backups-finetune-2026-11-28`.
 
 Kaggle нужен только если на компьютере нет видеокарты NVIDIA: на ноутбуке с RTX 5060 то же обучение идёт ~35 минут
 (команда в конце). Пароли и ключи программа и Claude за вас не вводят — шаги 1–3 делаете вы.
@@ -52,12 +58,20 @@ Kaggle нужен только если на компьютере нет вид�
 1. Копия: `scripts\lite_copy.py` (или полная копия) и папка `data\lite\index`.
 2. `.venv\Scripts\python.exe -m ml.finetune_check --install D:/uznat_tovar/kaggle-embedder/kaggle-out/lora_final.pt`
    → `models\embedder\siglip2-base-shop-ft` (~375 МБ на диске D, в git не идёт).
-3. В `configs/config.yaml`: `models.embedder.weights_path: "models/embedder/siglip2-base-shop-ft"`, пороги из отчёта; проекция
-   старой модели к новой не подходит (программа её сама не применит) — переобучить `python -m ml.train_projection` после
-   пересборки индекса.
-4. `python -m scripts.rebuild_index --apply --compute-missing` (векторы всех фото считаются новой моделью, ~2 минуты).
+3. В `configs/config.yaml`: `models.embedder.weights_path: "models/embedder/siglip2-base-shop-ft"`, `projection_path: ""`
+   (проекция старой модели к новой не подходит).
+4. `python -m scripts.rebuild_index --apply --compute-missing --yes` — векторы всех фото считаются новой моделью, ~2 минуты.
+5. `python -m ml.train_projection --skip-check --out models/projection/siglip2-base-shop-ft.npz`. Обычная проверка там
+   нечестная: финальная модель видела все товары. Честная проверка — `ml.finetune_check` (строка «Дообученная + проекция»,
+   её пороги). Затем `projection_path: "models/projection/siglip2-base-shop-ft.npz"`, `match_threshold` / `margin_threshold`
+   из этой строки — и ещё раз шаг 4.
+6. Правило двойника (`twin_threshold`) проверялось вместе с моделью — отчёт, §3. После нового обучения проверить его
+   так же.
 
-Вернуть как было: `weights_path: ""`, прежние `projection_path` и пороги, затем та же пересборка индекса (векторы старой
+Команды шагов 4–5 — с переменными облегчённого режима (`DATABASE_URL`, `MEDIA_ROOT`, `CATALOG_INDEX_PATH` на `data/lite`,
+как в `lite_environment` из `scripts/start_demo.py`).
+
+Вернуть как было: `weights_path: ""`, `projection_path: "models/projection/siglip2-base.npz"`, `match_threshold: 0.83`, затем та же пересборка индекса (векторы старой
 модели остаются в кэше базы — фото не пересчитываются).
 
 ## Без Kaggle, на своей видеокарте

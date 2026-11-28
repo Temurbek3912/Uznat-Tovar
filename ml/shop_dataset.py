@@ -37,7 +37,7 @@ def main(argv=None) -> int:
     ap.add_argument("--side", type=int, default=288, help="длинная сторона фото в датасете (модель видит 224×224)")
     ap.add_argument("--quality", type=int, default=85)
     a = ap.parse_args(argv)
-    from PIL import Image  # noqa: PLC0415
+    from PIL import Image, ImageOps  # noqa: PLC0415
 
     from app.core.config import get_settings, resolve_project_path  # noqa: PLC0415
     from app.db.session import SessionLocal  # noqa: PLC0415
@@ -68,8 +68,8 @@ def main(argv=None) -> int:
     rows, total = [], 0
     for n, item in enumerate(items):
         src = media / item.storage_path
-        with Image.open(src) as im:
-            im = im.convert("RGB")
+        with Image.open(src) as im:  # exif-ok: поворот с телефона — exif_transpose, как load_rgb в программе
+            im = ImageOps.exif_transpose(im).convert("RGB")
             im.thumbnail((a.side, a.side), Image.BICUBIC)
             buf = io.BytesIO()
             im.save(buf, "JPEG", quality=a.quality, optimize=True)

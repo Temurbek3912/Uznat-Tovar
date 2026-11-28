@@ -881,6 +881,7 @@
     "assistant.example_price": "У каких товаров нет цены?",
     "assistant.tool.catalog_overview": "сводку каталога",
     "assistant.tool.find_products": "поиск товаров",
+    "assistant.tool.count_products": "сколько товаров",
     "assistant.tool.products_missing": "чего не хватает в карточках",
     "assistant.tool.similar_names": "одинаковые названия",
     "assistant.tool.product_details": "карточку товара",

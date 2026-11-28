@@ -882,6 +882,7 @@
     "assistant.example_price": "Қайси маҳсулотларда нарх йўқ?",
     "assistant.tool.catalog_overview": "каталог хулосасини",
     "assistant.tool.find_products": "маҳсулот қидирувини",
+    "assistant.tool.count_products": "нечта маҳсулот",
     "assistant.tool.products_missing": "карточкаларда нима етишмаслигини",
     "assistant.tool.similar_names": "бир хил номларни",
     "assistant.tool.product_details": "маҳсулот карточкасини",

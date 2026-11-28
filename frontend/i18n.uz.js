@@ -881,6 +881,7 @@
     "assistant.example_price": "Qaysi mahsulotlarda narx yoʻq?",
     "assistant.tool.catalog_overview": "katalog xulosasini",
     "assistant.tool.find_products": "mahsulot qidiruvini",
+    "assistant.tool.count_products": "nechta mahsulot",
     "assistant.tool.products_missing": "kartochkalarda nima yetishmasligini",
     "assistant.tool.similar_names": "bir xil nomlarni",
     "assistant.tool.product_details": "mahsulot kartochkasini",

@@ -30,13 +30,13 @@ ARCHIVED = [("JUICE", "Сок Добрый яблоко 1 л", "Добрый", "
 
 PHRASES: list[tuple[str, str, str]] = [
     # --- сводка каталога
-    ("Сколько у меня товаров?", "ru", "read:catalog_overview"),
-    ("скока товаров в базе", "ru", "read:catalog_overview"),
+    ("Сколько у меня товаров?", "ru", "read:catalog_overview|read:count_products"),
+    ("скока товаров в базе", "ru", "read:catalog_overview|read:count_products"),
     ("Какие у нас категории?", "ru", "read:catalog_overview"),
-    ("Nechta tovar bor?", "uz", "read:catalog_overview"),
-    ("Katalogda qancha mahsulot bor", "uz", "read:catalog_overview"),
-    ("Нечта товар бор?", "uz-Cyrl", "read:catalog_overview"),
-    ("Каталогда қанча маҳсулот бор?", "uz-Cyrl", "read:catalog_overview"),
+    ("Nechta tovar bor?", "uz", "read:catalog_overview|read:count_products"),
+    ("Katalogda qancha mahsulot bor", "uz", "read:catalog_overview|read:count_products"),
+    ("Нечта товар бор?", "uz-Cyrl", "read:catalog_overview|read:count_products"),
+    ("Каталогда қанча маҳсулот бор?", "uz-Cyrl", "read:catalog_overview|read:count_products"),
     # --- найти товар / цена
     ("Есть у нас пепси?", "ru", "read:find_products"),
     ("Сколько стоит нутелла?", "ru", "read:find_products"),
@@ -135,7 +135,7 @@ PHRASES: list[tuple[str, str, str]] = [
     ("Сколько стоит пепси и поменяй её цену на 15000", "ru", "upd:PEPSI:price"),
     ("Какая цена у фанты? Не меняй ничего", "ru", "read:find_products"),
     ("Покажи товары без категории", "ru", "read:products_missing"),
-    ("Сколько товаров в категории напитки?", "ru", "read:catalog_overview|read:find_products"),
+    ("Сколько товаров в категории напитки?", "ru", "read:catalog_overview|read:find_products|read:count_products"),
     ("Удалить фото у хлеба", "ru", "none"),
     ("Верни цену фанты как было", "ru", "none"),
     ("Pepsi narxi qancha? Oʻzgartirmang", "uz", "read:find_products"),

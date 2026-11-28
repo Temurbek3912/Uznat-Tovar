@@ -140,16 +140,16 @@ def test_a_price_question_looks_for_the_product_and_no_price_is_invented(Shop):
     reply = _talk(Shop, model, "Сколько стоит молоко?")
     assert reply.tools[0]["name"] == "find_products" and reply.text == "У молока цена не указана."
     assert "«100 сум» нет в данных" in model.calls[2][1]["messages"][-1]["content"]
-    count = FakeModel({"tool": "catalog_overview", "args": {}}, {"tool": "", "text": "Каталогда 6 та маҳсулот бор."})
-    assert _talk(Shop, count, "Каталогда қанча маҳсулот бор?", lang="uz-Cyrl").tools[0]["name"] == "catalog_overview"
+    count = FakeModel({"tool": "", "text": "Каталогда 6 та маҳсулот бор."})
+    assert _talk(Shop, count, "Каталогда қанча маҳсулот бор?", lang="uz-Cyrl").tools[0]["name"] == "count_products"
     missing = FakeModel({"tool": "products_missing", "args": {"field": "price"}}, {"tool": "", "text": "Молоко Nestle 1 л."})
     assert _talk(Shop, missing, "У какого товара нет цены?").tools[0]["name"] == "products_missing"
     # «Нечта товар бор?» («сколько товаров?»): модель искала товар «товар» — сколько товаров, говорит сводка каталога
-    count = FakeModel({"tool": "find_products", "args": {"query": "товар"}}, {"tool": "", "text": "6 та товар бор."})
-    assert _talk(Shop, count, "Нечта товар бор?", lang="uz-Cyrl").tools[0]["name"] == "catalog_overview"
-    loop = FakeModel({"tool": "find_products", "args": {"query": "бор"}}, '{"tool": "", "text": "Бор бор ' + "бор " * 300)
+    count = FakeModel({"tool": "", "text": "6 та товар бор."})
+    assert _talk(Shop, count, "Нечта товар бор?", lang="uz-Cyrl").tools[0]["name"] == "count_products"
+    loop = FakeModel('{"tool": "", "text": "Бор бор ' + "бор " * 300)
     reply = _talk(Shop, loop, "Нечта товар бор?", lang="uz-Cyrl")
-    assert reply.text == "Каталогда 6 та маҳсулот, архивда 0 та." and len(loop.calls) == 2   # после сводки — только ответ
+    assert reply.text == "Каталогда 6 та маҳсулот, архивда 0 та." and len(loop.calls) == 1   # счёт — программа, модель отвечает
     cocoa = FakeModel({"tool": "find_products", "args": {"query": "какао"}}, {"tool": "", "text": "Какао нет."})
     assert _talk(Shop, cocoa, "Сколько стоит какао?").tools[0] == {"name": "find_products", "ok": True}
 
@@ -177,11 +177,11 @@ def test_language_and_background_together(Shop):
 
 
 def test_uzbek_cyrillic_answers_are_cyrillic(Shop):
-    latin = {"tool": "", "text": "7 ta mahsulot shtrixkodga ega emas."}
-    model = FakeModel({"tool": "products_missing", "args": {"field": "barcode"}}, latin, latin)
+    latin = {"tool": "", "text": "5 ta mahsulot shtrixkodga ega emas."}
+    model = FakeModel(latin, latin)                      # число считает программа (count_products), модель только отвечает
     reply = _talk(Shop, model, "Штрихкоди йўқ товарлар нечта?", lang="uz-Cyrl")
-    assert "кириллицей" in model.calls[2][1]["messages"][-1]["content"]
-    assert reply.text == "7 та маҳсулот штрихкодга эга эмас."
+    assert "кириллицей" in model.calls[1][1]["messages"][-1]["content"]
+    assert reply.text == "5 та маҳсулот штрихкодга эга эмас."
     assert A.tidy_text("Каталогda 6 товар, Twix — 32000 so'm.", "uz-Cyrl") == "Каталогда 6 товар, Twix — 32000 сўм."
     assert A._uz_word_cyr("yoʻq") == "йўқ"
 

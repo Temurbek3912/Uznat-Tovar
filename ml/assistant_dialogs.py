@@ -83,7 +83,7 @@ DIALOGS: list[dict] = [
         _t("Сколько стоит сникерс?", "ru", "read:find_products", ["7000"]),
         _t("а какой у него бренд?", "ru", "read:find_products|read:product_details|none", ["mars"])]},
     {"id": "follow_count_ru", "catalog": "small", "turns": [
-        _t("Сколько товаров без фото?", "ru", "read:products_missing|read:catalog_overview", ["10"]),
+        _t("Сколько товаров без фото?", "ru", "read:products_missing|read:catalog_overview|read:count_products", ["10"]),
         _t("а без штрихкода?", "ru", "read:products_missing|read:catalog_overview", ["7"])]},
     {"id": "follow_theme_ru", "catalog": "small", "turns": [
         _t("Сделай тёмный фон", "ru", "theme:dark"),
@@ -123,11 +123,11 @@ DIALOGS: list[dict] = [
         _t("Переключи на узбекский и сделай тёмный фон", "ru", "lang:uz&theme:dark")]},
     # --- ответ по данным: числа и названия
     {"id": "data_count_ru", "catalog": "small", "turns": [
-        _t("Сколько у меня товаров?", "ru", "read:catalog_overview", ["10"])]},
+        _t("Сколько у меня товаров?", "ru", "read:catalog_overview|read:count_products", ["10"])]},
     {"id": "data_archive_ru", "catalog": "small", "turns": [
-        _t("Сколько товаров в архиве?", "ru", "read:catalog_overview", ["1"])]},
+        _t("Сколько товаров в архиве?", "ru", "read:catalog_overview|read:count_products", ["1"])]},
     {"id": "data_cat_ru", "catalog": "small", "turns": [
-        _t("Сколько товаров в категории напитки?", "ru", "read:catalog_overview|read:find_products", ["4"])]},
+        _t("Сколько товаров в категории напитки?", "ru", "read:catalog_overview|read:find_products|read:count_products", ["4"])]},
     {"id": "data_water_ru", "catalog": "small", "turns": [
         _t("Сколько стоит вода?", "ru", "read:find_products", ["4000"])]},
     {"id": "data_noprice_ru", "catalog": "small", "turns": [
@@ -140,7 +140,7 @@ DIALOGS: list[dict] = [
         _t("Какой у нас самый дорогой товар?", "ru", "read:find_products|read:catalog_overview|none",
            ["nutella|нутелла|не могу|нет"], ["re:(?i)pringles.{0,40}сам|самый дорогой.{0,40}pringles"])]},
     {"id": "data_count_uz", "catalog": "small", "turns": [
-        _t("Nechta tovar bor?", "uz", "read:catalog_overview", ["10"])]},
+        _t("Nechta tovar bor?", "uz", "read:catalog_overview|read:count_products", ["10"])]},
     {"id": "data_price_uz", "catalog": "small", "turns": [
         _t("Nutella qancha turadi?", "uz", "read:find_products", ["45000"])]},
     {"id": "data_price_uzc", "catalog": "small", "turns": [
@@ -152,16 +152,16 @@ DIALOGS: list[dict] = [
     {"id": "data_missing_uz", "catalog": "small", "turns": [
         _t("Qaysi tovarlarning narxi yoʻq?", "uz", "read:products_missing", ["nestle|молоко"])]},
     {"id": "data_count_uzc", "catalog": "small", "turns": [
-        _t("Каталогда қанча маҳсулот бор?", "uz-Cyrl", "read:catalog_overview", ["10"])]},
+        _t("Каталогда қанча маҳсулот бор?", "uz-Cyrl", "read:catalog_overview|read:count_products", ["10"])]},
     {"id": "data_barcode_uzc", "catalog": "small", "turns": [
-        _t("Штрихкоди йўқ товарлар нечта?", "uz-Cyrl", "read:products_missing|read:catalog_overview", ["7"])]},
+        _t("Штрихкоди йўқ товарлар нечта?", "uz-Cyrl", "read:products_missing|read:catalog_overview|read:count_products", ["7"])]},
     {"id": "data_cats_uz", "catalog": "small", "turns": [
         _t("Qanday kategoriyalar bor?", "uz", "read:catalog_overview", ["напитки|ichimlik", "сладости|shirinlik"])]},
     # --- длинный каталог: копия рабочей базы
     {"id": "big_count", "catalog": "big", "turns": [
-        _t("Сколько у меня товаров?", "ru", "read:catalog_overview", ["495"])]},
+        _t("Сколько у меня товаров?", "ru", "read:catalog_overview|read:count_products", ["495"])]},
     {"id": "big_nocat", "catalog": "big", "turns": [
-        _t("Сколько товаров без категории?", "ru", "read:products_missing|read:catalog_overview", ["37"])]},
+        _t("Сколько товаров без категории?", "ru", "read:products_missing|read:catalog_overview|read:count_products", ["37"])]},
     {"id": "big_cola05", "catalog": "big", "turns": [
         _t("Сколько стоит Coca-Cola 0,5?", "ru", "read:find_products", ["9000"])]},
     {"id": "big_cola15_set", "catalog": "big", "turns": [

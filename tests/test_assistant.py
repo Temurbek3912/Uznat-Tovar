@@ -211,7 +211,7 @@ SETTINGS = types.SimpleNamespace(naming_enabled=True, assistant_enabled=True, na
                                  naming_vision_model="qwen3-vl-4b")
 
 
-def _ask(Session, model, text="Сколько товаров без фото?", settings=SETTINGS, lang="ru"):
+def _ask(Session, model, text="Что у нас в каталоге?", settings=SETTINGS, lang="ru"):
     with Session() as db:
         return A.chat(db, OWNER, [{"role": "user", "content": text}], lang, settings, http_post=model)
 
@@ -238,12 +238,12 @@ def test_count_of_missing_is_answered_at_once(Session):
         out = T.products_missing(db, {"field": "barcode"})
         assert out["summary"] == "Товаров без штрихкода: 3 из 4." and out["total"] == 3
         assert "первые 1" in T.products_missing(db, {"field": "barcode", "limit": 1})["summary"]
-    model = FakeModel({"tool": "products_missing", "args": {"field": "barcode"}},
-                      {"tool": "", "text": "Без штрихкода 3 товара."})
+    # Вопрос о числе считает программа (count_products, 2026-11-28): модель только отвечает — один шаг, без инструментов.
+    model = FakeModel({"tool": "", "text": "Без штрихкода 3 товара."})
     reply = _ask(Session, model, "Сколько товаров без штрихкода?")
-    assert reply.text == "Без штрихкода 3 товара." and reply.tools == [{"name": "products_missing", "ok": True}]
-    second = model.calls[1][1]["response_format"]["json_schema"]["schema"]
-    assert "anyOf" not in second and second["properties"]["tool"]["enum"] == [""]
+    assert reply.text == "Без штрихкода 3 товара." and reply.tools == [{"name": "count_products", "ok": True}]
+    only = model.calls[0][1]["response_format"]["json_schema"]["schema"]
+    assert len(model.calls) == 1 and "anyOf" not in only and only["properties"]["tool"]["enum"] == [""]
 
 
 def test_assistant_never_invents_a_barcode(Session):
@@ -285,7 +285,8 @@ def test_model_calls_a_tool_then_answers_from_the_data(Session):
     assert url == "http://127.0.0.1:8090/v1/chat/completions" and first["model"] == "qwen3-vl-4b"
     schema = first["response_format"]["json_schema"]["schema"]
     branches = [b["properties"]["tool"]["enum"][0] for b in schema["anyOf"]]
-    assert branches == [*[t.name for t in T.TOOLS], ""]                 # у каждого инструмента своя ветка, последняя — ответ
+    # у каждого инструмента своя ветка, последняя — ответ; count_products зовёт только программа
+    assert branches == [*[t.name for t in T.TOOLS if t.for_model], ""] and "count_products" not in branches
     update = next(b for b in schema["anyOf"] if b["properties"]["tool"]["enum"] == ["propose_update"])
     assert update["properties"]["args"]["required"] == ["product", "field", "value"]
     assert "кнопкой «Сделать»" in first["messages"][0]["content"]
@@ -829,9 +830,10 @@ def test_missing_category_tool_is_redirected_when_the_owner_names_a_category(Ses
     assert any("ПРОВЕРКА ПРОГРАММЫ" in m and "query=Напитки" in m for m in sent)
     assert not any("BREAD" in m for m in sent)                       # список «без категории» модели не дали
 
-    plain = FakeModel({"tool": "products_missing", "args": {"field": "category"}}, {"tool": "", "text": "Один: Хлеб."})
+    plain = FakeModel({"tool": "", "text": "Без категории — 1 товар."})
     reply = _ask(Session, plain, "Сколько товаров без категории?")    # «Без категории» — не названная категория
-    assert reply.text == "Один: Хлеб." and not any("ПРОВЕРКА" in m["content"] for m in plain.calls[1][1]["messages"])
+    assert reply.text == "Без категории — 1 товар." and not any("ПРОВЕРКА" in m["content"] for m in plain.calls[0][1]["messages"])
+    assert '"without": "category"' in plain.calls[0][1]["messages"][-2]["content"]
 
 
 def test_price_words_tell_raise_by_from_set_to():
@@ -1101,11 +1103,11 @@ def test_language_is_repeated_in_the_question_after_a_switch(Session):
     assert sent[-1]["content"] == "Fanta narxi qancha?\n(Ответ — на узбекском (латиница, апостроф ʻ) языке.)"
     assert sent[1]["content"] == "Сколько товаров?"                       # старые реплики не трогаются
     back = FakeModel({"tool": "", "text": "Хорошо."})                     # обратно на русский — тоже напоминание
-    _talk(Session, back, said[:2] + [{"role": "user", "content": "А сколько без фото?"}], "ru")
+    _talk(Session, back, said[:2] + [{"role": "user", "content": "А что без фото?"}], "ru")
     assert back.calls[0][1]["messages"][-1]["content"].endswith("(Ответ — на русском языке.)")
     first = FakeModel({"tool": "", "text": "Хорошо."})                    # первый вопрос по-русски — без приписки
     _ask(Session, first, "Сколько товаров?")
-    assert first.calls[0][1]["messages"][-1]["content"] == "Сколько товаров?"
+    assert first.calls[0][1]["messages"][1]["content"] == "Сколько товаров?"   # дальше — итог count_products
 
 
 def test_answer_in_the_wrong_alphabet_is_rewritten_once(Session):

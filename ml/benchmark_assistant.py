@@ -346,6 +346,134 @@ def dialog_summary(rows: list[dict]) -> str:
                      + ", ".join(f"{k} {v}" for k, v in cnt.items() if k != "верно"))
     return "\n".join(lines)
 
+# --- вопросы «сколько» (ml/assistant_counts.py, этап 1 плана 2026-11-28) ----------------------------------------------------------
+
+SHOP_COPY = Path("D:/uznat_tovar/assistant-counts-2026-11-28/shop_copy.db")    # копия data/lite/shop.db (вне репозитория)
+
+
+def _key(text) -> str:
+    import unicodedata  # noqa: PLC0415
+    flat = unicodedata.normalize("NFKD", str(text or "")).lower()
+    return re.sub(r"[^a-z0-9а-яё]+", "", "".join(ch for ch in flat if not unicodedata.combining(ch)))
+
+
+def counts_catalog(copy: Path, tmp: Path):
+    """Копия базы магазина во временной папке: схема — до последней, цены замера (ml/assistant_dialogs.big_price)."""
+    import shutil  # noqa: PLC0415
+
+    from sqlalchemy import create_engine  # noqa: PLC0415
+    from sqlalchemy.orm import sessionmaker  # noqa: PLC0415
+
+    from app.db import migrate  # noqa: PLC0415
+    from app.db.models import Product  # noqa: PLC0415
+    from ml.assistant_dialogs import big_price  # noqa: PLC0415
+    path = tmp / "shop.sqlite"
+    shutil.copyfile(copy, path)
+    engine = create_engine(f"sqlite:///{path}", connect_args={"check_same_thread": False})
+    migrate.upgrade_to_head(engine)
+    session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with session() as db:
+        for p in db.query(Product).all():
+            p.expected_price = big_price(p.sku)
+        db.commit()
+    return engine, session
+
+
+def count_truth(db, spec: tuple) -> dict:
+    """Верный ответ прямо по строкам базы: {"numbers": [допустимые числа]} или {"names": [...]}."""
+    from app.db.models import PRODUCT_ACTIVE, PRODUCT_ARCHIVED, Product, ProductBarcodeORM  # noqa: PLC0415
+    from app.services.product_images import PhotoRegistry  # noqa: PLC0415
+    active = db.query(Product).filter(Product.status == PRODUCT_ACTIVE).all()
+    kind = spec[0]
+    if kind == "archived":
+        return {"numbers": [db.query(Product).filter(Product.status == PRODUCT_ARCHIVED).count()]}
+    if kind == "cats":
+        cats = {p.category or "Без категории" for p in active}
+        return {"numbers": sorted({len(cats), len(cats - {"Без категории"})})}
+    if kind == "price":
+        p = next(p for p in active if p.sku == spec[1])
+        return {"numbers": [int(p.expected_price)]}
+    if kind == "top":
+        rows = [p for p in active if p.category == spec[1] and p.expected_price is not None]
+        top = max(p.expected_price for p in rows)
+        return {"names": [p.name for p in rows if p.expected_price == top]}
+    rows = active
+    rest = list(spec[2:]) if kind in ("cat", "brand") else list(spec[1:])
+    if kind == "cat":
+        rows = [p for p in rows if p.category in spec[1].split(";")]
+    if kind == "brand":
+        k = _key(spec[1])
+        rows = [p for p in rows if _key(p.brand) == k or k in _key(p.name)]
+    rest += [None] * (3 - len(rest))
+    without, lo, hi = rest[:3]
+    if without == "price":
+        rows = [p for p in rows if p.expected_price is None]
+    elif without == "barcode":
+        coded = {pid for (pid,) in db.query(ProductBarcodeORM.product_id).all()}
+        rows = [p for p in rows if p.id not in coded]
+    elif without == "photo":
+        photos = {pid: s.total for pid, s in PhotoRegistry(db).summaries([p.id for p in rows]).items()}
+        rows = [p for p in rows if not photos.get(p.id)]
+    if lo is not None or hi is not None:
+        rows = [p for p in rows if p.expected_price is not None and (lo is None or p.expected_price >= lo)
+                and (hi is None or p.expected_price <= hi)]
+    return {"numbers": [len(rows)]}
+
+
+_NONE = re.compile(r"(?i)(?<!\w)(?:нет|yoʻq|yo'q|йўқ|mavjud emas|мавжуд эмас|бар эмас|no|none)(?!\w)")
+
+
+def count_verdict(text: str, truth: dict) -> str:
+    if "names" in truth:
+        return "верно" if any(_key(n) in _key(text) for n in truth["names"]) else "неверно"
+    found = {int(n) for n in re.findall(r"(?<![\d.,])\d+(?!\d|[.,]\d)", _digits(text))}
+    if 0 in truth["numbers"] and not found and _NONE.search(text or ""):
+        return "верно"                      # «Нет товаров без фото» при нуле — тоже верное число
+    return "верно" if any(n in found for n in truth["numbers"]) else "неверно"
+
+
+def run_counts(url: str, model: str, questions, copy: Path, log=print, pause: float = 0.0) -> list[dict]:
+    from app.core.security import CurrentUser, Role  # noqa: PLC0415
+    from app.services import assistant as A  # noqa: PLC0415
+    owner = CurrentUser(id="u1", username="owner", role=Role.ADMIN)
+    settings = types.SimpleNamespace(naming_enabled=True, assistant_enabled=True, naming_vision_url=url,
+                                     naming_vision_model=model)
+    rows = []
+    with tempfile.TemporaryDirectory() as tmp:
+        engine, session = counts_catalog(copy, Path(tmp))
+        try:
+            for n, (said, lang, spec) in enumerate(questions, 1):
+                started = time.monotonic()
+                with session() as db:
+                    truth = count_truth(db, spec)
+                    try:
+                        reply = A.chat(db, owner, [{"role": "user", "content": said}], lang, settings)
+                        text, reads, error = reply.text, [t["name"] for t in reply.tools], ""
+                    except Exception as exc:  # noqa: BLE001 — модель не ответила: «неверно»
+                        text, reads, error = "", [], f"{type(exc).__name__}: {exc}"
+                    db.rollback()
+                verdict = count_verdict(text, truth)
+                rows.append({"said": said, "lang": lang, "spec": list(spec), "truth": truth, "verdict": verdict,
+                             "reads": reads, "text": text[:400], "error": error[:200],
+                             "seconds": round(time.monotonic() - started, 1)})
+                log(f"{n:3d} {verdict:8s} {said[:42]:42s} ждали {truth} | {reads} | {text[:90]!r} {error[:50]}")
+                if pause:
+                    time.sleep(pause)
+        finally:
+            engine.dispose()
+    return rows
+
+
+def counts_summary(rows: list[dict]) -> str:
+    n = len(rows)
+    ok = sum(r["verdict"] == "верно" for r in rows)
+    lines = [f"Вопросов: {n}. Верно {ok} ({100 * ok / max(1, n):.0f} %). "
+             f"Среднее время {sum(r['seconds'] for r in rows) / max(1, n):.1f} с."]
+    for lang in dict.fromkeys(r["lang"] for r in rows):
+        part = [r for r in rows if r["lang"] == lang]
+        lines.append(f"  {lang}: верно {sum(r['verdict'] == 'верно' for r in part)} из {len(part)}")
+    return "\n".join(lines)
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
@@ -359,11 +487,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--only", default="", help="только фразы с этим текстом")
     ap.add_argument("--out", default="", help="записать подробности в JSON")
     ap.add_argument("--pause", type=float, default=0.0, help="пауза между фразами, с (видеокарта остывает)")
-    ap.add_argument("--set", choices=("phrases", "dialogs"), default="phrases",
-                    help="phrases — 126 фраз (ml/assistant_phrases); dialogs — разговоры (ml/assistant_dialogs)")
+    ap.add_argument("--set", choices=("phrases", "dialogs", "counts"), default="phrases",
+                    help="phrases — 126 фраз (ml/assistant_phrases); dialogs — разговоры (ml/assistant_dialogs); "
+                         "counts — вопросы «сколько» (ml/assistant_counts)")
+    ap.add_argument("--copy", default=str(SHOP_COPY), help="копия базы магазина для --set counts (SQLite)")
     ap.add_argument("--catalog", default=str(BIG_CATALOG), help="копия товаров для длинного каталога (JSON)")
     a = ap.parse_args(argv)
-    if a.set == "dialogs":
+    if a.set == "counts":
+        from ml.assistant_counts import QUESTIONS  # noqa: PLC0415
+        rows = run_counts(a.url, a.model, [q for q in QUESTIONS if a.only.lower() in q[0].lower()], Path(a.copy),
+                          pause=a.pause)
+        print(counts_summary(rows))
+    elif a.set == "dialogs":
         from ml.assistant_dialogs import DIALOGS  # noqa: PLC0415
         dialogs = [d for d in DIALOGS if a.only.lower() in d["id"].lower()]
         rows = run_dialogs(a.url, a.model, dialogs, Path(a.catalog), pause=a.pause)

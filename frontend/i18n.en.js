@@ -881,6 +881,7 @@
     "assistant.example_price": "Which products have no price?",
     "assistant.tool.catalog_overview": "catalog summary",
     "assistant.tool.find_products": "product search",
+    "assistant.tool.count_products": "product count",
     "assistant.tool.products_missing": "missing card details",
     "assistant.tool.similar_names": "identical names",
     "assistant.tool.product_details": "product card",

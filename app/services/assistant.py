@@ -139,6 +139,7 @@ def clean_history(messages) -> list[dict]:
 # --- разговор с моделью --------------------------------------------------------------------------------------------------------
 
 def system_prompt(user: CurrentUser, tools: list, lang: str) -> str:
+    tools = [t for t in tools if getattr(t, "for_model", True)]
     # Память движка — 4096 токенов на всё, поэтому список короткий: «имя(аргумент=подсказка, …): что делает».
     lines = [f"- {t.name}(" + ", ".join(f"{k}={v}" if v else k for k, v in t.args.items()) + f"): {t.description}"
              for t in tools]
@@ -170,7 +171,7 @@ def _arg_schema(tool, name: str) -> dict:
         return {"type": "integer"}
     if name in tool.choices:
         return {"type": "string", "enum": tool.choices[name]}
-    if name in ("value", "price"):  # цена — числом, наличие — да/нет: строкой модель писала мусор вида "}} 7500.0}"
+    if name in ("value", "price", "price_from", "price_to"):  # цена — числом: строкой модель писала мусор вида "}} 7500.0}"
         return {"anyOf": [{"type": "number"}, {"type": "boolean"}, {"type": "string"}]}
     return {"type": "string"}
 
@@ -616,6 +617,170 @@ def question_parts(said: str) -> list[str]:
     return [p for p in parts if p][:3]
 
 
+# --- вопросы «сколько» (этап 1 плана 2026-11-28) ---------------------------------------------------------------------------------
+# Владелец: «сколько у нас видов сладостей» → «2» (в категории «Сладости» 107). Модель выбирала инструмент сама: find_products
+# (слово в названиях), сводку каталога (первые 15 категорий) или «товары без цены» — и число зависело от выбора. Замер на копии
+# рабочей базы (ml/assistant_counts.py): 25 верных чисел из 47. Теперь вопрос о числе разбирает программа: категория, бренд,
+# «без цены / фото / штрихкода», цена от–до — и сама зовёт count_products; модель только пишет ответ, а число в нём сверяется
+# с итогом инструмента (нет его — ответ программы).
+_COUNT_WORD = re.compile(r"\b(?:skolk\w*|nechta\w*|nechtasi\w*|necha|nechi|qancha\w*|kolichestv\w*|how\s+many)\b")
+_COST_ASK = re.compile(r"\b(?:sto(?:it|yat|imost)\w*|turad\w*|pul|pochem\w*|how\s+much|cost\w*)")
+_PRICE_WORD = re.compile(r"\b(?:tsen\w*|narh\w*|price\w*)")
+_IN_ARCHIVE = re.compile(r"\bv\s+arhive\b|\barhiv(?:da|dagi)\b|\bin\s+the\s+archive\b|\barchived\b")
+_CATEGORIES_Q = re.compile(r"kategor|categor")
+_TOP = re.compile(r"\b(?:sam\w*\s+(?:dorog|deshev)\w*|eng\s+(?:qimmat|arzon)\w*|most\s+expensive|cheapest|"
+                  r"dorozhe\s+vseh|deshevle\s+vseh)")
+_CHEAP = re.compile(r"deshev|arzon|cheap")
+# Слова, которые в вопросе о числе ничего не называют («сколько у нас всего товаров в каталоге?»).
+_COUNT_STOP = re.compile(r"^(?:u|nas|v|vo|est|vsego|vseh|vse|zh?ami|tovar\w*|mahsulot\w*|pozits\w*|produkt\w*|katalog\w*|baz\w*|"
+                         r"magazin\w*|vid\w*|tip\w*|naimenov\w*|edinits\w*|shtuk\w*|imeetsya|imeyutsya|v\s|jami|hammasi|"
+                         r"barcha|mavjud|bor|bormi|ta|tasi|dan|da|kategor\w*|brend\w*|marki?|firm\w*|sum|som|so[ʻ'’]?m\w*|"
+                         r"products?|items?|in|the|we|have|do|are|there|total|of|is|a|kakoj|kakoi|kakoy|qaysi|qaysi\w*|"
+                         r"dorog\w*|deshev\w*|sam\w*|eng|qimmat\w*|arzon\w*|most|expensive|cheapest|"
+                         r"arhiv\w*|ot|do|ns|ichida|turi|turdagi|hil\w*|sort\w*|i|va|and|ili|yoki)$")
+_WITHOUT_WORDS = (("price", r"tsen|narh|price"), ("photo", r"foto|rasm|surat|photo|kartin|izobra"),
+                  ("barcode", r"shtrih|barkod|barcode|kod"), ("brand", r"brend|brand|marki"), ("category", r"kategor|categor"))
+_FROM = re.compile(r"(?:\bot|\bdorozhe|\bbolee|\bvyshe|\bover|\bfrom)\s+(\d[\d\s  ]*)|(\d[\d\s  ]*)\s*(?:so[ʻ'’]?m|sum)?\s*dan\b")
+_TO = re.compile(r"(?:\bdo|\bdeshevle|\bmenee|\bnizhe|\bunder|\bup\s+to)\s+(\d[\d\s  ]*)|"
+                 r"(\d[\d\s  ]*)\s*(?:so[ʻ'’]?m|sum)?\s*gacha\b")
+_STRICT = re.compile(r"dorozhe|deshevle|bolee|menee|vyshe|nizhe|over|under")
+
+
+def asks_count(said: str) -> bool:
+    """Вопрос о числе товаров: «сколько сладостей», «shirinliklar nechta», «Газаклар қанча?». «Сколько стоит пепси», «Sut
+    qancha turadi?» — вопрос о цене (но «сколько сладостей без цены» — о числе)."""
+    text = category_words.latin(said or "")
+    if not _COUNT_WORD.search(text):
+        return False
+    if (command_words.wants_change(said or "") and not price_words.asks_only(said or "")
+            and not _IN_ARCHIVE.search(text)):            # «Сколько товаров в архиве?» — вопрос, хоть «архив» и глагол
+        return False
+    if _COST_ASK.search(text):                             # «Сколько стоит пепси?», «Sut qancha turadi?» — цена
+        return asks_missing(said)
+    # «Pepsi narxi qancha?» — цена; «сколько товаров с ценой до 5000», «сколько сладостей без цены» — число.
+    flat = re.sub(r"(?<=\d)[\s  ](?=\d{3}\b)", "", text)
+    return not _PRICE_WORD.search(text) or asks_missing(said) or bool(_FROM.search(flat) or _TO.search(flat))
+
+
+def asks_top(said: str) -> bool:
+    """«Какой самый дорогой напиток?», «Eng qimmat ichimlik qaysi?» (и «самый дешёвый»). Это вопрос, хоть «qimmat» и
+    «дорож» — слова изменения цены (command_words): нужен вопрос («?», «какой», «qaysi») и нет числа (новой цены)."""
+    text = category_words.latin(said or "")
+    asked = "?" in (said or "") or re.search(r"\b(?:kak\w*|qaysi\w*|what|which)\b", text)
+    return bool(_TOP.search(text)) and bool(asked) and not re.search(r"\d", text)
+
+
+def _brands_said(db, said: str) -> list[str]:
+    key, text = assistant_tools._key(said), category_words.latin(said)
+    brands = {b for (b,) in db.query(Product.brand).filter(Product.status == PRODUCT_ACTIVE).distinct().all()
+              if b and b != assistant_tools.DEFAULT_BRAND}
+
+    def named(brand: str) -> bool:
+        bkey = assistant_tools._key(brand)
+        if len(bkey) < 3 or bkey not in key:
+            return False
+        # Короткий бренд («dep») — только отдельным словом: внутри другого слова это не он.
+        return len(bkey) >= 5 or bool(re.search(rf"(?<![a-z0-9]){re.escape(category_words.latin(brand))}(?![a-z0-9])", text))
+    found = sorted({b for b in brands if named(b)}, key=lambda b: -len(assistant_tools._key(b)))
+    # «Nestle» и «Nestlé» — один бренд: берётся одно написание.
+    out: list[str] = []
+    for b in found:
+        if not any(assistant_tools._key(b) in assistant_tools._key(o) for o in out):
+            out.append(b)
+    return out
+
+
+def _price_bound(match) -> float | None:
+    raw = next((g for g in match.groups() if g), "") if match else ""
+    digits = re.sub(r"\D", "", raw)
+    value = float(digits) if digits else None
+    return value if value is not None and value >= 100 else None
+
+
+def count_args(db, said: str) -> dict | None:
+    """Аргументы count_products по словам владельца или None — в вопросе назван товар, а не категория/бренд (тогда — как
+    раньше: модель ищет его). «Сколько категорий» — тоже None: это сводка каталога."""
+    text = category_words.latin(said or "")
+    cats = _categories_said(db, said)
+    brands = _brands_said(db, said)
+    args: dict = {}
+    if cats:
+        args["category"] = ", ".join(cats)
+    if brands:
+        args["brand"] = brands[0]
+    if asks_missing(said):
+        for field, pattern in _WITHOUT_WORDS:
+            if re.search(pattern, text):
+                args["without"] = field
+                break
+    flat = re.sub(r"(?<=\d)[\s  ](?=\d{3}\b)", "", text)
+    flat = re.sub(r"(\d+)\s*(?:tys\w*|ming|k\b)", lambda m: m.group(1) + "000", flat)
+    lo, hi = _price_bound(_FROM.search(flat)), _price_bound(_TO.search(flat))
+    strict = bool(_STRICT.search(flat))
+    if lo is not None:
+        args["price_from"] = lo + (1 if strict else 0)
+    if hi is not None:
+        args["price_to"] = hi - (1 if strict else 0)
+    # Что осталось от вопроса без слов «сколько / товаров / у нас», категорий, бренда, «без …» и чисел — это товар.
+    named = " ".join(category_words.latin(c) for c in cats) + " " + " ".join(category_words.latin(b) for b in brands)
+    left = []
+    for w in re.findall(r"[a-z]+", text):
+        if (_STOP.match(w) or _COUNT_STOP.match(w) or _COUNT_WORD.match(w) or (cats and category_words.groups_of(w))
+                or any(w[:4] in n for n in named.split() if len(w) >= 3) or _MISSING_Q.search(f" {w} ")
+                or any(re.search(p, w) for _f, p in _WITHOUT_WORDS) or len(w) <= 2):
+            continue
+        left.append(w)
+    if left and not (cats or brands):
+        return None
+    return args
+
+
+_TOP_TEXT = {
+    "ru": ("Самый дорогой: {name} — {price} сум.", "Самый дешёвый: {name} — {price} сум.", "Цен у этих товаров нет."),
+    "uz": ("Eng qimmati: {name} — {price} soʻm.", "Eng arzoni: {name} — {price} soʻm.", "Bu mahsulotlarning narxi yoʻq."),
+    "uz-Cyrl": ("Энг қиммати: {name} — {price} сўм.", "Энг арзони: {name} — {price} сўм.", "Бу маҳсулотларнинг нархи йўқ."),
+    "en": ("The most expensive: {name} — {price} UZS.", "The cheapest: {name} — {price} UZS.", "These products have no price."),
+}
+_NONE_WORDS = re.compile(r"(?i)(?<!\w)(?:нет|нету|ни одного|yoʻq|yo'q|йўқ|mavjud emas|мавжуд эмас|topilmadi|топилмади|"
+                         r"no|none|zero)(?!\w)")
+
+
+_CATEGORIES_TEXT = {"ru": "Категорий в каталоге: {n}.", "uz": "Katalogda {n} ta kategoriya.",
+                    "uz-Cyrl": "Каталогда {n} та категория.", "en": "Categories in the catalog: {n}."}
+
+
+def _asks_categories(said: str, result: dict) -> bool:
+    """«Сколько категорий в каталоге?», «Nechta kategoriya bor?» — число категорий (count_products без условий)."""
+    return "categories_total" in result and bool(_CATEGORIES_Q.search(category_words.latin(said or "")))
+
+
+def count_ready(result: dict, said: str, lang: str) -> str:
+    """Готовый ответ по итогу count_products: число (summary), число категорий или самый дорогой / дешёвый."""
+    if _asks_categories(said, result):
+        return _CATEGORIES_TEXT.get(lang, _CATEGORIES_TEXT["ru"]).format(n=result["categories_total"])
+    if asks_top(said):
+        top, cheap, none = _TOP_TEXT.get(lang, _TOP_TEXT["ru"])
+        item = result.get("cheapest" if _CHEAP.search(category_words.latin(said)) else "most_expensive")
+        if not item:
+            return none
+        return (cheap if _CHEAP.search(category_words.latin(said)) else top).format(
+            name=item["name"], price=f"{item['price']:,.0f}".replace(",", " "))
+    return str(result.get("summary") or "")
+
+
+def count_answer_ok(text: str, result: dict, said: str) -> bool:
+    """В ответе модели то же число, что вернул count_products (или «нет» при нуле); для «самый дорогой» — тот же товар."""
+    if asks_top(said):
+        item = result.get("cheapest" if _CHEAP.search(category_words.latin(said)) else "most_expensive")
+        return bool(item) and assistant_tools._key(item["name"])[:12] in assistant_tools._key(text)
+    total = result.get("categories_total") if _asks_categories(said, result) else result.get("total")
+    if not isinstance(total, int):
+        return False
+    said_numbers = {int(n) for n in re.findall(r"(?<![\d.,])\d+(?!\d|[.,]\d)",
+                                               re.sub(r"(?<=\d)[\s  ](?=\d{3}\b)", "", text or ""))}
+    return total in said_numbers or (total == 0 and bool(_NONE_WORDS.search(text or "")))
+
+
 # Число с валютой в ответе, которого нет ни в данных инструментов, ни в словах владельца, — выдумано.
 _PRICE_IN_TEXT = re.compile(r"(\d[\d   ]*\d|\d)(?:[.,]\d+)?\s*(?:сум\w*|сўм|so[ʻ'’`]?m|сом\w*|UZS|sum\b)", re.I)
 
@@ -633,8 +798,7 @@ _NO_PRICE = {"ru": "цена не указана", "uz": "narxi koʻrsatilmagan"
 _NOT_FOUND = {"ru": "Товар «{q}» не найден.", "uz": "«{q}» topilmadi.", "uz-Cyrl": "«{q}» топилмади.", "en": "«{q}» not found."}
 
 
-_COUNT_TEXT = {"ru": "Товаров в каталоге: {n}, в архиве: {a}.", "uz": "Katalogda {n} ta mahsulot, arxivda {a} ta.",
-               "uz-Cyrl": "Каталогда {n} та маҳсулот, архивда {a} та.", "en": "Products in the catalog: {n}, archived: {a}."}
+_COUNT_TEXT = assistant_tools.COUNT_ALL_TEXT
 
 
 def found_text(result: dict, lang: str) -> str:
@@ -1112,7 +1276,8 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
     # «нет, не пепси, а фанту», «и кока-коле тоже 9500» — продолжение просьбы, а не вопрос (intent_said, 2026-11-24).
     asking = can_propose and (price_words.asks_only(history[-1]["content"])
                               or not command_words.wants_change(intent_said(history)))
-    step_tools = [t for t in tools if t.kind != "propose"] if asking else tools
+    model_tools = [t for t in tools if t.for_model]      # count_products зовёт только программа (вопрос «сколько»)
+    step_tools = [t for t in model_tools if t.kind != "propose"] if asking else model_tools
     asks_price = asking and price_words.asks_price(history[-1]["content"])
     parts = question_parts(history[-1]["content"]) if asking else []
     known_numbers = _numbers_in(" ".join(_users(history)))    # числа ответа — из данных инструментов и слов владельца
@@ -1123,6 +1288,28 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
     answer_now = False                      # инструмент дал полный итог (Tool.answer_next) — следующий шаг только ответ
     scanned: dict = {}                      # итог scan_problems — чтобы не назвать сканы товарами (scan_words)
     ready = ""                              # готовая фраза инструмента (summary) — ответ, если модель не договорила
+    counted_result: dict = {}               # итог count_products для вопроса «сколько» — число ответа сверяется с ним
+    said_now = history[-1]["content"]
+    if "count_products" in names and (asks_count(said_now) or asks_top(said_now)):
+        count = count_args(db, said_now)
+        if count is not None:
+            # Вопрос о числе: инструмент и его аргументы выбирает программа, модель только пишет ответ.
+            try:
+                counted_result = assistant_tools.run_tool(db, user, "count_products", count, proposals, ui, lang)
+            except ToolError:
+                counted_result = {}
+            if counted_result:
+                used.append({"name": "count_products", "ok": True})
+                logger.info("ИИ-помощник: инструмент count_products (ok, вопрос о числе)")
+                ready = count_ready(counted_result, said_now, lang)
+                known_numbers |= _numbers_in(json.dumps(counted_result, ensure_ascii=False, default=str))
+                answer_now = True
+                convo.append({"role": "assistant", "content": json.dumps({"tool": "count_products", "args": count},
+                                                                         ensure_ascii=False)})
+                convo.append({"role": "user", "content": _result_text("count_products", counted_result)
+                              + "\nОтветь владельцу этой фразой (summary), своими словами не считай; названия категорий "
+                              f"и товаров не переводи: {ready}"
+                              + (f"\nОтвет — на {LANGS[lang]} языке." if lang != "ru" else "")})
 
     def done(text: str) -> Reply:
         card = proposals.items[0] if proposals.items else None
@@ -1187,6 +1374,8 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                         text = tidy_text(cyrillize(db, text, history[-1]["content"]), lang)  # и после «перепиши» латиницей
                     if text and lang == "uz":
                         text = uz_currency(db, text, history[-1]["content"])  # «45000 сом» → «45000 soʻm» (§10.17)
+                    if counted_result and ready and not count_answer_ok(text, counted_result, said_now):
+                        text = ready            # число в ответе не то, что посчитал count_products, — ответ программы
                     if text:
                         return done(text)
                     break
@@ -1237,7 +1426,9 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                     db.rollback()
                     result, ok = {"error": "Данные сейчас недоступны."}, False
                 used.append({"name": name, "ok": ok})
-                if asking and isinstance(result, dict) and result.get("category_items") is not None:
+                if asking and isinstance(result, dict) and result.get("by_name_total"):
+                    result.pop("note", None)    # «сладости» — категория: ответ о ней (summary), подсказка об изменении не нужна
+                elif asking and isinstance(result, dict) and result.get("category_items") is not None:
                     # вопрос, а не изменение: подсказка «propose_bulk(…)» модели не нужна — она пересказывала её владельцу
                     result["note"] = (f"Товара «{result.get('query')}» в каталоге нет. Похожие товары категории "
                                       f"{result.get('category')} — в category_items.")

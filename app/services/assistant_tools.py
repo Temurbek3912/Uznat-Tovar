@@ -54,6 +54,7 @@ class Tool:
     choices: dict = field(default_factory=dict)     # {аргумент: [допустимые значения]}
     answer_next: bool = False   # после успешного вызова модель только отвечает: итог уже полный (иначе она «перепроверяет»)
     wants_lang: bool = False    # инструмент получает язык владельца (args[LANG_ARG]) — от сервера, не от модели
+    for_model: bool = True      # False — зовёт только программа (count_products): в подсказке и схеме модели его нет
 
 
 LANG_ARG = "_lang"              # не в args инструмента: модель его не видит и подставить не может
@@ -171,6 +172,24 @@ def find_products(db, args: dict) -> dict:
     out = {"query": query, "total": total, "items": [_row(p, codes, photos) for p in products]}
     if by_word:
         out["note"] = f"Точного совпадения нет; найдено по слову «{by_word}» — проверь, тот ли это товар."
+    named = _category_named(db, query) if total else []
+    if named:
+        # «Сколько у нас видов сладостей?»: модель искала «сладости» и отвечала «2» — слово есть в названиях двух товаров, а в
+        # категории «Сладости» их 107 (2026-11-28). Названа категория — ответ о ней: её товары и её число; товары, где слово
+        # есть в названии, — отдельно (by_name).
+        in_cat = _active(db).filter(Product.category.in_(named)).order_by(Product.sku)
+        cat_total = in_cat.count()
+        rows = in_cat.limit(_limit(args)).all()
+        ids = [p.id for p in rows]
+        codes, photos = _codes_of(db, ids), _photo_counts(db, ids)
+        top = in_cat.filter(Product.expected_price.isnot(None)).order_by(Product.expected_price.desc(), Product.sku).first()
+        out = {"query": query, "category": ", ".join(named), "category_total": cat_total, "total": cat_total,
+               "items": [_row(p, codes, photos) for p in rows],
+               "category_items": [{"name": _cut(p.name), "price": p.expected_price} for p in rows[:5]],
+               **({"most_expensive": {"name": _cut(top.name), "price": top.expected_price}} if top else {}),
+               "by_name_total": total, "by_name": [_cut(p.name, 60) for p in products[:5]],
+               "summary": (f"«{_cut(query, 40)}» — это категория {', '.join(named)}: в ней {cat_total} товаров. Отдельно: "
+                           f"слово «{_cut(query, 40)}» есть в названии {total} товаров (by_name).")}
     if not total:
         # «Gazaklar narxini 10% oshiring»: модель искала категорию как товар и отвечала «не найдено» (2026-11-17). Слово —
         # категория по словарю языков: говорим модели, какая это категория в каталоге.
@@ -185,6 +204,146 @@ def find_products(db, args: dict) -> dict:
             out["category"] = cats[0]
             out["category_items"] = [{"name": _cut(p.name), "price": p.expected_price} for p in in_cat]
     return out
+
+
+def _key(text) -> str:
+    """«Nestlé» = «Nestle», «Coca Cola» = «Coca-Cola»: без регистра, знаков и надстрочных знаков."""
+    import unicodedata  # noqa: PLC0415
+    flat = unicodedata.normalize("NFKD", str(text or "")).lower()
+    return re.sub(r"[\W_]+", "", "".join(ch for ch in flat if not unicodedata.combining(ch)))
+
+
+def _price_arg(args: dict, name: str) -> float | None:
+    raw = args.get(name)
+    if raw is None or raw == "":
+        return None
+    try:
+        value = float(str(raw).replace(" ", "").replace(" ", "").replace(",", "."))
+    except ValueError as exc:
+        raise ToolError(f"Аргумент {name}: число (цена в сумах).") from exc
+    return value if value >= 0 else None
+
+
+# Готовая фраза итога count_products — на языке владельца: живая qwen3-vl-4b переписывает её как есть, а русскую по-узбекски
+# переводила с ошибками (как scan_problems). {what} — «в категории «Сладости»», «бренда Heinz», «без цены»…
+_COUNT_SUMMARY = {
+    "ru": "{what}: {n}.", "uz": "{what}: {n} ta.", "uz-Cyrl": "{what}: {n} та.", "en": "{what}: {n}.",
+}
+_COUNT_WORDS = {
+    "ru": {"all": "Товаров в продаже", "cat": "Товаров в категории {c}", "brand": "Товаров {b}",
+           "photo": "без фото", "barcode": "без штрихкода", "price": "без цены", "brand_f": "без бренда",
+           "category": "без категории", "from": "цена от {v} сум", "to": "цена до {v} сум",
+           "no_cat": "Категории «{c}» в каталоге нет. Есть: {cats}.", "no_brand": "Товаров «{b}» в каталоге нет."},
+    "uz": {"all": "Sotuvdagi mahsulotlar", "cat": "{c} kategoriyasidagi mahsulotlar", "brand": "{b} mahsulotlari",
+           "photo": "rasmsiz", "barcode": "shtrixkodsiz", "price": "narxsiz", "brand_f": "brendsiz",
+           "category": "kategoriyasiz", "from": "narxi {v} soʻmdan", "to": "narxi {v} soʻmgacha",
+           "no_cat": "Katalogda «{c}» kategoriyasi yoʻq. Bor: {cats}.", "no_brand": "Katalogda «{b}» mahsulotlari yoʻq."},
+    "uz-Cyrl": {"all": "Сотувдаги маҳсулотлар", "cat": "{c} категориясидаги маҳсулотлар", "brand": "{b} маҳсулотлари",
+                "photo": "расмсиз", "barcode": "штрихкодсиз", "price": "нархсиз", "brand_f": "брендсиз",
+                "category": "категориясиз", "from": "нархи {v} сўмдан", "to": "нархи {v} сўмгача",
+                "no_cat": "Каталогда «{c}» категорияси йўқ. Бор: {cats}.", "no_brand": "Каталогда «{b}» маҳсулотлари йўқ."},
+    "en": {"all": "Products for sale", "cat": "Products in the {c} category", "brand": "{b} products",
+           "photo": "without photo", "barcode": "without barcode", "price": "without price", "brand_f": "without brand",
+           "category": "without category", "from": "price from {v} UZS", "to": "price up to {v} UZS",
+           "no_cat": "There is no «{c}» category. There are: {cats}.",
+           "no_brand": "No «{b}» products in the catalog."},
+}
+COUNT_WITHOUT = MISSING_FIELDS
+COUNT_ALL_TEXT = {"ru": "Товаров в каталоге: {n}, в архиве: {a}.", "uz": "Katalogda {n} ta mahsulot, arxivda {a} ta.",
+                  "uz-Cyrl": "Каталогда {n} та маҳсулот, архивда {a} та.", "en": "Products in the catalog: {n}, archived: {a}."}
+
+
+def _money(value: float) -> str:
+    return f"{value:,.0f}".replace(",", " ")
+
+
+def count_products(db, args: dict) -> dict:
+    """Сколько товаров: категория, бренд, «без цены / фото / штрихкода / бренда / категории», цена от–до. Считает программа
+    (модель только выбирает аргументы): владелец на «сколько у нас видов сладостей» получил «2» — find_products искал слово в
+    названиях, а в категории «Сладости» 107 товаров (2026-11-28). Итог: total, summary (готовая фраза на языке владельца),
+    5 примеров и самый дорогой товар среди найденных."""
+    lang = args.get(LANG_ARG) if args.get(LANG_ARG) in _COUNT_WORDS else "ru"
+    words = _COUNT_WORDS[lang]
+    products = _active(db).order_by(Product.sku).all()
+    cats_all = sorted({p.category for p in products if p.category and p.category != DEFAULT_CATEGORY})
+    asked_cat, asked_brand = _text(args, "category"), _text(args, "brand")
+    without = _text(args, "without").lower()
+    if without and without not in COUNT_WITHOUT:
+        raise ToolError("Аргумент without: одно из " + ", ".join(COUNT_WITHOUT) + ".")
+    lo, hi = _price_arg(args, "price_from"), _price_arg(args, "price_to")
+    out: dict = {}
+    what = [words["all"]]
+    if asked_cat:
+        cats = categories_in(asked_cat, [p.category for p in products])
+        if not cats:
+            text = words["no_cat"].format(c=_cut(asked_cat, 40), cats=", ".join(cats_all))
+            return {"total": 0, "category": [], "summary": text, "items": []}
+        products = [p for p in products if p.category in cats]
+        out["category"] = cats
+        what = [words["cat"].format(c=", ".join(f"«{c}»" for c in cats))]
+    if asked_brand:
+        key = _key(asked_brand)
+        # Бренд тот же или он есть в названии: «CocaCola 1» с брендом «Не указан» — тоже Coca-Cola.
+        found = [p for p in products if key and (_key(p.brand) == key or key in _key(p.name))] if len(key) >= 2 else []
+        if not found:
+            return {"total": 0, "brand": asked_brand, "summary": words["no_brand"].format(b=_cut(asked_brand, 40)),
+                    "items": []}
+        products = found
+        out["brand"] = asked_brand
+        if not asked_cat:
+            what = [words["brand"].format(b=_cut(asked_brand, 40))]
+        else:
+            what.append(_cut(asked_brand, 40))
+    if without:
+        ids = [p.id for p in products]
+        if without == "photo":
+            photos = _photo_counts(db, ids)
+            products = [p for p in products if not photos.get(p.id)]
+        elif without == "barcode":
+            codes = _codes_of(db, ids)
+            products = [p for p in products if p.id not in codes]
+        else:
+            test = {"price": lambda p: p.expected_price is None, "brand": _no_brand, "category": _no_category}[without]
+            products = [p for p in products if test(p)]
+        out["without"] = without
+        what.append(words["brand_f" if without == "brand" else without])
+    if lo is not None or hi is not None:
+        products = [p for p in products if p.expected_price is not None and (lo is None or p.expected_price >= lo)
+                    and (hi is None or p.expected_price <= hi)]
+        if lo is not None:
+            what.append(words["from"].format(v=_money(lo)))
+        if hi is not None:
+            what.append(words["to"].format(v=_money(hi)))
+    total = len(products)
+    summary = _COUNT_SUMMARY[lang].format(what=", ".join(what), n=total)
+    if not (asked_cat or asked_brand or without or lo is not None or hi is not None):
+        archived = db.query(Product).filter(Product.status == PRODUCT_ARCHIVED).count()
+        summary = COUNT_ALL_TEXT[lang].format(n=total, a=archived)
+        out["archived"] = archived
+        out["categories_total"] = len({p.category or DEFAULT_CATEGORY for p in products})
+    priced = [p for p in products if p.expected_price is not None]
+    if priced and without != "price":
+        top = max(priced, key=lambda p: (p.expected_price, p.sku or ""))
+        low = min(priced, key=lambda p: (p.expected_price, p.sku or ""))
+        out["most_expensive"] = {"name": _cut(top.name), "price": top.expected_price}
+        out["cheapest"] = {"name": _cut(low.name), "price": low.expected_price}
+    out.update({"total": total, "summary": summary, "items": [_cut(p.name, 60) for p in products[:5]]})
+    return out
+
+
+def _category_named(db, query: str) -> list[str]:
+    """Категории, которые запрос называет как категорию, а не как товар: название категории прямо («сладости», «Бакалея»)
+    или слово словаря во множественном числе («сладостей», «shirinliklar», «чипсы»). «Кефир», «молоко» — товар: по ним
+    ищутся товары, как раньше (иначе «Сколько стоит кефир?» отвечал бы о всех молочных)."""
+    from app.services import command_words  # noqa: PLC0415
+    cats = sorted({c for (c,) in _active(db).with_entities(Product.category).distinct().all()
+                   if c and c != DEFAULT_CATEGORY})
+    said = category_words.latin(query)
+    direct = [c for c in cats if category_words.latin(c) in said]
+    if direct:
+        return direct[:5]
+    words = [w for w in re.findall(r"[a-z]+", said) if command_words.plural(w) and category_words.groups_of(w)]
+    return category_words.matching_categories(" ".join(words), cats)[:5] if words else []
 
 
 def categories_in(text: str, categories) -> list[str]:
@@ -566,6 +725,11 @@ TOOLS: tuple[Tool, ...] = (
     Tool("find_products", Permission.CATALOG_READ,
          "Найти товары по названию, бренду, артикулу или штрихкоду.",
          {"query": "", "limit": "до 20"}, find_products, required=("query",)),
+    Tool("count_products", Permission.CATALOG_READ,
+         "Сколько товаров: в категории, бренда, без цены/фото/штрихкода, в диапазоне цены.",
+         {"category": "", "brand": "", "without": "|".join(COUNT_WITHOUT), "price_from": "", "price_to": ""},
+         count_products, choices={"without": list(COUNT_WITHOUT)}, answer_next=True, wants_lang=True,
+         for_model=False),
     Tool("products_missing", Permission.CATALOG_READ,
          "Товары без фото, штрихкода, цены, бренда или категории.",
          {"field": "|".join(MISSING_FIELDS), "category": "", "limit": "до 20"}, products_missing,

@@ -1280,3 +1280,41 @@ def test_price_question_is_not_a_change(Session):
     change = FakeModel({"tool": "propose_update", "args": {"product": "FANTA", "field": "price", "value": 9500}})
     card = _ask(Session, change, "Fanta narxini 9500 qiling", lang="uz").proposal
     assert card["sku"] == "FANTA" and card["changes"] == {"price": 9500.0}
+
+
+# --- «какие товары без фото» (2026-11-28) ----------------------------------------------------------------------------------------
+
+def test_missing_category_argument_is_hidden_from_the_model_but_still_accepted():
+    """С аргументом category в подсказке живая qwen3-vl-4b на «Расмсиз товарлар қайсилар?» через раз звала catalog_overview
+    (2 из 4, без него 6 из 6): модель его не видит, а программа передать может."""
+    tool = T.get_tool("products_missing")
+    assert "category" in tool.args and "category" not in tool.model_args()
+    prompt = A.system_prompt(OWNER, T.allowed_tools(OWNER), "ru")
+    line = next(s for s in prompt.splitlines() if s.startswith("- products_missing("))
+    assert "category=" not in line and ", category" not in line
+    assert "category" not in A._args_schema(tool)["properties"]
+
+
+@pytest.mark.parametrize("question, lang, field", [("Расмсиз товарлар қайсилар?", "uz-Cyrl", "photo"),
+                                                   ("Rasmsiz tovarlar qaysilar?", "uz", "photo"),
+                                                   ("Какие товары без фото?", "ru", "photo"),
+                                                   ("у каких товаров нет штрихкода", "ru", "barcode"),
+                                                   ("Нархи йўқ маҳсулотлар", "uz-Cyrl", "price")])
+def test_which_products_lack_something_is_answered_by_the_program_tool(Session, question, lang, field):
+    """Модель сразу получает данные products_missing и только отвечает: catalog_overview трижды подряд больше не бывает."""
+    model = FakeModel({"tool": "", "text": "Готово."})
+    reply = _ask(Session, model, question, lang=lang)
+    assert reply.tools == [{"name": "products_missing", "ok": True}] and reply.text == "Готово."
+    sent = model.calls[0][1]
+    assert any("ДАННЫЕ инструмента products_missing" in m["content"] and f'"field": "{field}"' in m["content"]
+               for m in sent["messages"])
+    assert sent["response_format"]["json_schema"]["schema"]["properties"]["tool"]["enum"] == [""], "дальше только ответ"
+
+
+def test_missing_args_leave_named_products_and_other_questions_to_the_model(Session):
+    with Session() as db:
+        assert A.missing_args(db, "Какие товары без фото?") == {"field": "photo"}
+        assert A.missing_args(db, "Какие напитки без цены?") == {"field": "price", "category": "Напитки"}
+        assert A.missing_args(db, "Есть у нас кока-кола?") is None
+        assert A.missing_args(db, "Какие товары Coca-Cola без цены?") is None, "назван бренд — модель, как раньше"
+        assert A.missing_args(db, "Сколько стоит хлеб?") is None

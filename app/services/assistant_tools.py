@@ -55,6 +55,10 @@ class Tool:
     answer_next: bool = False   # после успешного вызова модель только отвечает: итог уже полный (иначе она «перепроверяет»)
     wants_lang: bool = False    # инструмент получает язык владельца (args[LANG_ARG]) — от сервера, не от модели
     for_model: bool = True      # False — зовёт только программа (count_products): в подсказке и схеме модели его нет
+    hidden: tuple = ()          # аргументы, которые передаёт только программа: в подсказке и схеме модели их нет
+
+    def model_args(self) -> dict:
+        return {k: v for k, v in self.args.items() if k not in self.hidden}
 
 
 LANG_ARG = "_lang"              # не в args инструмента: модель его не видит и подставить не может
@@ -733,7 +737,10 @@ TOOLS: tuple[Tool, ...] = (
     Tool("products_missing", Permission.CATALOG_READ,
          "Товары без фото, штрихкода, цены, бренда или категории.",
          {"field": "|".join(MISSING_FIELDS), "category": "", "limit": "до 20"}, products_missing,
-         required=("field",), choices={"field": list(MISSING_FIELDS)}, answer_next=True),
+         # "category" модели не показывается: с ним живая qwen3-vl-4b (2026-11-28) на «Расмсиз товарлар қайсилар?» через раз
+         # звала catalog_overview (без него 6 из 6 верно, с ним 2 из 4). Категорию из слов владельца подставляет программа
+         # (assistant.missing_in_category, missing_args).
+         required=("field",), choices={"field": list(MISSING_FIELDS)}, answer_next=True, hidden=("category",)),
     Tool("similar_names", Permission.CATALOG_READ,
          "Дубли: товары с одинаковым названием.",
          {"limit": "до 20"}, similar_names),

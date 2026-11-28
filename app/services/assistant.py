@@ -141,7 +141,7 @@ def clean_history(messages) -> list[dict]:
 def system_prompt(user: CurrentUser, tools: list, lang: str) -> str:
     tools = [t for t in tools if getattr(t, "for_model", True)]
     # Память движка — 4096 токенов на всё, поэтому список короткий: «имя(аргумент=подсказка, …): что делает».
-    lines = [f"- {t.name}(" + ", ".join(f"{k}={v}" if v else k for k, v in t.args.items()) + f"): {t.description}"
+    lines = [f"- {t.name}(" + ", ".join(f"{k}={v}" if v else k for k, v in t.model_args().items()) + f"): {t.description}"
              for t in tools]
     if any(t.kind == "propose" for t in tools):
         changes = (
@@ -177,7 +177,7 @@ def _arg_schema(tool, name: str) -> dict:
 
 
 def _args_schema(tool) -> dict:
-    props = {name: _arg_schema(tool, name) for name in tool.args}
+    props = {name: _arg_schema(tool, name) for name in tool.model_args()}
     return {"type": "object", "properties": props, "required": list(tool.required), "additionalProperties": False}
 
 
@@ -733,6 +733,20 @@ def count_args(db, said: str) -> dict | None:
     if left and not (cats or brands):
         return None
     return args
+
+
+def missing_args(db, said: str) -> dict | None:
+    """«Какие товары без фото?» → {"field": "photo"}; «Qaysi shirinliklarning narxi yoʻq?» → и категория. None — не такой
+    вопрос, назван товар или бренд, или есть цена от–до (тогда отвечает модель, как раньше)."""
+    if not asks_missing(said):
+        return None
+    args = count_args(db, said)
+    if not args or "without" not in args or args.get("brand") or "price_from" in args or "price_to" in args:
+        return None
+    out = {"field": args["without"]}
+    if args.get("category") and out["field"] not in ("category", "brand"):
+        out["category"] = args["category"]
+    return out
 
 
 _TOP_TEXT = {
@@ -1310,6 +1324,25 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                               + "\nОтветь владельцу этой фразой (summary), своими словами не считай; названия категорий "
                               f"и товаров не переводи: {ready}"
                               + (f"\nОтвет — на {LANGS[lang]} языке." if lang != "ru" else "")})
+
+    missing = missing_args(db, said_now) if "products_missing" in names and not counted_result else None
+    if missing is not None and (asking or (not can_propose and not command_words.wants_change(said_now))):
+        # «Какие товары без фото?», «Расмсиз товарлар қайсилар?»: что искать, понятно из слов — инструмент зовёт программа.
+        # Живая qwen3-vl-4b (2026-11-28) на узбекской кириллице через раз звала catalog_overview трижды подряд.
+        try:
+            found_missing = assistant_tools.run_tool(db, user, "products_missing", missing, proposals, ui, lang)
+        except ToolError:
+            found_missing = {}
+        if found_missing:
+            used.append({"name": "products_missing", "ok": True})
+            logger.info("ИИ-помощник: инструмент products_missing (ok, вопрос «какие товары без …»)")
+            ready = str(found_missing.get("summary") or "")
+            known_numbers |= _numbers_in(json.dumps(found_missing, ensure_ascii=False, default=str))
+            answer_now = True
+            convo.append({"role": "assistant", "content": json.dumps({"tool": "products_missing", "args": missing},
+                                                                     ensure_ascii=False)})
+            convo.append({"role": "user", "content": _result_text("products_missing", found_missing)
+                          + (f"\nОтвет — на {LANGS[lang]} языке." if lang != "ru" else "")})
 
     def done(text: str) -> Reply:
         card = proposals.items[0] if proposals.items else None

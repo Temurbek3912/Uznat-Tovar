@@ -250,7 +250,8 @@ def test_the_category_the_owner_named_is_applied_even_if_the_model_forgets_it(Se
     local = FakeLocal({"action": "tool", "tool": "products_missing", "args": {"field": "price"}, "text": ""},
                       {"action": "answer", "tool": "", "args": {}, "text": "Сникерс 50 г"})
     _chat(Session, monkeypatch, question, local, None, lang=lang)
-    data = next(m["content"] for m in local.calls[1]["messages"] if "ДАННЫЕ инструмента products_missing" in m["content"])
+    # с 2026-11-28 «какие … без цены» products_missing зовёт сама программа (assistant.missing_args) — данные в первом же запросе
+    data = next(m["content"] for c in local.calls for m in c["messages"] if "ДАННЫЕ инструмента products_missing" in m["content"])
     assert "SNIK" in data and "COLA" not in data and "LAYS" not in data
 
 

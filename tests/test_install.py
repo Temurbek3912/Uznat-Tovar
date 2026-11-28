@@ -357,5 +357,6 @@ def test_disk_space_counts_the_vision_model_only_when_it_will_be_downloaded(tmp_
     gpu = Hardware(ram_gb=16, cores=8, gpu_name="NVIDIA GeForce RTX 5060", vram_gb=8)
     d = ins.Deps(run=Recorder(), probe_hw=lambda: gpu, driver=lambda: "581.57", windows=lambda: (10, 26100),
                  free_gb=lambda p: ins.MIN_FREE_GB_GPU + 1, out=lines.append, fetch_vision=lambda root, out: True)
-    assert ins.run(ins.Options(root=root, check=False), d) == 1                 # 15 ГБ мало: ещё 4 ГБ на модель
-    assert any("[НЕЛЬЗЯ]" in ln and "18" in ln for ln in lines)
+    assert ins.run(ins.Options(root=root, check=False), d) == 1                 # 15 ГБ мало: ещё 5 ГБ на модель и CUDA
+    need = f"{ins.MIN_FREE_GB_GPU + ins.vision_engine.DISK_GB:.0f}"             # 14 + 5 = 19
+    assert any("[НЕЛЬЗЯ]" in ln and f"не меньше {need} ГБ" in ln for ln in lines)

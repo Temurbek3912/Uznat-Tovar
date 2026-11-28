@@ -18,10 +18,12 @@ import re
 
 from app.services.category_words import latin
 
-_UP = ("podnim", "podnya", "povys", "uvelich", "dobav", "pribav", "nakin", "dorozh", "bolshe",
-       "oshir", "kotar", "qosh", "qimmat")
-_DOWN = ("sniz", "opust", "umensh", "poniz", "sbav", "skin", "ubav", "deshev", "menshe", "skidk",
-         "tushir", "kamaytir", "pasaytir", "arzon", "chegirma")
+# «подешевле», «подорожала» и английские слова — замер 2026-11-28 (ml/assistant_owner_questions.py): «сделай сникерс подешевле на
+# 1000» и «Raise the price of Fanta by 500» давали карточку «цена 1000» / «цена 500».
+_UP = ("podnim", "podnya", "povys", "uvelich", "dobav", "pribav", "nakin", "dorozh", "podorozh", "bolshe",
+       "oshir", "kotar", "qosh", "qimmat", "raise", "increase", "hike")
+_DOWN = ("sniz", "opust", "umensh", "poniz", "sbav", "skin", "ubav", "deshev", "podeshev", "udeshev", "menshe", "skidk",
+         "tushir", "kamaytir", "pasaytir", "arzon", "chegirma", "lower", "reduce", "decrease", "discount", "cheaper")
 _PERCENT = re.compile(r"\s*(?:%|foiz|protsent|prots)")
 _THOUSAND = re.compile(r"\s*(?:tys|ming|k\b)")
 _UPTO_AFTER = re.compile(r"\s*(?:so[mʻ]?m|sum|sym|rubl\w*)?\s*gacha")
@@ -82,7 +84,9 @@ _CHANGE = ("qil", "qoy", "ozgartir", "almashtir", "otkaz", "belgila", "yoz", "oc
            "kotar", "tushir", "kamaytir", "pasaytir", "arzonlashtir", "qimmatlashtir", "yangila",
            "postav", "sdela", "izmen", "smen", "pomen", "zamen", "ustanov", "ukazh", "ukaz", "napish", "naznach", "zada",
            "ispra", "uber", "ubra", "udal", "dobav", "podnim", "povys", "sniz", "umensh", "verni", "vern",
-           "set", "change", "make", "raise", "lower", "remove", "delete", "add", "archive", "put")
+           "set", "change", "make", "raise", "lower", "remove", "delete", "add", "archive", "put",
+           "move", "rename", "increase", "decrease", "reduce", "discount", "give", "mark", "restore", "unarchive", "create",
+           "update", "assign")
 
 
 def asks_only(said: str) -> bool:

@@ -25,8 +25,11 @@ from app.services.price_words import _CHANGE
 
 # Глаголы изменения сверх price_words._CHANGE (он про цену): переименовать, перевести в категорию, новый товар, закончился…
 _MORE_CHANGE = ("pereimen", "perevedi", "perenes", "perekin", "novy", "novyi", "novogo", "yangi", "skidk", "chegirma",
-                "bolsin", "bulsin", "nomla", "nomini", "deshev", "dorozh", "arzon", "qimmat", "vyklad", "vklyuch", "vykl")
-_STOCK_IN = ("poyavil", "privezl", "postupil", "keldi", "bor boldi", "back in stock")
+                "bolsin", "bulsin", "nomla", "nomini", "deshev", "dorozh", "arzon", "qimmat", "vyklad", "vklyuch", "vykl",
+                "podorozh", "podeshev", "udeshev")
+# «молоко снова есть в наличии» (замер 2026-11-28) — снова в наличии, а не вопрос.
+_STOCK_IN = ("poyavil", "privezl", "postupil", "keldi", "bor boldi", "back in stock", "snova est", "opyat est",
+             "snova v nalich", "yana bor", "yana sotuvda", "is back")
 _STOCK = ("zakonch", "konchil", "konchaet", "net v nalich", "netu v nalich", "tugad", "tugab", "qolmad", "yoq boldi",
           "out of stock", "sold out") + _STOCK_IN
 _RENAME = ("pereimen", "nazov", "nazvan", "nomla", "nomini", "rename")
@@ -34,7 +37,9 @@ _ARCHIVE = ("arhiv", "udal", "uber", "ubra", "ochir", "olib tashla", "ne prodaem
             "sotmaymiz", "sotilmaydi", "remove", "delete", "archive")
 _RESTORE = ("vern", "vosstan", "qaytar", "restore", "iz arhiva", "arhivdan")
 _PHOTO = ("foto", "fotk", "kartink", "snimok", "snimk", "rasm", "surat", "photo", "picture")
-_ALL = ("vse", "vsyo", "vsem", "vseh", "vsego", "lyub", "barcha", "hamma", "butun", "all", "every")
+# «Coca-Cola mahsulotlari narxini 5% ga tushiring» («товары Coca-Cola») — тоже все товары бренда (замер 2026-11-28).
+_ALL = ("vse", "vsyo", "vsem", "vseh", "vsego", "lyub", "barcha", "hamma", "butun", "all", "every",
+        "mahsulotlari", "tovarlari")
 _QUESTION = re.compile(r"\?\s*$")
 
 
@@ -62,12 +67,22 @@ _PRICE_WORD = ("narh", "tsen", "stoim", "price")
 _NUMBER = re.compile(r"\d")
 
 
+# «Нутелла теперь стоит 46 тысяч», «Fanta endi 9000 turadi» (замер 2026-11-28): новая цена словами «стоит» + «теперь», без вопроса.
+_ASK_WORD = ("skolk", "skok", "pochem", "qancha", "necha", "how", "kak", "what")
+_PRICE_NUMBER = re.compile(r"\d[\d  ]{2,}|\d+\s*(?:тыс|тыщ|ming|минг|k\b)", re.I)
+
+
 def wants_change(said: str | None) -> bool:
     """В реплике владельца есть просьба что-то изменить (глагол изменения, «в архив», «закончился», «новый товар»…) или
-    новая цена без вопроса («Barcha ichimliklar narxi 8 ming»)."""
+    новая цена без вопроса («Barcha ichimliklar narxi 8 ming», «Нутелла теперь стоит 46 тысяч»)."""
     if _has(said, _CHANGE + _MORE_CHANGE + _STOCK + _ARCHIVE + _RESTORE):
         return True
-    return bool(said) and not _QUESTION.search(said) and bool(_NUMBER.search(said)) and _has(said, _PRICE_WORD)
+    if not said or _QUESTION.search(said) or not _NUMBER.search(said):
+        return False
+    if _has(said, _PRICE_WORD):
+        return True
+    return (bool(_PRICE_NUMBER.search(said)) and _has(said, ("stoit", "stoyat", "turadi", "costs"))
+            and _has(said, ("endi", "teper", "now")) and not _has(said, _ASK_WORD))
 
 
 _PLURAL = re.compile(r"(?:lar|lari|larni|larga|lardan|larning|larini|i|y|iy|am|yam|ah|yah|ov|ev|ey|ami|yami)$")
@@ -102,6 +117,20 @@ def restore_said(said: str | None) -> bool:
 
 def photo_said(said: str | None) -> bool:
     return _has(said, _PHOTO)
+
+
+# Штрихкод и «копия» (замер 2026-11-28, ml/assistant_owner_questions.py): «убери штрихкод у фанты» — модель предлагала фанту в
+# архив; «Сделай копию нутеллы, только 750 г» — меняла саму нутеллу. Копировать товар помощник не умеет.
+_BARCODE = ("shtrih", "barkod", "barcode", "bar kod", "ean")
+_COPY = ("kopi", "skopir", "kopir", "nusha", "dublir", "dublik", "duplicat", "copy", "klonir")
+
+
+def barcode_said(said: str | None) -> bool:
+    return _has(said, _BARCODE)
+
+
+def copy_said(said: str | None) -> bool:
+    return _has(said, _COPY)
 
 
 def all_said(said: str | None) -> bool:
@@ -162,7 +191,8 @@ _PRONOUN = ("ego", "ee", "eyo", "ei", "ey", "nee", "ney", "emu", "nego", "nemu",
             "shunga", "ushbu", "it", "its", "this", "that", "him", "her", "them", "tozhe", "ham", "also", "too", "net", "yoq",
             "da", "ha", "ok", "na", "do", "ga", "dlya", "za", "sum", "som", "soum", "uzs", "tys", "tysyach", "ming", "pozhaluista",
             "pozhaluysta", "iltimos", "please", "tsenu", "tsena", "tseny", "narx", "narxi", "narxini", "narhi", "narhini",
-            "price", "olin", "oling", "olinglar", "qiling", "qilib", "qoying", "boling", "bolsin")
+            "price", "olin", "oling", "olinglar", "qiling", "qilib", "qoying", "boling", "bolsin",
+            "to", "by", "the", "a", "of", "for", "now", "teper", "endi")
 
 
 def points_back(said: str | None) -> bool:

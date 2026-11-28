@@ -657,11 +657,11 @@ def test_add_from_the_assistant_needs_a_photo_and_is_logged(client, Session, mon
 def test_done_without_a_card_is_caught(Session):
     """Модель пишет «убран в архив», ничего не вызвав: один раз ей возвращают «карточки нет — вызови инструмент»; не помогло —
     страница скажет, что ничего не изменилось. Не удалось предложить — причина уходит на страницу."""
-    model = FakeModel({"tool": "", "text": "Товар убран в архив."},
-                      {"tool": "propose_archive", "args": {"product": "EVIL", "status": "archived"}},
-                      {"tool": "", "text": "Предлагаю убрать в архив — нажмите «Сделать»."})
-    reply = _ask(Session, model, "Удали EVIL")
-    assert reply.proposal["kind"] == "status" and not reply.no_card
+    model = FakeModel({"tool": "", "text": "Цена изменена."},
+                      {"tool": "propose_update", "args": {"product": "COLA", "field": "price", "value": 9500}},
+                      {"tool": "", "text": "Предлагаю новую цену — нажмите «Сделать»."})
+    reply = _ask(Session, model, "Поставь кока-коле цену 9500")     # «Удали EVIL» карточку теперь готовит программа сама
+    assert reply.proposal["kind"] == "update" and not reply.no_card
     assert "карточки нет" in model.calls[1][1]["messages"][-1]["content"]
 
     stubborn = _ask(Session, FakeModel({"tool": "", "text": "Товар добавлен."}, {"tool": "", "text": "Товар добавлен."}),
@@ -810,8 +810,13 @@ def test_bulk_and_single_change_use_the_catalog_category(Session):
 def test_bulk_price_number_comes_from_the_owner(Session):
     """Живая модель на «Barcha gazaklarni oʻchiring» («удалите все снеки») предложила всем цену 100 — выдумала число."""
     bulk = {"tool": "propose_bulk", "args": {"where": "category", "query": "Напитки", "change": "price_set", "value": 100}}
-    reply = _ask(Session, FakeModel(bulk, {"tool": "", "text": "Не получилось."}), "Barcha ichimliklarni oʻchiring", lang="uz")
+    reply = _ask(Session, FakeModel(bulk, {"tool": "", "text": "Не получилось."}), "Barcha ichimliklar narxini oʻzgartiring",
+                 lang="uz")
     assert reply.proposal is None and "не придумывает" in reply.proposal_error
+    # «Удалите все напитки» — это «все напитки в архив»: карточку готовит программа, выдуманной цены модель не предложит
+    # (assistant.bulk_status_meant, замер 2026-11-28).
+    reply = _ask(Session, FakeModel(bulk), "Barcha ichimliklarni oʻchiring", lang="uz")
+    assert reply.proposal["change"] == "archive" and reply.proposal["categories"] == ["Напитки"]
     for said, value in (("Сделай всем напиткам цену 8 000", 8000), ("Barcha ichimliklar narxi 8 ming", 8000),
                         ("Подними цены напиткам на 2,5%", -2.5)):
         step = {"tool": "propose_bulk", "args": {"where": "category", "query": "Напитки",
@@ -823,12 +828,17 @@ def test_missing_category_tool_is_redirected_when_the_owner_names_a_category(Ses
     """«Убери в архив все газированные напитки»: живая модель всегда звала products_missing(field=category) и отвечала о
     товарах без категории. Программа говорит ей, что это категория, и данные «без категории» не показывает."""
     model = FakeModel({"tool": "products_missing", "args": {"field": "category"}},
-                      {"tool": "propose_bulk", "args": {"where": "category", "query": "Напитки", "change": "archive"}})
-    reply = _ask(Session, model, "Barcha ichimliklarni arxivga oling", lang="uz")
+                      {"tool": "propose_bulk", "args": {"where": "category", "query": "Напитки", "change": "price_percent",
+                                                        "value": 10}})
+    reply = _ask(Session, model, "Barcha ichimliklar narxini 10% oshiring", lang="uz")
     assert reply.proposal["kind"] == "bulk" and len(model.calls) == 2
     sent = [m["content"] for m in model.calls[1][1]["messages"]]
     assert any("ПРОВЕРКА ПРОГРАММЫ" in m and "query=Напитки" in m for m in sent)
     assert not any("BREAD" in m for m in sent)                       # список «без категории» модели не дали
+
+    # «Все напитки в архив» модель больше не выбирает вовсе: карточку готовит программа (bulk_status_meant, 2026-11-28).
+    reply = _ask(Session, FakeModel(), "Barcha ichimliklarni arxivga oling", lang="uz")
+    assert reply.proposal["change"] == "archive" and reply.proposal["categories"] == ["Напитки"]
 
     plain = FakeModel({"tool": "", "text": "Без категории — 1 товар."})
     reply = _ask(Session, plain, "Сколько товаров без категории?")    # «Без категории» — не названная категория

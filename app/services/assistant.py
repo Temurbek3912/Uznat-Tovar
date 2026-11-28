@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass, field
 
 from app.core.security import CurrentUser
-from app.db.models import PRODUCT_ACTIVE, Product
+from app.db.models import PRODUCT_ACTIVE, PRODUCT_ARCHIVED, Product
 from app.services import (assistant_actions, assistant_tools, category_words, command_words, gemini, model_gate, price_list,
                           price_words)
 from app.services.assistant_tools import ToolError
@@ -198,7 +198,8 @@ def answer_schema(tools: list, *, final: bool = False) -> dict:
 # «Сделано» без карточки: маленькая модель иногда пишет «товар убран в архив», не вызвав инструмент. Такой ответ один раз
 # возвращается модели с просьбой вызвать инструмент; не помогло — страница прямо говорит, что ничего не изменилось.
 _CLAIM = re.compile(r"(?i)(«?сделать»|убран\w* в архив|добавлен|добавил|измен[её]н|изменил|удал[её]н|удалил|"
-                    r"bajarish|arxivga|qoʻshildi|oʻzgartirildi|oʻchirildi|do it|archived|been added|been changed|been removed)")
+                    r"bajarish|arxivga|qoʻshildi|oʻzgartirildi|oʻchirildi|do it|archived|been added|been changed|been removed|"
+                    r"been applied|been updated|been archived|been renamed|been copied|скопирова[нл])")
 
 
 # Маленькая модель в ответе по-узбекски (латиница) пишет слова из двух алфавитов («нарxi», «arтикул»), а иногда вставляет
@@ -598,7 +599,8 @@ _STOP = re.compile(r"^(?:skolk\w*|stoi\w*|stoya\w*|tsen\w*|kak(?:aya|oy|oi|ie|ih
                    r"tovar\w*|mahsulot\w*|ta|katalog\w*|kategor\w*|qaysi|qanday|vsego|vseh|baz[aeyu]|menya)$")
 _COUNT_Q = re.compile(r"\b(?:nech|skolk|qancha|how many)\w*\b.*\b(?:tovar|mahsulot|product|pozic)|"
                       r"\b(?:tovar|mahsulot|product)\w*\b.*\b(?:nech|skolk|qancha)")
-_MISSING_Q = re.compile(r"(?:^|\s)(?:bez\w*|net|netu|yoq\w*|without|missing|ne\s+ukaz\w*|kiritilmag\w*|\w+siz)(?:\s|$)")
+_MISSING_Q = re.compile(r"(?:^|\s)(?:bez\w*|net|netu|yoq\w*|without|missing|(?:have|has|with)\s+no|ne\s+ukaz\w*|kiritilmag\w*|"
+                        r"\w+siz)(?:\s|$)")
 
 
 def product_query(said: str) -> str:
@@ -636,7 +638,8 @@ _COUNT_STOP = re.compile(r"^(?:u|nas|v|vo|est|vsego|vseh|vse|zh?ami|tovar\w*|mah
                          r"magazin\w*|vid\w*|tip\w*|naimenov\w*|edinits\w*|shtuk\w*|imeetsya|imeyutsya|v\s|jami|hammasi|"
                          r"barcha|mavjud|bor|bormi|ta|tasi|dan|da|kategor\w*|brend\w*|marki?|firm\w*|sum|som|so[ʻ'’]?m\w*|"
                          r"products?|items?|in|the|we|have|do|are|there|total|of|is|a|kakoj|kakoi|kakoy|qaysi|qaysi\w*|"
-                         r"dorog\w*|deshev\w*|sam\w*|eng|qimmat\w*|arzon\w*|most|expensive|cheapest|"
+                         r"dorog\w*|dorozh\w*|deshev\w*|sam\w*|eng|qimmat\w*|arzon\w*|most|expensive|cheapest|"
+                         r"more|than|less|cheaper|priced|over|under|with|which|what|show|list|has|no|any|our|me|please|"
                          r"arhiv\w*|ot|do|ns|ichida|turi|turdagi|hil\w*|sort\w*|i|va|and|ili|yoki)$")
 _WITHOUT_WORDS = (("price", r"tsen|narh|price"), ("photo", r"foto|rasm|surat|photo|kartin|izobra"),
                   ("barcode", r"shtrih|barkod|barcode|kod"), ("brand", r"brend|brand|marki"), ("category", r"kategor|categor"))
@@ -731,6 +734,11 @@ def count_args(db, said: str) -> dict | None:
             continue
         left.append(w)
     if left and not (cats or brands):
+        return None
+    if (brands and not cats and set(args) == {"brand"} and not re.search(r"\b(?:tovar|mahsulot|product|item|pozic)", text)
+            and not re.search(r"\b(?:skolk\w*|nechta\w*|necha|nechi|kolichestv\w*|how\s+many)\b", text)):
+        # «Coca-Cola qancha?» — «сколько стоит», а не «сколько товаров бренда» (замер 2026-11-28): «qancha» без слова «товар»
+        # о бренде — вопрос о цене, его решает модель (поиск товара).
         return None
     return args
 
@@ -878,6 +886,10 @@ def command_check(db, name: str, args: dict, history: list[dict], ui: list) -> t
         return name, {key: meant[kind]}
     if not name.startswith("propose_"):
         return name, args
+    if command_words.copy_said(said) and name != "propose_add":
+        # «Сделай копию нутеллы, только 750 г» — модель меняла саму нутеллу (замер 2026-11-28). Копировать помощник не умеет.
+        raise ToolError("Копировать товар помощник не умеет, а этот товар менять не нужно. Можно предложить НОВЫЙ товар "
+                        "(propose_add) с другим названием — или честно скажите, что копировать не умеете.")
     if name == "propose_bulk":
         if not command_words.all_said(said):
             # «Хлеб белый больше не продаём, убери» — модель звала «вся категория Хлеб в архив». Назван товар и нет «все» —
@@ -913,6 +925,14 @@ def command_check(db, name: str, args: dict, history: list[dict], ui: list) -> t
             name, args = "propose_update", {"product": args.get("name"), "field": "in_stock",
                                             "value": "да" if command_words.stock_in_said(said) else "нет"}
         else:
+            # «Pepsiga 4870001234560 shtrixkodini qoʻshing» — модель звала propose_add с названием уже существующего товара
+            # (замер 2026-11-28): назван один товар и нет слова «новый» — это штрихкод этому товару.
+            named = [p for p in db.query(Product).filter(Product.status == PRODUCT_ACTIVE).all()
+                     if product_said(db, p, last, brand=False)]
+            code = re.search(r"(?<!\d)\d{8,14}(?!\d)", said)
+            if (len(named) == 1 and code and command_words.barcode_said(said)
+                    and not re.search(r"\b(?:yangi|nov\w*|new)\b", category_words.latin(said))):
+                return "propose_update", {"product": named[0].sku, "field": "add_barcode", "value": code.group(0)}
             return name, args
     product = assistant_actions.find_product(db, str(args.get("product") or ""))
     if product is None:
@@ -931,6 +951,13 @@ def command_check(db, name: str, args: dict, history: list[dict], ui: list) -> t
     if name == "propose_archive":
         status = str(args.get("status") or "archived").lower()
         if status == "archived":
+            if command_words.barcode_said(said):
+                # «убери штрихкод у фанты» — модель предлагала фанту в архив (замер 2026-11-28): убрать надо штрихкод.
+                codes = assistant_tools._codes_of(db, [product.id]).get(product.id, []) if product is not None else []
+                if len(codes) == 1:
+                    return "propose_update", {"product": product.sku, "field": "remove_barcode", "value": codes[0]}
+                raise ToolError("Владелец убирает штрихкод, а не товар: вызови propose_update(field=remove_barcode, "
+                                "value=штрихкод) или уточни, какой штрихкод убрать.")
             if command_words.photo_said(said):
                 raise ToolError("Фото товара помощник не удаляет и товар в архив из-за этого не убирает: фото меняются на "
                                 "странице «Товары».")
@@ -977,8 +1004,14 @@ def command_check(db, name: str, args: dict, history: list[dict], ui: list) -> t
                 said_value, args = own[0], {**args, "value": own[0]}
             if (said_value is None or said_value not in _numbers_said(history)) and not moved:
                 raise ToolError("Цену помощник не придумывает: напишите число (например, «цена 8000»).")
-        if field == "in_stock" and not command_words.stock_said(said) and not command_words.wants_change(said):
-            raise ToolError("Владелец не просил менять наличие.")
+        if field == "in_stock" and not command_words.stock_said(said):
+            numbers = sorted(n for n in _numbers_said([{"role": "user", "content": said}]) if n >= 100)
+            if price_words._PRICE.search(category_words.latin(said)) and len(numbers) == 1 and product is not None:
+                # «Пепси нархини 15000 қилинг» → «йўқ, Пепси эмас, Фантани»: модель взяла «йўқ» за «нет в наличии»
+                # (замер 2026-11-28). Просьба — та же цена другому товару.
+                return "propose_update", {"product": product.sku, "field": "price", "value": numbers[0]}
+            if not command_words.wants_change(said):
+                raise ToolError("Владелец не просил менять наличие.")
     return name, args
 
 
@@ -996,6 +1029,12 @@ def price_meant(db, name: str, args: dict, history: list[dict]) -> dict:
     if name != "propose_update" or str(args.get("field") or "").lower() != "price":
         return args
     found = price_words.meant(_last_said(history), args.get("value"))
+    own = sorted(n for n in _numbers_said([{"role": "user", "content": _last_said(history)}]) if n > 0)
+    if not found and len(own) == 1:
+        # «фанта подорожала на 500»: модель дала уже «посчитанную» цену 13500 (замер 2026-11-28) — на сколько, сказал
+        # владелец, и новую цену считает программа.
+        by_owner = price_words.meant(_last_said(history), own[0])
+        found = by_owner if by_owner and by_owner[0] != "price_set" else None
     product = assistant_actions.find_product(db, str(args.get("product") or "")) if found else None
     if not found or found[0] == "price_set" or product is None:
         return args
@@ -1008,7 +1047,7 @@ def price_meant(db, name: str, args: dict, history: list[dict]) -> dict:
     return {**args, "value": new}
 
 
-_CATEGORY_CHANGE = re.compile(r"kategori")
+_CATEGORY_CHANGE = re.compile(r"kategori|categor")
 # «Yangi tovar …» / «новый товар …» — это новый товар, а не смена категории. «Yangi» одно не годится: категория «Yangi yil»
 # («Fanta kategoriyasini Yangi yil qiling»), как и «Новый год» / «Новогодние».
 _NOT_CATEGORY_CHANGE = re.compile(r"arhiv|ochir|udal|ubra|uber|dobav|qosh|(?:yangi|nov\w*)\s+(?:tovar|mahsulot|produkt|pozi)")
@@ -1147,6 +1186,133 @@ def brand_meant(db, history: list[dict]) -> tuple[str, dict] | None:
     return "propose_update", {"product": product.sku, "field": "brand", "value": phrase[1]}
 
 
+# --- смена названия, бренда и категории словами (замер 2026-11-28, ml/assistant_owner_questions.py) ----------------------------
+# Живая qwen3-vl-4b на «Пепси номини Pepsi Cola қилинг» и «Pepsi nomini … ga oʻzgartiring» звала propose_add (новый товар с тем же
+# названием — ошибка), на «Rename Pepsi 1.5 l to Pepsi Cola 1.5 l», «Move Hydrolife water to category Water» отвечала текстом без
+# карточки. Здесь всё понятно из слов: товар, поле и новое значение — карточку готовит программа, как для бренда (§10.12).
+_UZ_RENAME = re.compile(rf"^\s*(?P<product>.+?)\s+(?:nomi|номи)(?:ni|ни)?\s+(?P<value>.+?)\s+(?P<verb>{_VERB_UZ})\s*[.!]?\s*$",
+                        re.I)
+_FIELD_PHRASES = (
+    ("name", re.compile(r"^\s*(?:переименуй|переименуйте|переименовать)\s+(?:товар\s+)?(?P<product>.+?)\s+в\s+(?P<value>.+?)"
+                        r"\s*[.!]?\s*$", re.I)),
+    ("name", re.compile(r"^\s*rename\s+(?:the\s+)?(?:product\s+)?(?P<product>.+?)\s+(?:to|as|into)\s+(?P<value>.+?)\s*[.!]?\s*$",
+                        re.I)),
+    ("brand", re.compile(r"^\s*(?:set|change)\s+(?:the\s+)?brand\s+(?:of|for)\s+(?P<product>.+?)\s+to\s+(?P<value>.+?)"
+                         r"\s*[.!]?\s*$", re.I)),
+    ("brand", re.compile(r"^\s*(?:set|change)\s+(?:the\s+)?(?P<product>.+?)\s+brand\s+to\s+(?P<value>.+?)\s*[.!]?\s*$", re.I)),
+    ("category", re.compile(r"^\s*(?:move|put)\s+(?P<product>.+?)\s+(?:to|in|into)\s+(?:the\s+)?category\s+(?P<value>.+?)"
+                            r"\s*[.!]?\s*$", re.I)),
+    ("category", re.compile(r"^\s*(?:set|change)\s+(?:the\s+)?category\s+(?:of|for)\s+(?P<product>.+?)\s+to\s+(?P<value>.+?)"
+                            r"\s*[.!]?\s*$", re.I)),
+)
+
+
+def _field_phrase(said: str) -> tuple[str, str, str] | None:
+    """«Пепси номини Pepsi Cola қилинг», «переименуй X в Y», «Rename X to Y», «Set brand of X to Y», «Move X to category Y» →
+    (поле, товар, значение как сказал владелец) или None."""
+    if not said or "\n" in said.strip():
+        return None
+    match = _UZ_RENAME.match(said)
+    if match:
+        value = re.sub(r"\s+(?:qilib|қилиб)$", "", match.group("value").strip(_QUOTES), flags=re.I)
+        if not match.group("verb").lower().startswith(("qil", "қил", "qo", "қўй")):     # «…ga oʻzgartiring» — без «-ga»
+            value = re.sub(r"\s*[ʻ'’`]?\s*(?:ga|га)$", "", value, flags=re.I) or value
+        field = "name"
+    else:
+        found = next(((f, m) for f, m in ((f, r.match(said)) for f, r in _FIELD_PHRASES) if m), None)
+        if found is None:
+            return None
+        field, match = found
+        value = match.group("value")
+    product, value = match.group("product").strip(_QUOTES), value.strip(_QUOTES)
+    if not product or not value or _ALL_BRAND.match(product) or re.match(r"(?i)all\s", product):
+        return None                     # «все …» — много товаров сразу: решает модель (propose_bulk)
+    return field, product, value
+
+
+def _product_named(db, text: str) -> Product | None:
+    """Один товар по словам владельца: артикул, штрихкод, название в любом алфавите («Фанта» → Fanta), иначе None."""
+    product = (assistant_actions.find_product(db, text)
+               or assistant_actions.find_product(db, category_words.latin(text)))
+    if product is None:
+        active = db.query(Product).filter(Product.status == PRODUCT_ACTIVE).order_by(Product.sku).all()
+        found, products = price_list.find(db, text, active)
+        product = products[0] if found == "found" else None
+    if product is None:                 # «Hydrolife water» — по одному слову, если все узнанные слова ведут к одному товару
+        hits = {p.id: p for w in re.findall(r"[^\W_]{4,}", text) if (p := _product_named_word(db, w)) is not None}
+        product = next(iter(hits.values())) if len(hits) == 1 else None
+    return product
+
+
+def _product_named_word(db, word: str) -> Product | None:
+    active = db.query(Product).filter(Product.status == PRODUCT_ACTIVE).order_by(Product.sku).all()
+    found, products = price_list.find(db, word, active)
+    return products[0] if found == "found" else None
+
+
+def field_meant(db, history: list[dict]) -> tuple[str, dict] | None:
+    phrase = _field_phrase(_last_said(history))
+    if phrase is None:
+        return None
+    product = _product_named(db, phrase[1])
+    if product is None:
+        return None
+    return "propose_update", {"product": product.sku, "field": phrase[0], "value": phrase[2]}
+
+
+# «Барча газакларни архивга олинг», «Archive all snacks», «Верни из архива все напитки»: живая модель через раз звала сводку
+# каталога или «товары без цены» вместо propose_bulk (на main «Barcha gazaklarni arxivga oling» — 6 из 8). Все товары одной
+# названной категории или бренда в архив / из архива — карточку готовит программа.
+def bulk_status_meant(db, history: list[dict]) -> tuple[str, dict] | None:
+    said = _last_said(history)
+    if not said or "\n" in said.strip() or not command_words.all_said(said):
+        return None
+    restore = command_words.restore_said(said)
+    if not (restore or command_words.archive_said(said)) or command_words.photo_said(said) \
+            or command_words.barcode_said(said) or command_words.copy_said(said) or re.search(r"\d", said):
+        return None
+    status = PRODUCT_ARCHIVED if restore else PRODUCT_ACTIVE
+    cats = [c for (c,) in db.query(Product.category).filter(Product.status == status).distinct().all() if c]
+    named = category_words.matching_categories(said, cats)
+    brands = _brands_said(db, said)
+    change = "restore" if restore else "archive"
+    if len(named) == 1 and not brands:
+        return "propose_bulk", {"where": "category", "query": named[0], "change": change, "value": ""}
+    if len(brands) == 1 and not named:
+        return "propose_bulk", {"where": "brand", "query": brands[0], "change": change, "value": ""}
+    return None
+
+
+# Один названный товар: «в архив», «из архива», «закончился» (замер 2026-11-28): живая модель на «Сникерсни ўчиринг» звала
+# propose_add (ошибка «такой товар уже есть»), на «Pepsi qolmadi» — scan_problems, на «Dobriy sharbatni qaytaring» искала
+# товар среди товаров в продаже. Когда товар один и других просьб в реплике нет — карточку готовит программа.
+_OTHER_FIELD = re.compile(r"narh|tsen|price|kategor|categor|brend|brand|nom|nazv|pereimen|rename|foto|rasm|photo|shtrih|barcode|"
+                          r"kopi|nush|copy")
+
+
+def status_meant(db, history: list[dict]) -> tuple[str, dict] | None:
+    said = command_words.without_negated(_last_said(history))
+    if not said or "\n" in said.strip() or "?" in said or re.search(r"\d", said) or command_words.all_said(said):
+        return None
+    text = category_words.latin(said)
+    if _OTHER_FIELD.search(text) or re.search(r"\b(?:yangi|nov\w*|new)\b", text):
+        return None
+    restore, stock = command_words.restore_said(said), command_words.stock_said(said)
+    archive = command_words.archive_said(said) and not restore
+    if sum((restore, stock, archive)) != 1:
+        return None
+    status = PRODUCT_ARCHIVED if restore else PRODUCT_ACTIVE
+    # товар ищется без слов-команд: «удали» в названии товара «… и удали все» — не товар
+    words = " ".join(w for w in said.split() if not command_words.wants_change(w))
+    named = [p for p in db.query(Product).filter(Product.status == status).all() if product_said(db, p, words, brand=False)]
+    if len(named) != 1:
+        return None
+    if stock:
+        return "propose_update", {"product": named[0].sku, "field": "in_stock",
+                                  "value": "да" if command_words.stock_in_said(said) else "нет"}
+    return "propose_archive", {"product": named[0].sku, "status": "active" if restore else "archived"}
+
+
 def claims_change(text: str) -> bool:
     return bool(_CLAIM.search(text or ""))
 
@@ -1276,7 +1442,8 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                          proposal=listed)
     if can_propose:
         # Смена бренда понятна из слов владельца — карточку готовит программа без модели (§10.12).
-        meant = brand_meant(db, history)
+        meant = (brand_meant(db, history) or field_meant(db, history) or bulk_status_meant(db, history)
+                 or status_meant(db, history))
         if meant is not None and meant[0] in names:
             try:
                 assistant_tools.run_tool(db, user, meant[0], meant[1], proposals, ui, lang)
@@ -1429,7 +1596,6 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                         raise ToolError("Владелец спрашивает, а не меняет: ответьте по данным, карточку не предлагайте.")
                     invented_code(name, args, history)
                     invented_number(name, args, history)
-                    args = price_meant(db, name, args, history)
                     args = missing_in_category(db, name, args, history)
                     other, instead, redirect = category_meant(db, name, args, history) if not redirected else ("", None, "")
                     if instead:                 # что нужно — понятно: карточку смены категории готовит программа
@@ -1437,6 +1603,10 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                     invented_category(name, args, history)
                     if not redirect and not instead:
                         name, args = command_check(db, name, args, history, ui)
+                    # «на сколько поднять» — после command_check: тот находит товар по словам владельца, если модель назвала
+                    # его словом («Нутелла»), а не артикулом. Раньше «Нутелла нархини 1000 га камайтиринг» давало цену 1000
+                    # (замер 2026-11-28).
+                    args = price_meant(db, name, args, history)
                     if redirect:                # не тот инструмент: карточку не создаём, просим нужный (один раз)
                         redirected = True
                         result, ok = {"error": "Не тот инструмент: владелец меняет категорию товара."}, False
@@ -1477,6 +1647,10 @@ def chat(db, user: CurrentUser, messages, lang: str, settings, http_post=None, c
                     # «Нечта товар бор?»: после сводки модель снова звала поиск, а потом писала «бор бор бор …» (2026-11-24)
                     answer_now = True
                     ready = _COUNT_TEXT.get(lang, _COUNT_TEXT["ru"]).format(n=result.get("active"), a=result.get("archived"))
+                if ok and asking and name == "find_products" and isinstance(result, dict) and not result.get("total")                         and result.get("category_items") is None and not result.get("parts") and not result.get("by_name_total"):
+                    # «Sprite bormi?» — такого товара нет: живая модель шла в similar_names и products_missing и отвечала о
+                    # товарах без бренда (замер 2026-11-28). Дальше — только ответ «не найден».
+                    answer_now = True
                 if ok and asking and name == "find_products" and isinstance(result, dict) and (
                         (result.get("total") or 0) >= 1 or result.get("parts")):
                     # «Pepsi bormi?»: товар найден — дальше только ответ. Живая qwen3-vl-4b (2026-11-23) после поиска шла в

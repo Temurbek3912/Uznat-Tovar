@@ -186,7 +186,9 @@ def outcome_values(reply) -> list[str]:
         elif kind == "bulk" and card.get("change") == "price_list":     # список цен — по строке на товар
             out += [f"upd:{r.get('sku')}:price={_num(r.get('after'))}" for r in card.get("rows") or []] or ["card:list"]
         elif kind == "bulk":
-            out.append(f"bulk:{card.get('change')}:{card.get('where')}={card.get('query')}")
+            # категории, которые нашла программа («shirinliklar» → Сладости), а не слово владельца
+            found = ";".join(card.get("categories") or []) if card.get("where") == "category" else ""
+            out.append(f"bulk:{card.get('change')}:{card.get('where')}={found or card.get('query')}")
         else:
             out.append(f"card:{kind}")
     out += [f"{u.get('kind')}:{u.get('value')}" for u in reply.ui or []]
@@ -266,6 +268,81 @@ def text_problems(text: str, lang: str, known: set[str]) -> list[str]:
     return out
 
 
+_DB_COLUMN = {"price": "expected_price", "name": "name", "brand": "brand", "category": "category", "in_stock": "in_stock",
+              "status": "status"}
+
+
+def _db_values(db, sku: str, fields) -> dict:
+    from app.db.models import Product, ProductBarcodeORM  # noqa: PLC0415
+    p = db.query(Product).filter(Product.sku == sku).one()
+    out = {}
+    for field in fields:
+        if field == "barcode":
+            out[field] = sorted(c for (c,) in db.query(ProductBarcodeORM.barcode).filter(ProductBarcodeORM.product_id == p.id))
+        else:
+            out[field] = getattr(p, _DB_COLUMN[field])
+    return out
+
+
+def _db_same(want, got, field: str) -> bool:
+    if field == "barcode":
+        return str(want) in got
+    if field == "price":
+        return got is not None and abs(float(got) - float(want)) < 0.01
+    return (got or "") == want if isinstance(want, str) else got == want
+
+
+def _press(session, owner, action: dict) -> tuple[dict | None, str]:
+    """Кнопка «Сделать» (или «Отменить») — тот же вызов, что у страницы (POST /assistant/act)."""
+    from app.api import routes_assistant  # noqa: PLC0415
+    try:
+        with session() as db:
+            out = routes_assistant.assistant_act(routes_assistant.ActIn(action=action), db, owner, owner)
+        return out, ""
+    except Exception as exc:  # noqa: BLE001 — ошибка кнопки — тоже итог замера
+        return None, f"{type(exc).__name__}: {getattr(exc, 'message', '') or exc}"[:200]
+
+
+def apply_problems(session, owner, card: dict, want: dict, undo: bool) -> list[str]:
+    """Нажать «Сделать», проверить базу; undo — нажать «Отменить» и проверить, что вернулось прежнее."""
+    with session() as db:
+        before = {sku: _db_values(db, sku, fields) for sku, fields in want.items()}
+    out, err = _press(session, owner, card)
+    if err:
+        return [f"«Сделать»: {err}"]
+    problems = []
+    with session() as db:
+        for sku, fields in want.items():
+            got = _db_values(db, sku, fields)
+            problems += [f"{sku}.{f}: в базе {got[f]!r}, ждали {v!r}" for f, v in fields.items() if not _db_same(v, got[f], f)]
+    if undo and not problems:
+        if not (out or {}).get("undo"):
+            return ["нет «Отменить»"]
+        _out, err = _press(session, owner, out["undo"])
+        if err:
+            return [f"«Отменить»: {err}"]
+        with session() as db:
+            for sku, fields in want.items():
+                got = _db_values(db, sku, fields)
+                problems += [f"после «Отменить» {sku}.{f}: {got[f]!r}, было {before[sku][f]!r}" for f in fields
+                             if got[f] != before[sku][f]]
+    return problems
+
+
+def card_problems(card: dict | None, want: dict) -> list[str]:
+    if not card:
+        return ["нет карточки"]
+    out = []
+    for field, value in want.items():
+        got = card.get(field)
+        if field == "price":
+            if got is None or abs(float(got) - float(value)) > 0.01:
+                out.append(f"цена в карточке {got!r}, ждали {value}")
+        elif str(value).lower() not in str(got or "").lower():
+            out.append(f"{field} в карточке {got!r}, ждали «{value}»")
+    return out
+
+
 def run_dialogs(url: str, model: str, dialogs, big: Path | None = None, log=print, pause: float = 0.0) -> list[dict]:
     from app.core.security import CurrentUser, Role  # noqa: PLC0415
     from app.services import assistant as A  # noqa: PLC0415
@@ -279,8 +356,12 @@ def run_dialogs(url: str, model: str, dialogs, big: Path | None = None, log=prin
             catalogs["big"] = big_rows(big or BIG_CATALOG)
         made = {name: make_catalog(Path(tmp) / f"{name}.sqlite", rows_) for name, rows_ in catalogs.items()}
         try:
-            for dialog in dialogs:
-                engine, session = made[dialog["catalog"]]
+            for number, dialog in enumerate(dialogs):
+                if dialog.get("apply"):         # «Сделать» меняет базу — у разговора своя временная база
+                    made[f"apply{number}"] = make_catalog(Path(tmp) / f"apply{number}.sqlite", catalogs[dialog["catalog"]])
+                    engine, session = made[f"apply{number}"]
+                else:
+                    engine, session = made[dialog["catalog"]]
                 cat = catalogs[dialog["catalog"]] or [(*r, False) for r in CATALOG + ARCHIVED]
                 prices = {r[0]: r[4] for r in cat}
                 known = {w.lower() for r in cat for w in re.findall(r"[\wʻ'’]+", f"{r[0]} {r[1]} {r[2]} {r[3]}")}
@@ -317,6 +398,12 @@ def run_dialogs(url: str, model: str, dialogs, big: Path | None = None, log=prin
                             verdict = "язык"
                     elif verdict == "верно" and turn.get("says") and not done:
                         verdict, problems = "ответ неверный", ["пустой ответ"]
+                    if verdict == "верно" and turn.get("card"):
+                        problems = card_problems(reply.proposal, turn["card"])
+                        verdict = "карточка неверная" if problems else verdict
+                    if verdict == "верно" and turn.get("db") and dialog.get("apply") and reply.proposal:
+                        problems = apply_problems(session, owner, reply.proposal, turn["db"], bool(turn.get("undo")))
+                        verdict = "не применилось" if problems else verdict
                     rows.append({"dialog": dialog["id"], "turn": n, "catalog": dialog["catalog"], "said": said, "lang": lang,
                                  "expect": turn["expect"], "done": done, "reads": reads, "verdict": verdict,
                                  "problems": problems, "text": text[:400], "error": error[:200],
@@ -334,7 +421,8 @@ def run_dialogs(url: str, model: str, dialogs, big: Path | None = None, log=prin
 def dialog_summary(rows: list[dict]) -> str:
     c = Counter(r["verdict"] for r in rows)
     n = len(rows)
-    parts = ", ".join(f"{k} {c[k]}" for k in ("верно", "не та", "частично", "не сделал", "ответ неверный", "язык") if c[k])
+    parts = ", ".join(f"{k} {c[k]}" for k in ("верно", "не та", "частично", "не сделал", "ответ неверный", "язык",
+                                               "карточка неверная", "не применилось") if c[k])
     lines = [f"Реплик: {n} (разговоров {len({r['dialog'] for r in rows})}). {parts}. Верно {100 * c['верно'] / max(1, n):.0f} %. "
              f"Среднее время {sum(r['seconds'] for r in rows) / max(1, n):.1f} с."]
     groups: dict[str, Counter] = {}
@@ -487,9 +575,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--only", default="", help="только фразы с этим текстом")
     ap.add_argument("--out", default="", help="записать подробности в JSON")
     ap.add_argument("--pause", type=float, default=0.0, help="пауза между фразами, с (видеокарта остывает)")
-    ap.add_argument("--set", choices=("phrases", "dialogs", "counts"), default="phrases",
+    ap.add_argument("--set", choices=("phrases", "dialogs", "counts", "owner"), default="phrases",
                     help="phrases — 126 фраз (ml/assistant_phrases); dialogs — разговоры (ml/assistant_dialogs); "
-                         "counts — вопросы «сколько» (ml/assistant_counts)")
+                         "counts — вопросы «сколько» (ml/assistant_counts); owner — всё, что спрашивает владелец, "
+                         "на 4 языках, с «Сделать» на временной базе (ml/assistant_owner_questions)")
     ap.add_argument("--copy", default=str(SHOP_COPY), help="копия базы магазина для --set counts (SQLite)")
     ap.add_argument("--catalog", default=str(BIG_CATALOG), help="копия товаров для длинного каталога (JSON)")
     a = ap.parse_args(argv)
@@ -498,8 +587,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         rows = run_counts(a.url, a.model, [q for q in QUESTIONS if a.only.lower() in q[0].lower()], Path(a.copy),
                           pause=a.pause)
         print(counts_summary(rows))
-    elif a.set == "dialogs":
-        from ml.assistant_dialogs import DIALOGS  # noqa: PLC0415
+    elif a.set in ("dialogs", "owner"):
+        if a.set == "owner":
+            from ml.assistant_owner_questions import DIALOGS  # noqa: PLC0415
+        else:
+            from ml.assistant_dialogs import DIALOGS  # noqa: PLC0415
         dialogs = [d for d in DIALOGS if a.only.lower() in d["id"].lower()]
         rows = run_dialogs(a.url, a.model, dialogs, Path(a.catalog), pause=a.pause)
         print(dialog_summary(rows))
